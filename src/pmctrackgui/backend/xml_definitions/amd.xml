@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- xml definition file for amd events supported by PMCTrackGUI -->
+
+<!-- Copyright 2015 Abel Serrano Juste <abeserra@ucm.es>  -->
+
+<pmcs_and_events>
+
+<pmcs></pmcs>
+
+<events>
+
+	<!-- "Floating Point" index="3.14.1" -->
+	<event>
+		<name>Dispatched FPU Operations</name>
+		<code>0x0</code>
+		<subevents>
+			<subevent>
+				<subevt_name>Add pipe...</subevt_name>
+				<flags>
+          <flag>
+            <flag_name>umask</flag_name>
+						<flag_value>0x01</flag_value>
+          </flag>
+					<flag>
+						<flag_name>cmask</flag_name>
+						<flag_value>1</flag_value>
+					</flag>
+					<flag>
+						<flag_name>inv</flag_name>
+						<flag_value>1</flag_value>
+					</flag>
+				</flags>
+			</subevent>
+			<subevent>
+				<subevt_name>Multiply...</subevt_name>
+        <flags>
+          <flag>
+            <flag_name>umask</flag_name>
+						<flag_value>0x02</flag_value>
+          </flag>
+        </flags>
+			</subevent>
+      <subevent>
+				<subevt_name>Add pipe load ops and SSE move ops</subevt_name>
+        <flags>  
+          <flag>
+            <flag_name>umask</flag_name>
+						<flag_value>0x08</flag_value>
+          </flag>
+        </flags>
+			</subevent>
+		</subevents>
+	</event>
+	
+	<!-- "Retired Ins." index="3.14.6" -->
+	<event>
+		<name>Retired Instructions</name>
+		<code>0xC0</code>
+	</event>
+	
+	<event>
+		<name>Retired uops</name>
+		<code>0xC1</code>
+	</event>
+	
+	<event>
+		<name>Retired Mispredicted Branch Instructions</name>
+		<code>0xC3</code>
+	</event>
+
+	<!-- "L2 Cache and System Interface Events" index="3.14.4" -->
+	<event>
+		<name>CPU clocks not halted</name>
+		<code>0x76</code>
+	</event>
+	
+	<event>
+		<name>Data Cache Accesses</name>
+		<code>0x40</code>
+	</event>
+	
+	<event>
+		<name>Data Cache Misses</name>
+		<code>0x41</code>
+	</event>
+
+	<!-- "Instruction Cache Events" index="3.14.5" -->
+	<event>
+		<name>Instruction Cache Fetches</name>
+		<code>0x80</code>
+	</event>
+	
+	<event>
+		<name>Instruction Cache Misses</name>
+		<code>0x81</code>
+	</event>
+</events>
+
+</pmcs_and_events>

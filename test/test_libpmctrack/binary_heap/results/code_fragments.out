@@ -1,0 +1,12 @@
+Profiling, through libpmctrack, cache behaviour when using a William's heap.
+Profiling data for initializing the heap:
+nsample    pid      event          pmc0          pmc3          pmc4
+      1  13464       self           833            10             7
+Profiling data for inserting into the heap:
+nsample    pid      event          pmc0          pmc3          pmc4
+      1  13464       self     194528249         19764         17205
+Profiling data for deleting from the heap:
+nsample    pid      event          pmc0          pmc3          pmc4
+      1  13464       self     916232599       7383241        467662
+Elapsed time: 229741 microseconds
+

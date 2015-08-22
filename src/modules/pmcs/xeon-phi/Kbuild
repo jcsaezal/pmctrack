@@ -1,0 +1,4 @@
+MODULE_NAME=mchw_phi
+obj-m += $(MODULE_NAME).o 
+$(MODULE_NAME)-objs +=  mchw_core.o mc_experiments.o pmu_config_phi.o cbuffer.o monitoring_mod.o syswide.o 
+EXTRA_CFLAGS := -DCONFIG_PMC_PHI -I$(src)/../include 

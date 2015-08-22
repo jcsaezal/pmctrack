@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pmcs_and_events SYSTEM "events.dtd">
+<!-- xml defining fixed pmcs and hardware events to monitor for this model -->
+<!-- This xml has been generated automatically from a csv definition file -->
+<pmcs_and_events>
+<pmcs>
+	<pmc>
+		<pmc_name>cycles_allmodes</pmc_name>
+		<pmc_type>fixed</pmc_type>
+		<pmc_number>0</pmc_number>
+	</pmc>
+
+</pmcs>
+<events>
+	<event>
+		<name>instr</name>
+		<code>0x8</code>
+	</event>
+	<event>
+		<name>l2_cache_refills</name>
+		<code>0x17</code>
+	</event>
+	<event>
+		<name>llc_accesses</name>
+		<code>0x16</code>
+	</event>
+	<event>
+		<name>l1_instr_refills</name>
+		<code>0x1</code>
+	</event>
+	<event>
+		<name>data_read_retired</name>
+		<code>0x06</code>
+	</event>
+	<event>
+		<name>l1_data_refills</name>
+		<code>0x03</code>
+	</event>
+	<event>
+		<name>data_cache_eviction</name>
+		<code>0x15</code>
+	</event>
+	<event>
+		<name>dtlb_misses</name>
+		<code>0x5</code>
+	</event>
+	<event>
+		<name>potentially_predicted_branches</name>
+		<code>0x12</code>
+	</event>
+	<event>
+		<name>itlb_misses</name>
+		<code>0x2</code>
+	</event>
+	<event>
+		<name>llc_misses</name>
+		<code>0x17</code>
+	</event>
+	<event>
+		<name>data_write_retired</name>
+		<code>0x07</code>
+	</event>
+	<event>
+		<name>mispred_branches</name>
+		<code>0x10</code>
+	</event>
+	<event>
+		<name>bus_accesses</name>
+		<code>0x19</code>
+	</event>
+	<event>
+		<name>inmediate_branches_retired</name>
+		<code>0x0d</code>
+	</event>
+	<event>
+		<name>l2_cache_accesses</name>
+		<code>0x16</code>
+	</event>
+	<event>
+		<name>instr_cache_access</name>
+		<code>0x14</code>
+	</event>
+	<event>
+		<name>instr_arch_executed</name>
+		<code>0x8</code>
+	</event>
+	<event>
+		<name>l2_cache_writebacks</name>
+		<code>0x18</code>
+	</event>
+	<event>
+		<name>l1_data_accesses</name>
+		<code>0x04</code>
+	</event>
+	<event>
+		<name>cycles</name>
+		<code>0x11</code>
+	</event>
+	<event>
+		<name>data_mem_access</name>
+		<code>0x13</code>
+	</event>
+
+</events>
+</pmcs_and_events>
