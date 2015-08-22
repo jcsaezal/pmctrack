@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- xml definition file for <archname> events supported by PMCTrackGUI -->
+
+<events>
+  
+		<!-- "name group of events" index="where to find in documentation" -->
+  	<event>
+			<name></name>
+			<code></code>
+			<sub_events>
+				<sub_event>
+					<subevt_name></subevt_name>
+					<flags>
+            <flag>
+              <flag_name></flag_name>
+              <flag_value></flag_value>
+            </flag>
+            <flag>
+              <flag_name></flag_name>
+              <flag_value></flag_value>
+            </flag>
+				</flags>
+				</sub_event>
+      </sub_events>
+    </event>  
+      
+    <!-- "name group of events" index="where to find in documentation" -->
+  	<event>
+			<name></name>
+			<code></code>
+			<sub_events>
+				<sub_event>
+					<subevt_name></subevt_name>
+					<flags>
+            <flag>
+              <flag_name></flag_name>
+              <flag_value></flag_value>
+            </flag>
+            <flag>
+              <flag_name></flag_name>
+              <flag_value></flag_value>
+            </flag>
+				</flags>
+				</sub_event>
+      </sub_events>
+    </event> 
+    
+</events>

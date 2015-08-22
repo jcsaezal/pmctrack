@@ -1,0 +1,11 @@
+Profiling, through libpmctrack, cache behaviour when using a Fibonacci heap.
+Profiling data for initializing the heap:
+nsample    pid      event          pmc0          pmc3          pmc4
+      1  13271       self           835            11            10
+Profiling data for inserting into the heap:
+nsample    pid      event          pmc0          pmc3          pmc4
+      1  13271       self     377048052         15204          9962
+Profiling data for deleting from the heap:
+nsample    pid      event          pmc0          pmc3          pmc4
+      1  13271       self    4655118486      37307044      14266564
+Elapsed time: 1692031 microseconds

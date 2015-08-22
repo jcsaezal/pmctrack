@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- xml definition file for intel pmc version 3.0 events supported by PMCTrackGUI -->
+
+<events version="core_third_generation">
+  <!-- 3rd generation Intel ® CoreTM processors and Intel Xeon processor E3-1200 v2 product family are based on Intel microarchitecture code name Ivy Bridge. They support architectural performance-monitoring events of intel_events.xml as well as the events below -->
+
+	<!-- "PERFORMANCE MONITORING EVENTS FOR 3RD GENERATION INTEL CORE TM PROCESSORS" index="19.4" -->
+  
+  <!-- Events for counting number of instructions; pag="723" -->
+  
+	<event>
+		<name>FP_COMP_OPS_EXE.X87</name>
+    <descp>Counts number of X87 uops executed.</descp>
+		<code>0x10</code>
+    <flags>
+      <flag>
+        <flag_name>umask</flag_name>
+        <flag_value>0x01</flag_value>
+      </flag>
+    </flags>
+  </event>
+  
+	<event>
+		<name>UOPS_ISSUED.ANY</name>
+    <descp>Increments each cycle the # of Uops issued by the
+RAT to RS. Set Cmask = 1, Inv = 1, Any = 1 to count stalled
+cycles of this core.</descp>
+		<code>0x0E</code>
+    <flags>
+      <flag>
+        <flag_name>umask</flag_name>
+        <flag_value>0x01</flag_value>
+      </flag>
+    </flags>
+  </event>
+
+  <!-- Events of branch prediction; pag="730" -->
+
+  <event>
+		<name>BR_INST_RETIRED.ALL_BRANCHES</name>
+    <descp>Branch instructions at retirement. Note: Already in intel_events.xml</descp>
+		<code>0xC4</code>
+  </event>
+  
+  <event>
+		<name>BR_INST_RETIRED.CONDITIONAL</name>
+    <descp>Counts the number of conditional branch instructions retired.</descp>
+		<code>0xC4</code>
+    <flags>
+      <flag>
+        <flag_name>umask</flag_name>
+        <flag_value>0x01</flag_value>
+      </flag>
+    </flags>
+  </event>
+  
+  <event>
+		<name>BR_MISP_RETIRED.ALL_BRANCHES</name>
+    <descp>Mispredicted branch instructions at retirement. Note: Already in intel_events.xml</descp>
+		<code>0xC5</code>
+  </event>
+  
+  <!-- Events of interaction with memory; pag="731" -->
+  
+  <event>
+		<name>MEM_UOPS_RETIRED.ALL</name>
+    <descp>Qualify any retired memory uops. Must combine with umask 01H, 02H, to produce counts.</descp>
+		<code>0xD0</code>
+    <flags>
+      <flag>
+        <flag_name>umask</flag_name>
+        <flag_value>0x80</flag_value>
+      </flag>
+    </flags>
+  </event>
+  
+  <event>
+		<name>MEM_UOPS_RETIRED.LOADS</name>
+    <descp>Qualify retired memory uops that are loads. Combine with umask 10H, 20H, 40H, 80H.</descp>
+		<code>0xD0</code>
+    <flags>
+      <flag>
+        <flag_name>umask</flag_name>
+        <flag_value>0x01</flag_value>
+      </flag>
+    </flags>
+  </event>
+  
+  <event>
+		<name>MEM_LOAD_UOPS_RETIRED.LLC_MISS</name>
+    <descp>Retired load uops whose data source is LLC miss</descp>
+		<code>0xD1</code>
+    <flags>
+      <flag>
+        <flag_name>umask</flag_name>
+        <flag_value>0x20</flag_value>
+      </flag>
+    </flags>
+  </event>
+
+</events>

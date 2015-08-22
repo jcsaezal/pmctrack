@@ -1,0 +1,5 @@
+Elapsed time: 476022 microseconds
+Profiling data extracted from PMCs:
+nsample    pid      event          pmc0          pmc3          pmc4
+      1   7377       tick     561444260       3966742        339785
+      2   7377       self     549334613       4032294        151245

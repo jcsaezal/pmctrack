@@ -1,0 +1,701 @@
+diff --git a/arch/x86/kernel/cpu/perf_event.c b/arch/x86/kernel/cpu/perf_event.c
+index aa4e3a7..122adfa 100644
+--- a/arch/x86/kernel/cpu/perf_event.c
++++ b/arch/x86/kernel/cpu/perf_event.c
+@@ -1652,6 +1652,13 @@ ssize_t x86_event_sysfs_show(char *page, u64 config, u64 event)
+ 	return ret;
+ }
+ 
++#ifdef CONFIG_PMCTRACK
++static int __init init_hw_perf_events(void)
++{
++        pr_cont("PMCTRACK enabled: only software events available in perf.\n");
++        return 0;
++}
++#else
+ static int __init init_hw_perf_events(void)
+ {
+ 	struct x86_pmu_quirk *quirk;
+@@ -1728,6 +1735,7 @@ static int __init init_hw_perf_events(void)
+ 
+ 	return 0;
+ }
++#endif
+ early_initcall(init_hw_perf_events);
+ 
+ static inline void x86_pmu_read(struct perf_event *event)
+diff --git a/drivers/hwmon/hwmon.c b/drivers/hwmon/hwmon.c
+index a26c385..7a964e9 100644
+--- a/drivers/hwmon/hwmon.c
++++ b/drivers/hwmon/hwmon.c
+@@ -23,6 +23,7 @@
+ #include <linux/spinlock.h>
+ #include <linux/pci.h>
+ #include <linux/string.h>
++#include <linux/pmctrack.h>
+ 
+ #define HWMON_ID_PREFIX "hwmon"
+ #define HWMON_ID_FORMAT HWMON_ID_PREFIX "%d"
+@@ -121,6 +122,11 @@ hwmon_device_register_with_groups(struct device *dev, const char *name,
+ 	hwdev->dev.of_node = dev ? dev->of_node : NULL;
+ 	dev_set_drvdata(&hwdev->dev, drvdata);
+ 	dev_set_name(&hwdev->dev, HWMON_ID_FORMAT, id);
++
++#ifdef CONFIG_PMCTRACK
++	if ((err=pmctrack_hwmon_export_device(dev_name(&hwdev->dev), id, &hwdev->dev)))
++		goto ida_remove;
++#endif
+ 	err = device_register(&hwdev->dev);
+ 	if (err)
+ 		goto free;
+@@ -128,6 +134,9 @@ hwmon_device_register_with_groups(struct device *dev, const char *name,
+ 	return &hwdev->dev;
+ 
+ free:
++#ifdef CONFIG_PMCTRACK
++	pmctrack_hwmon_unexport_device(id);
++#endif
+ 	kfree(hwdev);
+ ida_remove:
+ 	ida_simple_remove(&hwmon_ida, id);
+@@ -161,6 +170,9 @@ void hwmon_device_unregister(struct device *dev)
+ 
+ 	if (likely(sscanf(dev_name(dev), HWMON_ID_FORMAT, &id) == 1)) {
+ 		device_unregister(dev);
++#ifdef CONFIG_PMCTRACK	
++		pmctrack_hwmon_unexport_device(id);
++#endif
+ 		ida_simple_remove(&hwmon_ida, id);
+ 	} else
+ 		dev_dbg(dev->parent,
+diff --git a/include/linux/pmctrack.h b/include/linux/pmctrack.h
+new file mode 100644
+index 0000000..164df53
+--- /dev/null
++++ b/include/linux/pmctrack.h
+@@ -0,0 +1,82 @@
++/*
++ *  include/linux/pmctrack.h
++ *
++ *  Copyright (c) 2015 Juan Carlos Saez <jcsaezal@ucm.es>
++ * 
++ *  This code is licensed under the GNU GPL v2.
++ */
++/* 
++ *   Written by Juan Carlos Saez with help from
++ * 	 Guillermo Martinez Fernandez, 
++ *	 Sergio Sanchez Gordo and Sofia Dronda Merino 
++ * 
++ */
++
++#ifndef PMCTRACK_H
++#define PMCTRACK_H
++#if defined (__linux__)
++#include <linux/types.h>
++#else
++#include <sys/types.h>
++#endif
++
++#include <linux/module.h>
++#include <linux/device.h>
++
++/*** Interface to interact with monitoring modules ***/
++
++/* Predefined high-level metrics */
++typedef enum {
++	MC_SPEEDUP_FACTOR,
++	MC_INSTR_PER_CYCLE,
++	MC_LLC_MISSES_PER_MINSTR,
++	MC_LLC_REQUESTS_PER_KINSTR
++} mc_metric_key_t;
++
++int pmcs_get_current_metric_value(struct task_struct* task, int key, uint64_t* value);
++/******************************************************************/
++
++/* Interface for PMCTrack kernel module */
++typedef struct __pmc_ops {
++	int 	(*pmcs_alloc_per_thread_data)(unsigned long,struct task_struct*);
++	void	(*pmcs_save_callback)(void*, int);
++	void	(*pmcs_restore_callback)(void*, int);
++	void 	(*pmcs_tbs_tick)(void*, int);
++	void	(*pmcs_exec_thread)(struct task_struct*);
++	void	(*pmcs_free_per_thread_data)(struct task_struct*);
++	void	(*pmcs_exit_thread)(struct task_struct*);
++	int	(*pmcs_get_current_metric_value)(struct task_struct* task, int key, uint64_t* value);
++} pmc_ops_t;
++
++
++/* Register/Unregister implementation */
++int register_pmc_module(pmc_ops_t* pmc_ops_module, struct module* module);
++int unregister_pmc_module(pmc_ops_t* pmc_ops_module, struct module* module);
++
++/* PMCTrack kernel API */
++int pmcs_alloc_per_thread_data(unsigned long clone_flags, struct task_struct *p);
++void pmcs_save_callback(void* prof, int cpu);
++void pmcs_restore_callback(void* prof, int cpu);
++void pmcs_tbs_tick(void* prof, int cpu);
++void pmcs_exec_thread(struct task_struct* tsk);
++void pmcs_free_per_thread_data(struct task_struct* tsk);
++void pmcs_exit_thread(struct task_struct* tsk);
++
++
++/*** Hwmon-PMCTrack bridge code ***/
++
++/* Export/Unexport devices */
++int pmctrack_hwmon_export_device(const char* name, int id, struct device* dev);
++void pmctrack_hwmon_unexport_device(int id);
++
++/* Retrieve device and increase ref counter */
++struct device* pmctrack_hwmon_get_device(const char* name);
++
++/* Decrease ref count */
++void pmctrack_hwmon_put_device(struct device* dev);
++
++/* Show registered devices */
++void pmctrack_hwmon_list_devices(int max_devices, const char* strs[], int* nr_devices);
++
++
++#endif
+diff --git a/include/linux/sched.h b/include/linux/sched.h
+index 26a2e61..62b9d0d 100644
+--- a/include/linux/sched.h
++++ b/include/linux/sched.h
+@@ -1724,6 +1724,10 @@ struct task_struct {
+ #ifdef CONFIG_DEBUG_ATOMIC_SLEEP
+ 	unsigned long	task_state_change;
+ #endif
++#ifdef CONFIG_PMCTRACK
++	void *pmc;                      /* Per-thread PMC-specific data */
++	unsigned char prof_enabled;     /* This field must be one for the profiler to be active in the current task */
++#endif	
+ };
+ 
+ /* Future-safe accessor for struct task_struct's cpus_allowed. */
+diff --git a/init/Kconfig b/init/Kconfig
+index dc24dec..684b7d6 100644
+--- a/init/Kconfig
++++ b/init/Kconfig
+@@ -1647,6 +1647,15 @@ config DEBUG_PERF_USE_VMALLOC
+ 
+ 	 Say N if unsure.
+ 
++config PMCTRACK
++	bool "PMCTrack performance monitoring tool with in-kernel interface"	
++	default y
++	help
++	  PMCTrack performance monitoring tool with in-kernel interface. 
++	  Warning: Activating this tool automatically disables HW events in 
++	  the perf events subsystem on ARM and x86 platforms (including 32 and
++	  64 bit variants).
++
+ endmenu
+ 
+ config VM_EVENT_COUNTERS
+diff --git a/kernel/Makefile b/kernel/Makefile
+index 60c302c..770f94b 100644
+--- a/kernel/Makefile
++++ b/kernel/Makefile
+@@ -30,6 +30,7 @@ obj-y += irq/
+ obj-y += rcu/
+ obj-y += livepatch/
+ 
++obj-$(CONFIG_PMCTRACK) += pmctrack.o
+ obj-$(CONFIG_CHECKPOINT_RESTORE) += kcmp.o
+ obj-$(CONFIG_FREEZER) += freezer.o
+ obj-$(CONFIG_PROFILING) += profile.o
+diff --git a/kernel/exit.c b/kernel/exit.c
+index 22fcc05..700b83c 100644
+--- a/kernel/exit.c
++++ b/kernel/exit.c
+@@ -53,6 +53,7 @@
+ #include <linux/oom.h>
+ #include <linux/writeback.h>
+ #include <linux/shm.h>
++#include <linux/pmctrack.h>
+ 
+ #include <asm/uaccess.h>
+ #include <asm/unistd.h>
+@@ -754,6 +755,9 @@ void do_exit(long code)
+ 	 */
+ 	perf_event_exit_task(tsk);
+ 
++#ifdef CONFIG_PMCTRACK	
++	pmcs_exit_thread(tsk);
++#endif
+ 	cgroup_exit(tsk);
+ 
+ 	/*
+diff --git a/kernel/fork.c b/kernel/fork.c
+index 03c1eaa..29b0008 100644
+--- a/kernel/fork.c
++++ b/kernel/fork.c
+@@ -84,6 +84,7 @@
+ #include <asm/tlbflush.h>
+ 
+ #include <trace/events/sched.h>
++#include <linux/pmctrack.h>
+ 
+ #define CREATE_TRACE_POINTS
+ #include <trace/events/task.h>
+@@ -221,6 +222,9 @@ static void account_kernel_stack(struct thread_info *ti, int account)
+ 
+ void free_task(struct task_struct *tsk)
+ {
++#ifdef CONFIG_PMCTRACK	
++	pmcs_free_per_thread_data(tsk);	
++#endif
+ 	account_kernel_stack(tsk->stack, -1);
+ 	arch_release_thread_info(tsk->stack);
+ 	free_thread_info(tsk->stack);
+diff --git a/kernel/pmctrack.c b/kernel/pmctrack.c
+new file mode 100644
+index 0000000..972c992
+--- /dev/null
++++ b/kernel/pmctrack.c
+@@ -0,0 +1,362 @@
++/*
++ *  kernel/pmctrack.c
++ *
++ *  Copyright (c) 2015 Juan Carlos Saez <jcsaezal@ucm.es>
++ * 
++ *  This code is licensed under the GNU GPL v2.
++ */
++/* 
++ *   Written by Juan Carlos Saez with help from
++ * 	 Guillermo Martinez Fernandez, 
++ *	 Sergio Sanchez Gordo and Sofia Dronda Merino 
++ * 
++ */
++
++#include <linux/pmctrack.h>
++#include <linux/module.h>
++#include <linux/list.h>
++#include <linux/device.h>
++#include <linux/err.h>
++#include <linux/slab.h>
++#include <linux/spinlock.h>
++#include <linux/rcupdate.h>
++
++static pmc_ops_t* pmc_ops_mod=NULL; /* No implementation is registered by default */
++static struct module* implementer=NULL;
++DEFINE_SPINLOCK(pmc_ops_lock);
++
++/* 
++ * PMCTrack's kernel module invokes this function to register 
++ * an implementation of the pmc_ops_t interface
++ */
++int register_pmc_module(pmc_ops_t* pmc_ops_module, struct module* module)
++{
++	int ret=0;
++
++	spin_lock(&pmc_ops_lock);
++	
++	/* Module has been installed already */
++	if (implementer!=NULL) {
++		ret=-EPERM;
++	}
++	else {
++		implementer = module;
++		rcu_assign_pointer(pmc_ops_mod,pmc_ops_module);
++	}
++
++	spin_unlock(&pmc_ops_lock);
++	return ret;
++}
++
++
++/* PMCTrack's kernel module invokes this function when unloaded */
++int unregister_pmc_module(pmc_ops_t* pmc_ops_module, struct module* module)
++{
++	int ret=0;
++
++	spin_lock(&pmc_ops_lock);
++
++	if(implementer!=module){
++		ret=-EPERM;
++	}
++	else { 
++		implementer=NULL;
++		rcu_assign_pointer(pmc_ops_mod,NULL);
++	}
++	spin_unlock(&pmc_ops_lock);
++
++	/* 
++	 * If the operation succeeded wait for all readers to complete. 
++	 * Since synchronize_rcu() may block, this has to be done 
++	 * without the spin lock held
++	 */
++	if (ret==0)
++		synchronize_rcu();
++
++	return ret;
++}
++
++EXPORT_SYMBOL(register_pmc_module);
++EXPORT_SYMBOL(unregister_pmc_module);
++
++
++/*
++ * Wrapper function for the various pmc_ops_t operations 
++ */
++
++/* Invoked when forking a process/thread */ 
++int pmcs_alloc_per_thread_data(unsigned long clone_flags, struct task_struct *p)
++{
++	int ret=0;
++	pmc_ops_t* pmc_ops= NULL;
++
++	spin_lock(&pmc_ops_lock);
++
++	/* 
++	 * If there is no implementer module or it's being removed
++	 * from the kernel, return immediately.
++	 */
++	if (!implementer || !try_module_get(implementer))
++		goto unlock_pmcs_alloc;	
++
++	/* Now it's safe to dereference pmc_ops_mod */
++	pmc_ops=pmc_ops_mod;
++
++	/* Invoke the allocation operation (may block) */
++	if(pmc_ops!=NULL && pmc_ops->pmcs_alloc_per_thread_data!=NULL)
++		ret=pmc_ops->pmcs_alloc_per_thread_data(clone_flags,p);
++
++	/* Allow the module to be removed now */
++	module_put(implementer);
++
++unlock_pmcs_alloc:
++	spin_unlock(&pmc_ops_lock);
++	return ret;
++}
++
++/* Invoked when a context switch out takes place */ 
++void pmcs_save_callback(void *prof, int cpu)
++{
++	pmc_ops_t* pmc_ops= NULL;
++
++	if (!implementer)
++		return;
++
++	rcu_read_lock();
++
++	pmc_ops=rcu_dereference(pmc_ops_mod);
++
++	if(pmc_ops!=NULL && pmc_ops->pmcs_save_callback!=NULL)
++		pmc_ops->pmcs_save_callback(prof, cpu);
++
++	rcu_read_unlock();
++}
++
++/* Invoked when a context switch in takes place */ 
++void pmcs_restore_callback(void *prof, int cpu)
++{
++	pmc_ops_t* pmc_ops= NULL;
++
++	if (!implementer)
++		return;
++
++	rcu_read_lock();
++
++	pmc_ops=rcu_dereference(pmc_ops_mod);
++
++	if(pmc_ops!=NULL && pmc_ops->pmcs_restore_callback!=NULL)
++		pmc_ops->pmcs_restore_callback(prof, cpu);
++
++	rcu_read_unlock();
++}
++
++/* Invoked from scheduler_tick() */ 
++void pmcs_tbs_tick(void *prof, int cpu)
++{
++	pmc_ops_t* pmc_ops= NULL;
++
++	if (!implementer)
++		return;
++
++	rcu_read_lock();
++
++	pmc_ops=rcu_dereference(pmc_ops_mod);
++
++	if(pmc_ops!=NULL && pmc_ops->pmcs_tbs_tick!=NULL)
++		pmc_ops->pmcs_tbs_tick(prof, cpu);
++
++	rcu_read_unlock();
++}
++
++/* Invoked when a process calls exec() */ 
++void pmcs_exec_thread(struct task_struct* tsk)
++{
++	pmc_ops_t* pmc_ops= NULL;
++
++	if (!implementer)
++		return;
++
++	rcu_read_lock();
++
++	pmc_ops=rcu_dereference(pmc_ops_mod);
++
++	if(pmc_ops!=NULL && pmc_ops->pmcs_exec_thread!=NULL)
++		pmc_ops->pmcs_exec_thread(tsk);
++
++	rcu_read_unlock();
++}
++
++/* Invoked when the kernel frees up the process descriptor */ 
++void pmcs_free_per_thread_data(struct task_struct* tsk)
++{
++	pmc_ops_t* pmc_ops= NULL;
++
++	if (!implementer)
++		return;
++
++	rcu_read_lock();
++
++	pmc_ops=rcu_dereference(pmc_ops_mod);
++	
++	if(pmc_ops!=NULL && pmc_ops->pmcs_free_per_thread_data!=NULL)
++		pmc_ops->pmcs_free_per_thread_data(tsk);
++
++	rcu_read_unlock();
++}
++
++/* Invoked when a process exits */ 
++void pmcs_exit_thread(struct task_struct* tsk)
++{
++	pmc_ops_t* pmc_ops= NULL;
++
++	if (!implementer)
++		return;
++
++	rcu_read_lock();
++
++	pmc_ops=rcu_dereference(pmc_ops_mod);
++
++	if(pmc_ops!=NULL && pmc_ops->pmcs_exit_thread!=NULL)
++		pmc_ops->pmcs_exit_thread(tsk);
++
++	rcu_read_unlock();
++}
++
++/* 
++ * Invoked from the code of experimental scheduling classes that leverage per-thread performance
++ * counter data when making scheduling decisions. 
++ * The source code of these scheduling classes is not provided along with this patch, though.  
++ */ 
++int pmcs_get_current_metric_value(struct task_struct* task, int key, uint64_t* value)
++{
++	int ret=-1;
++	pmc_ops_t* pmc_ops= NULL;
++
++	if (!implementer)
++		return ret;
++
++	rcu_read_lock();
++
++	pmc_ops=rcu_dereference(pmc_ops_mod);
++
++	if(pmc_ops!=NULL && pmc_ops->pmcs_get_current_metric_value!=NULL)
++		ret=pmc_ops->pmcs_get_current_metric_value(task,key,value);
++
++	rcu_read_unlock();
++
++	return ret;
++}
++
++/* Hwmon-PMCTRack bridge code */
++typedef struct {
++	const char* name;
++	int id;
++	struct device* dev;
++	struct list_head links;
++} pmctrack_hwmon_node_t;
++
++
++LIST_HEAD(pmctrack_hwmon_devices);
++
++/* Spinlock to protect list of devices */
++DEFINE_SPINLOCK(pmctrack_hwmon_sp);
++
++/* Export/Unexport Functions */
++int pmctrack_hwmon_export_device(const char* name, int id, struct device* dev)
++{
++	pmctrack_hwmon_node_t* node;
++
++	node = kzalloc(sizeof(pmctrack_hwmon_node_t), GFP_KERNEL);
++	if (node == NULL)
++		return -ENOMEM;
++
++	node->name=name;
++	node->id=id;
++	node->dev=dev;
++
++	spin_lock(&pmctrack_hwmon_sp);
++	list_add_tail(&node->links,&pmctrack_hwmon_devices);
++	spin_unlock(&pmctrack_hwmon_sp);
++
++	return 0;
++}
++EXPORT_SYMBOL(pmctrack_hwmon_export_device);
++
++void pmctrack_hwmon_unexport_device(int id)
++{
++	pmctrack_hwmon_node_t* item=NULL;
++	struct list_head* cur_node=NULL;
++
++	spin_lock(&pmctrack_hwmon_sp);
++
++	list_for_each(cur_node, &pmctrack_hwmon_devices) {
++		item = list_entry(cur_node, pmctrack_hwmon_node_t, links);
++		if (item->id==id) {
++			list_del(cur_node);
++			kfree(item);
++			goto out_unexport;
++		}
++	}
++out_unexport:
++	spin_unlock(&pmctrack_hwmon_sp);
++}
++EXPORT_SYMBOL(pmctrack_hwmon_unexport_device);
++
++/* Retrieve device and increase ref coutner */
++struct device* pmctrack_hwmon_get_device(const char* name)
++{
++	pmctrack_hwmon_node_t* item=NULL;
++	struct list_head* cur_node=NULL;
++	struct device* ret=NULL;
++
++	spin_lock(&pmctrack_hwmon_sp);
++
++	list_for_each(cur_node, &pmctrack_hwmon_devices) {
++		item = list_entry(cur_node, pmctrack_hwmon_node_t, links);
++		if (strcmp(item->name,name)==0) {
++			get_device(item->dev);
++			ret=item->dev;
++			goto out_get_device;
++		}
++	}
++out_get_device:
++	spin_unlock(&pmctrack_hwmon_sp);
++	return ret;
++}
++EXPORT_SYMBOL(pmctrack_hwmon_get_device);
++
++
++/* Decrease ref count */
++void pmctrack_hwmon_put_device(struct device* dev)
++{
++	put_device(dev);
++}
++EXPORT_SYMBOL(pmctrack_hwmon_put_device);
++
++/* Show registered devices */
++void pmctrack_hwmon_list_devices(int max_devices, const char* strs[], int* nr_devices)
++{
++	pmctrack_hwmon_node_t* item=NULL;
++	struct list_head* cur_node=NULL;
++	int cnt=0;
++
++	if (!max_devices) {
++		(*nr_devices)=0;
++		return;
++	}
++
++	spin_lock(&pmctrack_hwmon_sp);
++
++	list_for_each(cur_node, &pmctrack_hwmon_devices) {
++		item = list_entry(cur_node, pmctrack_hwmon_node_t, links);
++		strs[cnt++]=item->name;
++		if (cnt>=max_devices)
++			goto out_list_devices;
++	}
++out_list_devices:
++	(*nr_devices)=cnt;
++	spin_unlock(&pmctrack_hwmon_sp);
++}
++
++EXPORT_SYMBOL(pmctrack_hwmon_list_devices);
++
+diff --git a/kernel/sched/core.c b/kernel/sched/core.c
+index 1236732..383560d 100644
+--- a/kernel/sched/core.c
++++ b/kernel/sched/core.c
+@@ -73,6 +73,7 @@
+ #include <linux/init_task.h>
+ #include <linux/binfmts.h>
+ #include <linux/context_tracking.h>
++#include <linux/pmctrack.h>
+ #include <linux/compiler.h>
+ 
+ #include <asm/switch_to.h>
+@@ -1902,6 +1903,12 @@ int sched_fork(unsigned long clone_flags, struct task_struct *p)
+ 	 */
+ 	p->state = TASK_RUNNING;
+ 
++#ifdef CONFIG_PMCTRACK
++	p->prof_enabled = 0;    /* The profiler will be disabled by default */
++	p->pmc = NULL;
++	if (pmcs_alloc_per_thread_data(clone_flags,p))
++		return -ENOMEM;
++#endif
+ 	/*
+ 	 * Make sure we do not leak PI boosting priority to the child.
+ 	 */
+@@ -2227,6 +2234,9 @@ static struct rq *finish_task_switch(struct task_struct *prev)
+ 	vtime_task_switch(prev);
+ 	finish_arch_switch(prev);
+ 	perf_event_task_sched_in(prev, current);
++#ifdef CONFIG_PMCTRACK
++	pmcs_restore_callback(current->pmc, smp_processor_id()); 		
++#endif
+ 	finish_lock_switch(rq, prev);
+ 	finish_arch_post_lock_switch();
+ 
+@@ -2414,6 +2424,9 @@ void sched_exec(void)
+ 	unsigned long flags;
+ 	int dest_cpu;
+ 
++#ifdef CONFIG_PMCTRACK
++	pmcs_exec_thread(p);
++#endif	
+ 	raw_spin_lock_irqsave(&p->pi_lock, flags);
+ 	dest_cpu = p->sched_class->select_task_rq(p, task_cpu(p), SD_BALANCE_EXEC, 0);
+ 	if (dest_cpu == smp_processor_id())
+@@ -2493,6 +2506,9 @@ void scheduler_tick(void)
+ 
+ 	sched_clock_tick();
+ 
++#ifdef CONFIG_PMCTRACK
++	pmcs_tbs_tick(curr->pmc, cpu);
++#endif
+ 	raw_spin_lock(&rq->lock);
+ 	update_rq_clock(rq);
+ 	curr->sched_class->task_tick(rq, curr, 0);
+@@ -2794,7 +2810,9 @@ static void __sched __schedule(void)
+ 		rq->nr_switches++;
+ 		rq->curr = next;
+ 		++*switch_count;
+-
++#ifdef CONFIG_PMCTRACK
++		pmcs_save_callback(prev->pmc, cpu);
++#endif
+ 		rq = context_switch(rq, prev, next); /* unlocks the rq */
+ 		cpu = cpu_of(rq);
+ 	} else
+@@ -3222,10 +3240,17 @@ struct task_struct *idle_task(int cpu)
+  *
+  * The task of @pid, if found. %NULL otherwise.
+  */
++#ifdef CONFIG_PMCTRACK
++struct task_struct *find_process_by_pid(pid_t pid)
++#else
+ static struct task_struct *find_process_by_pid(pid_t pid)
++#endif
+ {
+ 	return pid ? find_task_by_vpid(pid) : current;
+ }
++#ifdef CONFIG_PMCTRACK
++EXPORT_SYMBOL_GPL(find_process_by_pid);  
++#endif
+ 
+ /*
+  * This function initializes the sched_dl_entity of a newly becoming
