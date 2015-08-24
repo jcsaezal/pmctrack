@@ -224,10 +224,10 @@ index e7e16de..97d6714 100644
   * macro override instead of weak attribute alias, to workaround
 diff --git a/kernel/pmctrack.c b/kernel/pmctrack.c
 new file mode 100644
-index 0000000..972c992
+index 0000000..58af21b
 --- /dev/null
 +++ b/kernel/pmctrack.c
-@@ -0,0 +1,362 @@
+@@ -0,0 +1,366 @@
 +/*
 + *  kernel/pmctrack.c
 + *
@@ -329,6 +329,8 @@ index 0000000..972c992
 +	if (!implementer || !try_module_get(implementer))
 +		goto unlock_pmcs_alloc;	
 +
++	spin_unlock(&pmc_ops_lock);
++	
 +	/* Now it's safe to dereference pmc_ops_mod */
 +	pmc_ops=pmc_ops_mod;
 +
@@ -338,6 +340,8 @@ index 0000000..972c992
 +
 +	/* Allow the module to be removed now */
 +	module_put(implementer);
++
++	return ret;
 +
 +unlock_pmcs_alloc:
 +	spin_unlock(&pmc_ops_lock);
