@@ -39,7 +39,7 @@ We also created PMCTrack-GUI, a Python front-end for the `pmctrack` command-line
 
 On Debian or Ubuntu the necessary software can be installed as follows:
 
-	$ sudo apt-get install python2.7 matplotlib python-wxgtk3.0 sshpass 
+	$ sudo apt-get install python2.7 python-matplotlib python-wxgtk3.0 sshpass 
 
 On Mac OS X, PMCTrack-GUI has been succesfully tested after installing the above software dependencies using MacPorts as follows:
 
