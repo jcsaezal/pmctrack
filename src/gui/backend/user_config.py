@@ -1,4 +1,3 @@
-#!/usr/bin/python
 # -*- coding: utf-8 -*-
 
 #
@@ -86,12 +85,14 @@ class MachineConfig(object):
 		
 class GraphStyleConfig(object):
 
-	def __init__(self, bg_color, grid_color, line_color, line_style, line_width):
+	def __init__(self, bg_color, grid_color, line_color, line_style, line_width, line_style_number, mode_number):
                 self.bg_color = bg_color
                 self.grid_color = grid_color
                 self.line_color = line_color
                 self.line_style = line_style
                 self.line_width = line_width
+                self.line_style_number = line_style_number
+                self.mode_number = mode_number
 
 class UserConfig(object):
 	
@@ -105,7 +106,9 @@ class UserConfig(object):
 		self.time = 0 # Time between samples (in miliseconds)
                 self.buffer_size = 0 # Samples buffer size (in bytes)
                 self.system_wide = False # Indicates if system-wide mode is activated
-		self.path_outfile = None
+                self.save_counters_log = False
+                self.save_metrics_log = False
+		self.path_outfile_logs = None
 		self.graph_style = None # Information about graph style
 
 	def GetCopy(self):
@@ -135,7 +138,9 @@ class UserConfig(object):
 		copy.time = self.time
 		copy.buffer_size = self.buffer_size
                 copy.system_wide = self.system_wide
-		copy.path_outfile = self.path_outfile
-		copy.graph_style = GraphStyleConfig(self.graph_style.bg_color, self.graph_style.grid_color, self.graph_style.line_color, self.graph_style.line_style, self.graph_style.line_width)
+                copy.save_counters_log = self.save_counters_log
+                copy.save_metrics_log = self.save_metrics_log
+		copy.path_outfile_logs = self.path_outfile_logs
+		copy.graph_style = GraphStyleConfig(self.graph_style.bg_color, self.graph_style.grid_color, self.graph_style.line_color, self.graph_style.line_style, self.graph_style.line_width, self.graph_style.line_style_number, self.graph_style.mode_number)
 
                 return copy

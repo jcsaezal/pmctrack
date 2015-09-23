@@ -731,12 +731,13 @@ static void mod_exit_thread(struct task_struct* tsk)
 	core_experiment_t* core_exp;
 	pmc_sample_t sample;
 	int i=0;
-	int cur_coretype=get_coretype_cpu(smp_processor_id());
+	int cpu=raw_smp_processor_id();
+	int cur_coretype=get_coretype_cpu(cpu);
 
 
 	if(prof == NULL) return;
 
-	core_exp = prof->pmcs_config?prof->pmcs_config:&per_cpu(cpu_exp, smp_processor_id());
+	core_exp = prof->pmcs_config?prof->pmcs_config:&per_cpu(cpu_exp, cpu);
 
 	if (unlikely(is_syswide_monitor(tsk)))
 		syswide_monitoring_stop();
@@ -767,7 +768,7 @@ static void mod_exit_thread(struct task_struct* tsk)
 		}
 
 		//if (prof->virt_counter_mask)
-		mm_on_new_sample(prof,smp_processor_id(),&sample,MM_EXIT,NULL);
+		mm_on_new_sample(prof,cpu,&sample,MM_EXIT,NULL);
 
 
 		if (prof->pmc_samples_buffer) {
@@ -1010,7 +1011,7 @@ static ssize_t proc_monitor_pmcs_write(struct file *filp, const char __user *buf
 	pmon_prof_t* prof;
 	unsigned long flags;
 	pmc_samples_buffer_t* pmc_buf=NULL;
-	cpu_pmc_buffer_t*  cpu_buffer=this_cpu_ptr(&pmc_buffer);
+	cpu_pmc_buffer_t*  cpu_buffer=NULL;
 	char kbuf[MAX_STR_CONFIG_LEN]="";
 
 	if (len>=MAX_STR_CONFIG_LEN)
@@ -1020,6 +1021,8 @@ static ssize_t proc_monitor_pmcs_write(struct file *filp, const char __user *buf
 		return -EFAULT;
 
 	kbuf[len]='\0';
+
+	cpu_buffer=per_cpu_ptr(&pmc_buffer, raw_smp_processor_id());
 
 	if(sscanf(kbuf,"pid_monitor %i", &val)==1 && val>0) {
 		pid = (pid_t)val;
@@ -1036,7 +1039,7 @@ static ssize_t proc_monitor_pmcs_write(struct file *filp, const char __user *buf
 		monitor= (pmon_prof_t*)current->pmc;
 		monitored = (pmon_prof_t*)tsM->pmc;
 
-		if (!monitored) {
+		if (!monitored || !monitored->pmc_samples_buffer) {
 			put_task_struct(tsM);
 			return -ESRCH;
 		} else {
@@ -1064,7 +1067,7 @@ static ssize_t proc_monitor_pmcs_write(struct file *filp, const char __user *buf
 		if (!prof->pmc_samples_buffer)
 			prof->pmc_samples_buffer=pmc_buf;
 
-		prof->last_cpu=smp_processor_id();
+		prof->last_cpu=raw_smp_processor_id();
 		current->prof_enabled=1;
 		prof->flags|=PMC_SELF_MONITORING;
 
@@ -1082,7 +1085,7 @@ static ssize_t proc_monitor_pmcs_write(struct file *filp, const char __user *buf
 	} else if (strncmp(kbuf,"OFF",3)==0) {
 		prof= (pmon_prof_t*)current->pmc;
 		spin_lock_irqsave(&cpu_buffer->ptr_lock,flags);
-		sample_counters_user_tbs(prof,prof->pmcs_config,PMC_SELF_EVT,smp_processor_id());
+		sample_counters_user_tbs(prof,prof->pmcs_config,PMC_SELF_EVT,raw_smp_processor_id());
 		current->prof_enabled=0;
 		spin_unlock_irqrestore(&cpu_buffer->ptr_lock,flags);
 	}
@@ -1519,6 +1522,7 @@ static int configure_performance_counters_thread(const char *buf,struct task_str
 	int coretype=0;
 	int i=0,j=0;
 	monitoring_module_counter_usage_t usage;
+	int cpu=raw_smp_processor_id();
 	cpu_pmc_buffer_t*  cpu_buffer=this_cpu_ptr(&pmc_buffer);
 
 	/* Make sure prof structure exists for this thread */
@@ -1583,7 +1587,7 @@ static int configure_performance_counters_thread(const char *buf,struct task_str
 		}
 
 		/*  Initialize structure for just one coretype */
-		do_setup_pmcs(pmc_cfg,used_pmcs,exp[0],smp_processor_id(),0);
+		do_setup_pmcs(pmc_cfg,used_pmcs,exp[0],cpu,0);
 
 	} else {
 
@@ -1601,7 +1605,7 @@ static int configure_performance_counters_thread(const char *buf,struct task_str
 		}
 
 		/*  Initialize structure for just one coretype */
-		do_setup_pmcs(pmc_cfg,used_pmcs,exp[0],smp_processor_id(),0);
+		do_setup_pmcs(pmc_cfg,used_pmcs,exp[0],cpu,0);
 
 		/* Replicate for all */
 		for (i=1; i<AMP_MAX_CORETYPES; i++)

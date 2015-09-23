@@ -1,8 +1,7 @@
-#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
 #
-# pmc_frame_graph.py
+# monitoring_frame.py
 #
 ##############################################################################
 #
@@ -37,15 +36,16 @@ from matplotlib.backends.backend_wxagg import FigureCanvasWxAgg as FigCanvas
 import numpy as np
 
 from backend.user_config import *
-from frames.pmc_frame_final_conf import *
+from frontend.final_config_panel import *
+from frontend.graph_style_dialog import GraphStyleDialog
 
-class PMCFrameGraph(wx.Frame):
+class MonitoringFrame(wx.Frame):
     def __init__(self, *args, **kwargs):
 	kwds = {"style": wx.DEFAULT_FRAME_STYLE}
         wx.Frame.__init__(self, *args, **kwds)
 
 	self.version = kwargs.get("version")
-        self.f_frame = kwargs.get("final_frame")
+        self.final_panel = kwargs.get("final_panel")
 	self.user_config = kwargs.get("user_config")
 	self.pack = kwargs.get("pack", "")
 	self.num_exp = kwargs.get("num_exp", 0)
@@ -66,7 +66,7 @@ class PMCFrameGraph(wx.Frame):
 	self.maxval = 0
 
         # Add this frame to the list of monitoring frames that are in memory.
-	self.f_frame.graph_frames.append(self)
+	self.final_panel.mon_frames.append(self)
 	
 	# Indicates painted samples of a experiment of a particular thread (or CPU in system-wide mode).
 	self.samples_draw = []
@@ -83,7 +83,7 @@ class PMCFrameGraph(wx.Frame):
 		metrics.append(metric.name)
         self.combo_metric = wx.ComboBox(self, wx.ID_ANY, choices=metrics, style=wx.CB_DROPDOWN | wx.CB_READONLY)
 
-        self.combo_pack = wx.ComboBox(self, wx.ID_ANY, choices=sorted(self.f_frame.pmc_extract.data.keys()), style=wx.CB_DROPDOWN | wx.CB_READONLY)
+        self.combo_pack = wx.ComboBox(self, wx.ID_ANY, choices=sorted(self.final_panel.pmc_extract.data.keys()), style=wx.CB_DROPDOWN | wx.CB_READONLY)
 	self.label_pack = wx.StaticText(self, -1, self.name_pack + ": ")
         self.label_exp = wx.StaticText(self, -1, _("Experiment") + ": ")
         self.label_metric = wx.StaticText(self, -1, _("Metric") + ": ")
@@ -97,6 +97,7 @@ class PMCFrameGraph(wx.Frame):
 	self.button_show_controls = wx.Button(self, wx.ID_ANY, _("Show controls"))
         self.button_stop_monitoring = wx.Button(self, wx.ID_ANY, _("Stop application"))
         self.sizer_options_staticbox = wx.StaticBox(self, wx.ID_ANY, _("Options")) 
+        self.graph_style_dialog = GraphStyleDialog(None, -1, "")
 	self.timer_update_data = wx.Timer(self)
 
         self.separator = wx.BoxSizer(wx.VERTICAL)
@@ -117,6 +118,7 @@ class PMCFrameGraph(wx.Frame):
 	self.Bind(wx.EVT_BUTTON, self.on_click_show_controls, self.button_show_controls)
 	self.Bind(wx.EVT_BUTTON, self.on_click_stop_monitoring, self.button_stop_monitoring)
 	self.Bind(wx.EVT_CLOSE, self.on_close_frame)
+        self.fig.canvas.mpl_connect('button_press_event', self.on_click_graph)
 
     def __set_properties(self):
         self.SetTitle("PMCTrack-GUI v" + self.version + " - " + _("Monitoring application '{0}'").format(self.name_benchmark))
@@ -137,6 +139,12 @@ class PMCFrameGraph(wx.Frame):
         self.button_screenshot.SetMinSize((100, 30))
         self.button_hide_controls.SetMinSize((100, 30))
         self.button_stop_monitoring.SetMinSize((100, 30))
+        
+        if self.user_config.graph_style.mode_number >= 0:
+            self.graph_style_dialog.SetModeNumber(self.user_config.graph_style.mode_number)
+        else:
+            self.graph_style_dialog.SetCustomizedMode(self.user_config.graph_style.bg_color, self.user_config.graph_style.grid_color, self.user_config.graph_style.line_color, self.user_config.graph_style.line_style_number, self.user_config.graph_style.line_width)
+
         self.timer_update_data.Start(100)
 
     def __do_layout(self):
@@ -192,7 +200,7 @@ class PMCFrameGraph(wx.Frame):
         self.canvas = FigCanvas(self, -1, self.fig) 
 
     def __draw_plot(self):
-	graph_data = self.f_frame.pmc_extract.data[self.pack][self.num_exp][self.num_metric]
+	graph_data = self.final_panel.pmc_extract.data[self.pack][self.num_exp][self.num_metric]
 	
 	# Updates the minimum and maximum value of the graph that is displayed (only if it's worth)
 	if len(graph_data[self.samples_draw[self.num_exp].get(self.pack, 0):]) > 0:
@@ -232,8 +240,8 @@ class PMCFrameGraph(wx.Frame):
     def on_timer_update_data(self, event):
 	packs_count = self.combo_pack.GetCount()
 	# If a new pack (pid or cpu) is detected update the corresponding graphical controls.
-	if len(self.f_frame.pmc_extract.data) > packs_count:
-		self.combo_pack.SetItems(sorted(self.f_frame.pmc_extract.data))
+	if len(self.final_panel.pmc_extract.data) > packs_count:
+		self.combo_pack.SetItems(sorted(self.final_panel.pmc_extract.data))
 		if packs_count > 0:
 			self.combo_pack.SetStringSelection(self.pack)
 		else: # If the first pack (pid or cpu) is detected as what we are currently monitoring pack.
@@ -245,24 +253,24 @@ class PMCFrameGraph(wx.Frame):
 			self.button_other_window.Enable()
 
 	if self.pack != "":
-		num_graph_data = len(self.f_frame.pmc_extract.data[self.pack][self.num_exp][self.num_metric])
+		num_graph_data = len(self.final_panel.pmc_extract.data[self.pack][self.num_exp][self.num_metric])
 		
 		# Only if there are outstanding paint painting to the pack (pid or cpu) being displayed data.
 		if num_graph_data > self.samples_draw[self.num_exp].get(self.pack, 0):
         		self.__draw_plot()
 			self.samples_draw[self.num_exp][self.pack] = num_graph_data
 
-		if self.f_frame.pmc_extract.state == 'F':
+		if self.final_panel.pmc_extract.state == 'F':
 			self.timer_update_data.Stop()
 			self.SetTitle(self.GetTitle() + " " + _("(finished)"))
 			self.button_stop_monitoring.Disable()
-			if len(self.f_frame.graph_frames) > 0 and self.f_frame.graph_frames[0] == self:
-				self.f_frame.button_monitoring.SetLabel(_("Close monitoring windows"))
+			if len(self.final_panel.mon_frames) > 0 and self.final_panel.mon_frames[0] == self:
+				self.final_panel.button_monitoring.SetLabel(_("Close monitoring windows"))
 				dlg = wx.MessageDialog(parent=None, message=_("The application '{0}' is done.").format(self.name_benchmark), 
 					caption=_("Information"), style=wx.OK|wx.ICON_INFORMATION)
         			dlg.ShowModal()
        				dlg.Destroy()
-		elif self.f_frame.pmc_extract.state == 'S':
+		elif self.final_panel.pmc_extract.state == 'S':
 			self.timer_update_data.Stop()
 			self.SetTitle(self.GetTitle() + " " + _("(stopped)"))
         	    	self.button_stop_monitoring.SetLabel(_("Resume application"))
@@ -274,7 +282,7 @@ class PMCFrameGraph(wx.Frame):
 	metric = self.user_config.experiments[self.num_exp].metrics[self.num_metric].name.encode('utf-8')
 	self.sizer_graph_staticbox.SetLabel(_("Showing graph with {0} {1}, experiment {2} and metric '{3}'").format(self.name_pack, self.pack, (self.num_exp + 1), metric))
 	self.axes.set_ylabel(metric.decode('utf-8'))
-	graph_data = self.f_frame.pmc_extract.data[self.pack][self.num_exp][self.num_metric]
+	graph_data = self.final_panel.pmc_extract.data[self.pack][self.num_exp][self.num_metric]
 	if self.samples_draw[self.num_exp].get(self.pack, 0) > 0:
 		self.minval = min(graph_data[0:self.samples_draw[self.num_exp][self.pack]])
 		self.maxval = max(graph_data[0:self.samples_draw[self.num_exp][self.pack]])
@@ -287,8 +295,8 @@ class PMCFrameGraph(wx.Frame):
 	sel_pack = self.combo_pack.GetStringSelection()
 	sel_exp = self.combo_exp.GetSelection()
 	sel_met = self.combo_metric.GetSelection()
-	graph_frame = PMCFrameGraph(None, -1, "", version=self.version, final_frame=self.f_frame, user_config=self.user_config, pack=sel_pack, num_exp=sel_exp, num_metric=sel_met)
-    	graph_frame.Show()
+	mon_frame = MonitoringFrame(None, -1, "", version=self.version, final_panel=self.final_panel, user_config=self.user_config, pack=sel_pack, num_exp=sel_exp, num_metric=sel_met)
+    	mon_frame.Show()
 
     def on_change_experiment(self, event):
 	metrics = []
@@ -296,6 +304,17 @@ class PMCFrameGraph(wx.Frame):
 		metrics.append(metric.name)
         self.combo_metric.SetItems(metrics)
 	self.combo_metric.SetSelection(0)
+
+    def on_click_graph(self, event):
+        if self.fig.canvas.HasCapture():
+            self.fig.canvas.ReleaseMouse()
+        if self.graph_style_dialog.ShowModal() == 0:
+            self.axes.set_axis_bgcolor(self.graph_style_dialog.GetBgColor())
+       	    self.axes.grid(True, color=self.graph_style_dialog.GetGridColor())
+	    self.plot_data.set_linewidth(self.graph_style_dialog.GetLineWidth())
+	    self.plot_data.set_linestyle(self.graph_style_dialog.GetLineStyle())
+	    self.plot_data.set_color(self.graph_style_dialog.GetLineColor())
+            self.__draw_plot()
 
     def on_click_change_vis_graph(self, event):
         self.show_complete = not self.show_complete
@@ -306,14 +325,14 @@ class PMCFrameGraph(wx.Frame):
 	self.__draw_plot()
 
     def on_click_stop_monitoring(self, event):
-	if self.f_frame.pmc_extract.state == 'R':
-		self.f_frame.pmc_extract.StopMonitoring()
-	elif self.f_frame.pmc_extract.state == 'S':
-		self.f_frame.pmc_extract.ResumeMonitoring()
-		for graph_frame in self.f_frame.graph_frames:
-        		graph_frame.timer_update_data.Start(100)
-            		graph_frame.button_stop_monitoring.SetLabel(_("Stop application"))
-        		graph_frame.SetTitle("PMCTrack-GUI v" + self.version + " - " + _("Monitoring application '{0}'").format(self.name_benchmark))
+	if self.final_panel.pmc_extract.state == 'R':
+		self.final_panel.pmc_extract.StopMonitoring()
+	elif self.final_panel.pmc_extract.state == 'S':
+		self.final_panel.pmc_extract.ResumeMonitoring()
+		for mon_frame in self.final_panel.mon_frames:
+        		mon_frame.timer_update_data.Start(100)
+            		mon_frame.button_stop_monitoring.SetLabel(_("Stop application"))
+        		mon_frame.SetTitle("PMCTrack-GUI v" + self.version + " - " + _("Monitoring application '{0}'").format(self.name_benchmark))
 
     def on_click_screenshot(self, event):
 	metric = self.user_config.experiments[self.num_exp].metrics[self.num_metric].name
@@ -338,8 +357,9 @@ class PMCFrameGraph(wx.Frame):
 	self.__change_vis_controls(True)
 
     def on_close_frame(self, event):
-	if len(self.f_frame.graph_frames) > 1:
-		self.f_frame.graph_frames.remove(self)
+	if len(self.final_panel.mon_frames) > 1:
+		self.final_panel.mon_frames.remove(self)
+                self.graph_style_dialog.Destroy()
 		self.Destroy()
 	else:
-		self.f_frame.StopMonitoring()
+		self.final_panel.StopMonitoring()

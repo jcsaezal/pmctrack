@@ -22,6 +22,7 @@
 #include <asm/cpu.h>
 #include <asm/smp_plat.h>
 #include <linux/ftrace.h>
+#include <linux/version.h>
 
 typedef unsigned int u32;
 
@@ -390,10 +391,43 @@ static int setup_overflow_irq(void)
 }
 #else
 
+/*
++	arm-pmu {
++			compatible = "arm,cortex-a15-pmu";
++			interrupt-parent = <&combiner>;
++			interrupts = <1 2>, <7 0>, <16 6>, <19 2>;
++	
++			compatible = "arm,cortex-a7-pmu";
++			interrupt-parent = <&gic>;
++			interrupts = <0 192 4>, <0 193 4>, <0 194 4>, <0 195 4>;
++	
++	};
++
+*/
+
+/*cat /proc/interrupts | grep arm-pmu
+279:          0          0          0          0          0          0          0          0  COMBINER  10  arm-pmu
+280:          0          0          0          0          0          0          0          0  COMBINER  56  arm-pmu
+281:          0          0          0          0          0          0          0          0  COMBINER 134  arm-pmu
+282:          0          0          0      36213          0          0          0          0  COMBINER 154  arm-pmu
+*/
+#ifdef ODROID
+#define VEXPRESS_NR_IRQS 8
+/* Interrupt lines for the odroid-xu3 board */
+int vexpress_fixed_irqs[VEXPRESS_NR_IRQS]={
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(3,14,0)
+192,193,194,195,266,312,390,410
+#elif LINUX_VERSION_CODE <= KERNEL_VERSION(4,2,0)
+192,193,194,195,279,280,281,282
+#else
+192,134,135,136,137,193,194,195
+#endif
+};
+#else
 /* Interrupt lines for the ARM Coretile Express TC2 board */
 #define VEXPRESS_NR_IRQS 5
 int vexpress_fixed_irqs[VEXPRESS_NR_IRQS]= {160,161,162,100,101};
-
+#endif
 cpumask_t pmu_active_irqs;
 
 /* 
@@ -424,9 +458,8 @@ static int setup_overflow_irq(void)
 			           irq, i);
 			continue;
 		}
-
 		err = request_irq(irq, armv7pmu_handle_irq,
-		                  IRQF_NOBALANCING, "pmctrack-arm",
+		                  IRQF_DISABLED | IRQF_NOBALANCING, "pmctrack-arm",
 		                  &pmu_props_cpu[0]);
 		if (err) {
 			pr_err("unable to request IRQ%d for ARM PMU counters\n",irq);
@@ -563,8 +596,9 @@ int parse_pmcs_strconfig(const char *buf,
 	static const unsigned int default_ebs_window=500000000;
 	int read_tokens=0;
 	int idx, val;
-	char* strconfig=(char*)buf;
-	char* flag;
+	char cpbuf[PMCTRACK_MAX_LEN_RAW_PMC_STRING];
+	char* strconfig=cpbuf;
+        char* flag;
 	int curr_flag=0;
 	unsigned int used_pmcs=0; /* Mask to indicate which counters are actually used*/
 	int error=0;
@@ -573,6 +607,13 @@ int parse_pmcs_strconfig(const char *buf,
 	unsigned int pmc_count=0;
 	int coretype_selected=-1;	/* No coretype for now */
 
+	/* 
+	 * Create a copy of the buf string since strsep()
+	 * actually modifies the string by replacing the delimeter
+	 * with the null byte ('\0') 
+	 */
+	strncpy(strconfig,buf,PMCTRACK_MAX_LEN_RAW_PMC_STRING);
+	strconfig[PMCTRACK_MAX_LEN_RAW_PMC_STRING-1]='\0';
 
 	/* Clear array */
 	memset(pmc_cfg,0,sizeof(pmc_usrcfg_t)*MAX_LL_EXPS);

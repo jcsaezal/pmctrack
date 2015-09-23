@@ -50,8 +50,8 @@ pmu_props_t pmu_props_cpu[NR_CPUS];
  * The interrupt lines listed in this source file correspond
  * to those found in this system.
  * 
- * If using a different ARM 64-bit system, set the right interrupt 
- * lines for that system in the sources or comment the line found below. 
+ * If using a different ARM 64-bit system, set the right interrupt lines
+ * for that system in the sources or comment the line found right below. 
  */
 #define ENABLE_IRQ
 static void unregister_overflow_irq(void);
@@ -88,10 +88,8 @@ static void init_pmu_props_cpu(void* dummy)
 
 
 	init_pmcr(&reg);
-	//printk("LEIDO registro: 0x%x\n",reg.m_value);
 
 	/* Read the nb of CNTx counters supported from PMNC */
-	//props->nr_gp_pmcs= = (armv8pmu_pmcr_read() >> ARMV8_PMCR_N_SHIFT) & ARMV8_PMCR_N_MASK;
 	props->nr_gp_pmcs=get_bit_field32(&reg.m_n) & ARMV8_PMCR_N_MASK ;
 	props->nr_fixed_pmcs=1; //Cycle counter
 	props->pmc_width=32;
@@ -103,9 +101,8 @@ static void init_pmu_props_cpu(void* dummy)
 
 	/* Read PMU ID*/
 	props->processor_model=reg.m_value;
-	//(get_bit_field32(&reg.m_idcode) << 8) || get_bit_field32(&reg.m_imp);
+
 	/* Hack extracted from c_show() in arch/arm/kernel/setup.c */
-	//cpuid = is_smp() ? per_cpu(cpu_data, i).cpuid : read_cpuid_id();
 	cpuid=read_cpuid_id();
 
 	if ((cpuid & 0x0008f000) == 0x00000000) {
@@ -529,7 +526,8 @@ int parse_pmcs_strconfig(const char *buf,
 	static const unsigned int default_ebs_window=500000000;
 	int read_tokens=0;
 	int idx, val;
-	char* strconfig=(char*)buf;
+	char cpbuf[PMCTRACK_MAX_LEN_RAW_PMC_STRING];
+	char* strconfig=cpbuf;
 	char* flag;
 	int curr_flag=0;
 	unsigned int used_pmcs=0; /* Mask to indicate which counters are actually used*/
@@ -539,6 +537,13 @@ int parse_pmcs_strconfig(const char *buf,
 	unsigned int pmc_count=0;
 	int coretype_selected=-1;	/* No coretype for now */
 
+	/* 
+	 * Create a copy of the buf string since strsep()
+	 * actually modifies the string by replacing the delimeter
+	 * with the null byte ('\0') 
+	 */
+	strncpy(strconfig,buf,PMCTRACK_MAX_LEN_RAW_PMC_STRING);
+	strconfig[PMCTRACK_MAX_LEN_RAW_PMC_STRING-1]='\0';
 
 	/* Clear array */
 	memset(pmc_cfg,0,sizeof(pmc_usrcfg_t)*MAX_LL_EXPS);

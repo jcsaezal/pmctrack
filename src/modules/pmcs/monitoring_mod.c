@@ -274,8 +274,11 @@ extern monitoring_module_t intel_cmt_mm;
 extern monitoring_module_t intel_rapl_mm;
 #elif defined(CONFIG_PMC_ARM) || defined(CONFIG_PMC_ARM64)
 extern monitoring_module_t ipc_sampling_sf_mm;
+#ifndef ODROID
 extern monitoring_module_t vexpress_sensors_mm;
 #endif
+#endif
+
 
 /* Init monitoring module manager */
 int init_mm_manager(struct proc_dir_entry* pmc_dir)
@@ -320,7 +323,9 @@ int init_mm_manager(struct proc_dir_entry* pmc_dir)
 	load_monitoring_module(&intel_rapl_mm);
 #elif defined(CONFIG_PMC_ARM) || defined(CONFIG_PMC_ARM64)
 	load_monitoring_module(&ipc_sampling_sf_mm);
+#ifndef ODROID
 	load_monitoring_module(&vexpress_sensors_mm);
+#endif
 #endif
 
 	return 0;

@@ -15,6 +15,7 @@
 
 #define PMC_CORE_TYPES 2 				/* Max core types supported */
 #define PMCTRACK_MODEL_STRING_LEN 30	
+#define PMCTRACK_MAX_LEN_RAW_PMC_STRING 256
 
 /* 
  * Structure that holds the properties

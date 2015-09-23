@@ -1,8 +1,7 @@
-#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
 #
-# pmc_frame_machine.py
+# machine_config_panel.py
 #
 ##############################################################################
 #
@@ -24,25 +23,17 @@
 # MA 02110-1301, USA.
 #
 ##############################################################################
-#
-#  2015-05-16 Modified by Abel Serrano to improve translations.
-#
 
 import wx
 
 from backend.facade_xml import *
 from backend.user_config import *
 from backend.pmc_connect import *
-from frames.pmc_frame_counters import *
 
-class PMCFrameMachine(wx.Frame):
-    def __init__(self, *args, **kwargs):
-	kwds = {"style": wx.DEFAULT_FRAME_STYLE}
-        wx.Frame.__init__(self, *args, **kwds)
-	
-	self.panel = wx.Panel(self, -1)
-	self.version = kwargs.get("version")
-	self.user_config = kwargs.get("user_config")
+class MachineConfigPanel():
+    def __init__(self, config_frame):
+        self.config_frame = config_frame
+	self.panel = wx.Panel(self.config_frame, -1)
         self.select_machine = wx.RadioBox(self.panel, -1, _("Select machine to monitor"), choices=[_("Local"), _("Remote")], majorDimension=0, style=wx.RA_SPECIFY_ROWS)
         self.label_address = wx.StaticText(self.panel, -1, _("Address") + ": ")
         self.text_address = wx.TextCtrl(self.panel, -1, "")
@@ -59,23 +50,17 @@ class PMCFrameMachine(wx.Frame):
         self.path_key = wx.FilePickerCtrl(self.panel, -1, "", _("Select your SSH key"), _("SSH Key") + " |*")
         self.sizer_remote_machine_staticbox = wx.StaticBox(self.panel, -1, _("Remote machine parameters"))
         self.button_next = wx.Button(self.panel, -1, _("Next") + " >")
-	self.next_frame = None
-	# Contains the reference to the final frame configuration when such reference is not in the frame of counters (because it has been removed)
-	self.final_frame_ref_temp = None
 
         self.__set_properties()
         self.__do_layout()
 
 	self.text_pass.Bind(wx.EVT_TEXT_ENTER, self.on_click_next)
-	self.Bind(wx.EVT_RADIOBUTTON, self.on_change_auth, self.radio_auth_key)
-	self.Bind(wx.EVT_RADIOBUTTON, self.on_change_auth, self.radio_auth_pass)
-	self.Bind(wx.EVT_RADIOBOX, self.on_change_remote_machine, self.select_machine)
-	self.Bind(wx.EVT_BUTTON, self.on_click_next, self.button_next)
-	self.Bind(wx.EVT_CLOSE, self.on_close_frame)
+	self.radio_auth_key.Bind(wx.EVT_RADIOBUTTON, self.on_change_auth)
+	self.radio_auth_pass.Bind(wx.EVT_RADIOBUTTON, self.on_change_auth)
+	self.select_machine.Bind(wx.EVT_RADIOBOX, self.on_change_remote_machine)
+	self.button_next.Bind(wx.EVT_BUTTON, self.on_click_next)
 
     def __set_properties(self):
-        self.SetTitle("PMCTrack-GUI v" + self.version + " - " + _("Machine selection"))
-        self.SetSize((717, 600))
         self.select_machine.SetSelection(0)
 	self.path_key.SetPath("")
 	self.path_key.Hide()
@@ -83,11 +68,10 @@ class PMCFrameMachine(wx.Frame):
         self.label_address.SetMinSize((80, 22))
         self.label_user.SetMinSize((80, 22))
         self.label_auth_opt.SetMinSize((80, 22))
-        self.button_next.SetMinSize((160, 42))
+        self.button_next.SetMinSize((225, 42))
 	self.__change_enable_controls_remote_machine(False)
 
     def __do_layout(self):
-	sizer_panel = wx.BoxSizer(wx.VERTICAL)
         separator = wx.BoxSizer(wx.VERTICAL)
         self.sizer_remote_machine_staticbox.Lower()
         sizer_remote_machine = wx.StaticBoxSizer(self.sizer_remote_machine_staticbox, wx.VERTICAL)
@@ -113,9 +97,6 @@ class PMCFrameMachine(wx.Frame):
         separator.Add(sizer_remote_machine, 9, wx.ALL | wx.EXPAND, 5)
         separator.Add(self.button_next, 0, wx.RIGHT | wx.BOTTOM | wx.ALIGN_RIGHT, 5)
 	self.panel.SetSizer(separator)
-	sizer_panel.Add(self.panel, 1, wx.EXPAND, 0)
-        self.SetSizer(sizer_panel)
-        self.Layout()
 
     def __change_enable_controls_remote_machine(self, enable):
 	self.label_address.Enable(enable)
@@ -140,34 +121,34 @@ class PMCFrameMachine(wx.Frame):
 		user = self.text_user.GetValue()
 		passwd = self.text_pass.GetValue()
 		key = self.path_key.GetPath()
-		self.user_config.machine = MachineConfig(True, address, port, user, passwd, key)
+		self.config_frame.user_config.machine = MachineConfig(True, address, port, user, passwd, key)
 	else:
-		self.user_config.machine = MachineConfig(False)
+		self.config_frame.user_config.machine = MachineConfig(False)
 
     def __detect_other_machine_config(self):
         detected = False
-        if self.user_config.machine != None:
-            if self.user_config.machine.is_remote != (self.select_machine.GetSelection() == 1):
+        if self.config_frame.user_config.machine != None:
+            if self.config_frame.user_config.machine.is_remote != (self.select_machine.GetSelection() == 1):
                 detected = True
-	    elif self.user_config.machine.is_remote:
-		if self.user_config.machine.remote_address != self.text_address.GetValue(): detected = True
-		if self.user_config.machine.remote_port != self.text_port.GetValue(): detected = True
-		if self.user_config.machine.remote_user != self.text_user.GetValue(): detected = True
-		if self.user_config.machine.remote_password != self.text_pass.GetValue(): detected = True
-		if self.user_config.machine.path_key != self.path_key.GetPath(): detected = True
+	    elif self.config_frame.user_config.machine.is_remote:
+		if self.config_frame.user_config.machine.remote_address != self.text_address.GetValue(): detected = True
+		if self.config_frame.user_config.machine.remote_port != self.text_port.GetValue(): detected = True
+		if self.config_frame.user_config.machine.remote_user != self.text_user.GetValue(): detected = True
+		if self.config_frame.user_config.machine.remote_password != self.text_pass.GetValue(): detected = True
+		if self.config_frame.user_config.machine.path_key != self.path_key.GetPath(): detected = True
         return detected
 
     def __validate(self, pmc_connect):
 	dlg = None
-	if self.user_config.machine.is_remote:
-		if self.user_config.machine.remote_password != "" and not pmc_connect.CheckPkgInstalled("sshpass", False):
+	if self.config_frame.user_config.machine.is_remote:
+		if self.config_frame.user_config.machine.remote_password != "" and not pmc_connect.CheckPkgInstalled("sshpass", False):
 			dlg = wx.MessageDialog(parent=None, message=_("'sshpass' package is required to authenticate by password."), caption=_("Information"), style=wx.OK | wx.ICON_INFORMATION)
 		else:
 			err_connect = pmc_connect.CheckConnectivity()
 			if err_connect != "":
-				dlg = wx.MessageDialog(parent=None, message=_("Unable to access to '{0}'").format(self.user_config.machine.remote_address) + ": \n\n" + err_connect, caption=_("Error"), style=wx.OK | wx.ICON_ERROR)
+				dlg = wx.MessageDialog(parent=None, message=_("Unable to access to '{0}'").format(self.config_frame.user_config.machine.remote_address) + ": \n\n" + err_connect, caption=_("Error"), style=wx.OK | wx.ICON_ERROR)
 	if dlg == None:
-		if not pmc_connect.CheckPkgInstalled("pmctrack", self.user_config.machine.is_remote):
+		if not pmc_connect.CheckPkgInstalled("pmctrack", self.config_frame.user_config.machine.is_remote):
 			dlg = wx.MessageDialog(parent=None, message=_("PMCTrack not detected on the machine selected for monitoring.\n\nMake sure you have it installed and added to PATH."), caption=_("Error"), style=wx.OK | wx.ICON_ERROR)
 		elif not pmc_connect.CheckFileExists("/proc/pmc/info"):
 			dlg = wx.MessageDialog(parent=None, message=_("PMCTrack configuration file not found.\n\nMake sure you have loaded the pmctrack module on the machine to be monitored."), caption=_("Error"), style=wx.OK | wx.ICON_ERROR)
@@ -198,42 +179,22 @@ class PMCFrameMachine(wx.Frame):
 
 
     def on_click_next(self, event):
-        # If the machine to monitor changes, and user accept it, remove the frame counters and metrics previously generated.
-        if self.next_frame != None and self.__detect_other_machine_config():
+        # If the machine to monitor changes, and user accept it, remove the counters and metrics panel previously generated.
+        if self.config_frame.panels[1] != None and self.__detect_other_machine_config():
             dlg = wx.MessageDialog(parent=None, message=_("By changing the machine to monitor settings previously made will be deleted.\n\nAre you sure you wanna do this?."), 
 	        caption=_("Advertisement"), style=wx.YES_NO | wx.ICON_EXCLAMATION)
             if dlg.ShowModal() == wx.ID_YES:
-		self.final_frame_ref_temp = self.next_frame.next_frame
-		self.next_frame.prev_frame = None
-		self.next_frame.next_frame = None
-                self.next_frame.Close()
-                self.next_frame = None
-	# If there is a configured machine and the user has not changed, continue without opposition to counters and metrics frame.
-        elif self.next_frame != None:
-            self.next_frame.SetPosition(self.GetPosition())
-            self.next_frame.SetSize(self.GetSize())
-            self.Hide()
-            self.next_frame.Show()
-	# If no counters and metrics frame loaded, load into memory.
-        if self.next_frame == None:
+                self.config_frame.panels[1].DestroyComponents()
+                self.config_frame.panels[1] = None
+	# If there is a configured machine and the user has not changed, continue without opposition to counters and metrics panel.
+        elif self.config_frame.panels[1] != None:
+            self.config_frame.GoToPanel(1)
+	# If no counters and metrics panel loaded, load into memory.
+        if self.config_frame.panels[1] == None:
 	    self.__save_user_config()
-	    pmc_connect = PMCConnect(self.user_config.machine)
+	    pmc_connect = PMCConnect(self.config_frame.user_config.machine)
 	    if self.__validate(pmc_connect):
-	    	self.next_frame = PMCFrameCounters(None, -1, "", self.GetPosition(), self.GetSize(), version=self.version, user_config=self.user_config, facade_xml=FacadeXML(pmc_connect))
-    	    	self.Hide()
-	    	self.next_frame.prev_frame = self
-                # If there is a final configuration frame, do the appropriate links with the new counters and metrics frame.
-		if self.final_frame_ref_temp != None:
-	    		self.next_frame.next_frame = self.final_frame_ref_temp
-			self.final_frame_ref_temp.prev_frame = self.next_frame
-			self.final_frame_ref_temp = None
-	    	self.next_frame.Show()
-
-    def on_close_frame(self, event):
-	if self.next_frame != None:
-	    self.next_frame.prev_frame = None
-	    self.next_frame.Close()
-	if self.final_frame_ref_temp != None:
-	    self.final_frame_ref_temp.prev_frame = None
-	    self.final_frame_ref_temp.Close()
-	self.Destroy()
+                self.config_frame.facade_xml = FacadeXML(pmc_connect)
+                self.config_frame.GoToPanel(1)
+                if self.config_frame.panels[2] != None:
+                    self.config_frame.panels[2].UpdateCtrlBenchmark()

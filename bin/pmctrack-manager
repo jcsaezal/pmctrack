@@ -141,7 +141,12 @@ function do_build(){
 			compatible_modules=(amd)
 		else # ARM
 			if [ $bitw -eq 32 ]; then
-				compatible_modules=(arm)		
+				if [ "$ODROID" == "yes" ]; then
+					compatible_modules=(odroid-xu)		
+				else
+					compatible_modules=(arm odroid-xu)		
+				
+				fi	
 			else
 				compatible_modules=(arm64)	
 			fi
@@ -156,6 +161,8 @@ function do_build(){
 			## Build the .ko name
 			if [ "$module" == "intel-core" ]; then
 				modname="mchw_intel_core.ko"
+			elif [ "$module" == "odroid-xu" ]; then
+				modname="mchw_odroid_xu.ko"
 			else
 				modname="mchw_${module}.ko"
 			fi

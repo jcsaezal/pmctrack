@@ -74,7 +74,11 @@ const char* ipc_sampling_pmcstr_cfg[]= {
 /* Return the capabilities/properties of this monitoring module */
 static void ipc_sampling_module_counter_usage(monitoring_module_counter_usage_t* usage)
 {
+#if defined(CONFIG_PMC_ARM) || defined(CONFIG_PMC_ARM64)
+	usage->hwpmc_mask= (1<<1) | (1<<2);
+#else
 	usage->hwpmc_mask=0x3;
+#endif
 	usage->nr_virtual_counters=1; // SF
 	usage->nr_experiments=1;
 	usage->vcounter_desc[0]="estimated_sf";
@@ -105,13 +109,15 @@ static void init_ipc_metric(metric_experiment_set_t* metric_set)
 /* MM initialization function */
 static int ipc_sampling_enable_module(void)
 {
+	int i=0;
+
 	if (configure_performance_counters_set(ipc_sampling_pmcstr_cfg, ipc_sampling_pmc_configuration, 2)) {
 		printk("Can't configure global performance counters. This is too bad ... ");
 		return -EINVAL;
 	}
-	init_ipc_metric(&ipc_sampling_metric_set[0]);
-	init_ipc_metric(&ipc_sampling_metric_set[1]);
 
+	for (i=0; i<AMP_CORE_TYPES; i++)
+		init_ipc_metric(&ipc_sampling_metric_set[i]);
 
 	/* init configuration parameters */
 	ipc_sampling_sfmodel_config.sfmodel_running_average_factor=35; 	/* Percentage of the previous moving average of
@@ -129,7 +135,7 @@ static int ipc_sampling_enable_module(void)
 static void ipc_sampling_disable_module(void)
 {
 	int i=0;
-	for (i=0; i<2; i++)
+	for (i=0; i<AMP_CORE_TYPES; i++)
 		free_experiment_set(&ipc_sampling_pmc_configuration[i]);
 
 	printk(KERN_ALERT "%s monitoring module unloaded!!\n",IPC_MODEL_STRING);
@@ -146,6 +152,7 @@ static int ipc_sampling_on_read_config(char* str, unsigned int len)
 	dest+=sprintf(dest,"initial_ratio=%d\n",ipc_sampling_sfmodel_config.sfmodel_initial_ratio);
 	dest+=sprintf(dest,"freq_ratio=%d\n",ipc_sampling_sfmodel_config.sfmodel_freq_ratio);
 	dest+=sprintf(dest,"nr_samples_warmup=%d\n",ipc_sampling_sfmodel_config.sfmodel_nr_samples_warmup);
+	
 	return dest-str;
 }
 

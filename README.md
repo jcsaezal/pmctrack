@@ -146,6 +146,9 @@ Now kernel-level and user-level components can be easily built with the `pmctrac
 
 The `pmctrack-manager` retrieves key information from the system and builds the command-line tools as well as the different flavors of the PMCTrack kernel module compatible with the current platform. If the build fails, build errors can be found in the `build.log` file created in the current directory.
 
+For a successful build of PMCTrack kernel module on Odroid XU3/XU4 boards, the build script must be invoked as follows:
+	
+	$ ODROID=yes pmctrack-manager build
 
 
 ## Building PMCTrack from source for the Intel Xeon Phi
@@ -173,6 +176,7 @@ The following table summarizes the properties of the various flavors of the kern
 | intel-core | `src/modules/pmcs/intel-core/mchw_intel_core.ko` | Most Intel multi-core processors are compatible with this module, including recent processors based on the Intel "Broadwell" microarchitecture. | 
 | amd | `src/modules/pmcs/amd/mchw_amd.ko` | This module has been successfully tested on AMD opteron processors. Nevertheless, it should be compatible with all AMD multicore processors. | 
 | arm | `src/modules/pmcs/arm/mchw_arm.ko` | This module has been successfully tested on ARM systems featuring 32-bit big.LITTLE processors, which combine ARM Cortex A7 cores with and ARM Cortex A15 cores. Specifically, tests were performed on the ARM Coretile Express Development Board (TC2). | 
+| odroid-xu | `src/modules/pmcs/odroid-xu/mchw_odroid_xu.ko` | Specific module for Odroid XU3 and XU4 boards. More information on these boards can be found at [www.hardkernel.com](http://www.hardkernel.com) | 
 | arm64 | `src/modules/pmcs/arm64/mchw_arm64.ko` | This module has been successfully tested on ARM systems featuring 64-bit big.LITTLE processors, which combine ARM Cortex A57 cores with and ARM Cortex A53 cores. Specifically, tests were performed on the ARM Juno Development Board. | 
 | xeon-phi | `src/modules/pmcs/xeon-phi/mchw_phi.ko` | Intel Xeon Phi Coprocessor | 
 | core2 | `src/modules/pmcs/phi/mchw_core2.ko` | This module has been specifically designed for the Intel QuickIA prototype system. The Intel QuickIA is a dual-socket asymmetric multicore system that features a quad-core Intel Xeon E5450 processor and a dual-core Intel Atom N330. The module also works with Intel Atom processors as well as "old" Intel multicore processors, such as the Intel Core 2 Duo. Nevertheless, given the numerous existing hacks for the QuickIA in this module, users are advised to use the more general "intel-core" flavor.  | 
@@ -369,11 +373,6 @@ The `pmc3` and `virt0` columns display the number of LLC misses and energy consu
 ### Libpmctrack
 
 Another way of accessing PMCTrack functionality from user space is via _libpmctrack_. This library enables to characterize performance of specific code fragments via PMCs and virtual counters in sequential and multithreaded programs written in C or C++. Libpmctrack's API makes it possible to indicate the desired PMC and virtual-counter configuration to the PMCTrack's kernel module at any point in the application's code or within a runtime system. The programmer may then retrieve the associated event counts for any code snippet (via TBS or EBS) simply by enclosing the code between invocations to the `pmctrack_start_count*()` and `pmctrack_stop_count()` functions. To illustrate the use of libpmctrack, several example programs are provided in the repository under `test/test_libpmctrack`.
-
-<!--
-4. **Self-monitoring mode** (instrumentation with _libpmctrack_)
-	- Retrieve PMC and virtual counter values for specific code fragments
--->
 
 ## PMCTrack monitoring modules
 

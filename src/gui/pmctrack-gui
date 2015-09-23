@@ -1,0 +1,96 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+#
+# pmctrack-gui
+# Main application executable
+#
+##############################################################################
+#
+# Copyright (c) 2015 Jorge Casas <jorcasas@ucm.es>
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
+# MA 02110-1301, USA.
+#
+##############################################################################
+
+import importlib
+import wx
+import gettext
+from backend.user_config import *
+from frontend.machine_config_panel import *
+from frontend.counters_config_panel import *
+from frontend.final_config_panel import *
+
+# Configuration frame that contains the 3 configuration panels (Machine config, Counters and metrics config and final config)
+class ConfigFrame(wx.Frame):
+    def __init__(self, *args, **kwargs):
+        kwds = {"style": wx.DEFAULT_FRAME_STYLE}
+        wx.Frame.__init__(self, *args, **kwds)
+
+        self.version = "1.2.3"
+        self.user_config = UserConfig()
+        self.facade_xml = None
+        self.panels = [None, None, None]
+        self.actual_panel = 0
+        self.sizer_panel = wx.BoxSizer(wx.VERTICAL)
+        
+        self.SetSize((717, 600))
+        self.SetSizer(self.sizer_panel)
+        self.GoToPanel(0)
+
+        self.Bind(wx.EVT_CLOSE, self.on_close)
+
+    def on_close(self, event):
+        if self.panels[1] != None:
+            self.panels[1].DestroyComponents()
+        if self.panels[2] != None:
+            self.panels[2].DestroyComponents()
+        self.Destroy()
+
+    # Public function that allows to show another configuration panel.
+    def GoToPanel(self, nr_panel):
+        if self.panels[nr_panel] == None:
+            if nr_panel == 0:
+                self.panels[0] = MachineConfigPanel(self)
+                self.sizer_panel.Add(self.panels[0].panel, 1, wx.EXPAND, 0)
+            elif nr_panel == 1:
+                self.panels[1] = CountersConfigPanel(self)
+                self.sizer_panel.Add(self.panels[1].panel, 1, wx.EXPAND, 0)
+            elif nr_panel == 2:
+                self.panels[2] = FinalConfigPanel(self)
+                self.sizer_panel.Add(self.panels[2].panel, 1, wx.EXPAND, 0)
+
+        self.sizer_panel.Show(self.panels[self.actual_panel].panel, False, True)
+        self.sizer_panel.Show(self.panels[nr_panel].panel, True, True)
+        self.actual_panel = nr_panel
+
+        if self.actual_panel == 0:
+            self.SetTitle("PMCTrack-GUI v" + self.version + " - " + _("Machine selection"))
+        elif self.actual_panel == 1:
+            self.SetTitle("PMCTrack-GUI v" + self.version + " - " + _("Counters & metrics configuration"))
+        elif self.actual_panel == 2:
+            self.SetTitle("PMCTrack-GUI v" + self.version + " - " + _("Final monitoring configuration"))
+
+        self.Layout()
+
+translate = gettext.translation('pmctrackgui', localedir='locale', fallback=True)
+translate.install()
+
+app = wx.App(redirect=False)
+config_frame = ConfigFrame(None, -1, "")
+app.SetTopWindow(config_frame)
+config_frame.Show()
+app.MainLoop()

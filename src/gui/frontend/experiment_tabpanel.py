@@ -1,8 +1,7 @@
-#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
 #
-# pmc_generate_exp.py
+# experiment_tabpanel.py
 #
 ##############################################################################
 #
@@ -28,10 +27,9 @@
 import wx
 import wx.lib.scrolledpanel as scrolled
 from backend.facade_xml import *
-from backend.user_config import *
-from frames.pmc_dialog_assign_event import *
+from frontend.assign_event_dialog import *
 
-class PMCGenerateExp():
+class ExperimentTabPanel():
     def __init__(self, num_exp, num_fixed_counters, num_general_counters, tab_exps, facade_xml):
 	self.facade_xml = facade_xml
 	self.num_exp = num_exp # Experiment number assigned to this experiment.
@@ -135,7 +133,7 @@ class PMCGenerateExp():
 
         # If Assign event dialog not yet been loaded into memory, we loaded.
 	if(self.info_counters[num_counter][4] == None):
-		self.info_counters[num_counter][4] = PMCDialogAssignEvent(None, -1, "", facade_xml=self.facade_xml)
+		self.info_counters[num_counter][4] = AssignEventDialog(None, -1, "", facade_xml=self.facade_xml)
 		self.info_counters[num_counter][4].SetLabelTitle(_("Assign event to") + " pmc" + str(num_counter))
 
 	if self.info_counters[num_counter][4].ShowModal() == 0: # It's OK.
