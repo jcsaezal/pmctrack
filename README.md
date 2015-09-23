@@ -6,7 +6,7 @@ Despite being an OS-oriented tool, PMCTrack still allows gathering PMC values fr
 
 * Juan Carlos Saez Alcaide (<jcsaezal@ucm.es>) - Creator of PMCTrack and main maintainer. 
 * Jorge Casas Hernan - Maintainer of PMCTrack-GUI
-* Abel Serrano Juste
+* Abel Serrano Juste (aka [@Akronix](https://github.com/Akronix))
 * Javier Setoain
 
 ## Past Contributors
