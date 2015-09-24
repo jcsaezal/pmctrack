@@ -6,7 +6,7 @@ Despite being an OS-oriented tool, PMCTrack still allows gathering PMC values fr
 
 * Juan Carlos Saez Alcaide (<jcsaezal@ucm.es>) - Creator of PMCTrack and main maintainer. 
 * Jorge Casas Hernan - Maintainer of PMCTrack-GUI
-* Abel Serrano Juste
+* Abel Serrano Juste (aka [@Akronix](https://github.com/Akronix))
 * Javier Setoain
 
 ## Past Contributors
@@ -184,7 +184,7 @@ The following table summarizes the properties of the various flavors of the kern
 
 Once the most suitable kernel model for the system has been identified, the module can be loaded in the running PMCTrack-enabled kernel as follows:
 
-	sudo insmod <path_to_the_ko_file>
+	$ sudo insmod <path_to_the_ko_file>
 
 If the command did not return errors, information on the detected Performance Monitoring Units (PMUs) found in the machine can be retrieved by reading from the `/proc/pmc/info` file:
 
@@ -203,9 +203,9 @@ If the command did not return errors, information on the detected Performance Mo
 	nr_virtual_counters=0
 	***************
 
-Alternatively the `pmc-events` helper command can be used to get the same information in a slighlty different format:
+Alternatively the `pmc-events` helper command can be used to get the same information in a slightly different format:
 
-	pmc-events -I
+	$ pmc-events -I
 	[PMU 0]
 	pmu_model=x86_intel-core.haswell-ep
 	nr_fixed_pmcs=3
@@ -378,7 +378,7 @@ Another way of accessing PMCTrack functionality from user space is via _libpmctr
 
 PMCTrack's kernel module can be easily extended with support for extra HW monitoring facilities not implemented in the basic PMCTrack stack. To implement such an extension a new PMCTrack _monitoring module_ must be implemented. Several sample monitoring modules are provided along with the PMCTrack distribution; its source code can be found in the `*_mm.c` files found in `src/modules/pmcs`.
 
-From the programmer's standpoint, creating a monitoring module entails implementing the `monitoring_module_t` interface (`<pmc/monitoring_mode.h>`) in a separate .c file of the PMCTrack kernel module sources. The `monitoring_module_t` interface consists of several callback functions enabling to notify the module on activations/deactivations requested by the system administrator, on threads' context switches, every time a thread enters/exits the system, etc. The programmer typically implements only the subset of callbacks required to carry out the necessary internal processing. Notably, any kind of monitoring information accessed by the monitoring module can be exposed to PMCTrack userland tools as a _virtual counter_.
+From the programmer's standpoint, creating a monitoring module entails implementing the `monitoring_module_t` interface (`<pmc/monitoring_mod.h>`) in a separate .c file of the PMCTrack kernel module sources. The `monitoring_module_t` interface consists of several callback functions enabling to notify the module on activations/deactivations requested by the system administrator, on threads' context switches, every time a thread enters/exits the system, etc. The programmer typically implements only the subset of callbacks required to carry out the necessary internal processing. Notably, any kind of monitoring information accessed by the monitoring module can be exposed to PMCTrack userland tools as a _virtual counter_.
 
 PMCTrack's kernel module also enables monitoring modules to take full control of performance monitoring counters to perform any kind of internal task. To make this possible, the monitoring module's developer does not have to deal with performance-counter registers directly. Instead, the programmer indicates the desired counter configuration (encoded in a string) using an API function. Whenever new PMC samples are collected for a thread, a callback function of the monitoring module gets invoked, passing the samples as a parameter. Thanks to this feature, a monitoring module will only access low-level registers to provide the scheduler or the end user with other hardware monitoring information not modeled as PMC events, such as temperature or energy consumption.
 
