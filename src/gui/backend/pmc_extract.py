@@ -88,12 +88,12 @@ class PMCExtract(object):
                         out_header += self.__get_command().encode('utf-8') + "\n\n"
 			
                         if self.user_config.save_counters_log:
-                            self.out_counters = open(self.user_config.path_outfile_logs + "/pmctrack_{0}_{1}_counters.log".format(machine, time.strftime("%d.%m.%y-%H.%M.%S")), "w")	
+                            self.out_counters = open(self.user_config.path_outfile_logs + "/pmctrack-gui_{0}_{1}_counters.log".format(machine, time.strftime("%d.%m.%y-%H.%M.%S")), "w")	
                             self.out_counters.write(out_header)
 			    self.out_counters.write(line_head)
 			
                         if self.user_config.save_metrics_log:
-			    self.out_metrics = open(self.user_config.path_outfile_logs + "/pmctrack_{0}_{1}_metrics.log".format(machine, time.strftime("%d.%m.%y-%H.%M.%S")), "w")
+			    self.out_metrics = open(self.user_config.path_outfile_logs + "/pmctrack-gui_{0}_{1}_metrics.log".format(machine, time.strftime("%d.%m.%y-%H.%M.%S")), "w")
                             self.out_metrics.write(out_header)
                             metrics_header = "nsample" + " " + self.pack.rjust(6) + " "
 			    for num_exp in range(len(self.user_config.experiments)):

@@ -50,7 +50,7 @@ class CountersConfigPanel():
 	
 	if self.num_vc > 0:
             for vcounter in range(self.num_vc):    
-		self.v_counter_checkboxs.append(wx.CheckBox(self, -1, "virt" + str(vcounter)))
+		self.v_counter_checkboxs.append(wx.CheckBox(self.panel, -1, "virt" + str(vcounter)))
         else:
             self.button_v_counters.Hide()
 
@@ -85,7 +85,7 @@ class CountersConfigPanel():
 	v_counters_descriptions = self.config_frame.facade_xml.getVirtCountersDesc()
 	for i in range(self.num_vc):
 		table_v_counters.Add(self.v_counter_checkboxs[i], 0, wx.RIGHT | wx.ALIGN_CENTER_VERTICAL, 20)
-		table_v_counters.Add(wx.StaticText(self, -1, v_counters_descriptions[i]), 0, wx.ALIGN_CENTER_VERTICAL, 0)
+		table_v_counters.Add(wx.StaticText(self.panel, -1, v_counters_descriptions[i]), 0, wx.ALIGN_CENTER_VERTICAL, 0)
 	table_v_counters.AddGrowableCol(0)
 	table_v_counters.AddGrowableCol(1)
         self.sizer_v_counters.Add(table_v_counters, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 5)
@@ -142,7 +142,7 @@ class CountersConfigPanel():
 	else:
 		self.button_v_counters.SetLabel(_("Show virtual counters"))
 	self.separator.Show(self.sizer_v_counters, self.show_v_counters, True)
-        self.Layout()
+        self.panel.Layout()
 	
     def on_click_add_exp(self, event):
 	self.__build_experiment()

@@ -198,3 +198,4 @@ class MachineConfigPanel():
                 self.config_frame.GoToPanel(1)
                 if self.config_frame.panels[2] != None:
                     self.config_frame.panels[2].UpdateCtrlBenchmark()
+                    self.config_frame.panels[2].UpdateComboCPU()

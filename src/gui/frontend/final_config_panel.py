@@ -224,6 +224,14 @@ class FinalConfigPanel():
 		self.text_benchmark.Hide()
 	self.grid_sizer_benchmark.Layout()
 
+    def UpdateComboCPU(self):
+	(vendor, flags, cores) = self.config_frame.facade_xml.getMachineInfo()
+        self.combo_cpu.Clear()
+        self.combo_cpu.Append(_("No binding"))
+	for i in range(cores):
+		self.combo_cpu.Append(str(i))
+        self.combo_cpu.SetSelection(0)
+
     def StartMonitoring(self):
 	self.__save_user_config()
 	cp_usr_conf = self.config_frame.user_config.GetCopy()

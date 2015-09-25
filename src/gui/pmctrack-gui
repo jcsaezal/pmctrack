@@ -40,7 +40,7 @@ class ConfigFrame(wx.Frame):
         kwds = {"style": wx.DEFAULT_FRAME_STYLE}
         wx.Frame.__init__(self, *args, **kwds)
 
-        self.version = "1.2.3"
+        self.version = "1.2.4"
         self.user_config = UserConfig()
         self.facade_xml = None
         self.panels = [None, None, None]
