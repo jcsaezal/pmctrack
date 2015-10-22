@@ -44,13 +44,13 @@ class MonitoringFrame(wx.Frame):
 	kwds = {"style": wx.DEFAULT_FRAME_STYLE}
         wx.Frame.__init__(self, *args, **kwds)
 
+	self.app_name = kwargs.get("app_name")
 	self.version = kwargs.get("version")
         self.final_panel = kwargs.get("final_panel")
 	self.user_config = kwargs.get("user_config")
 	self.pack = kwargs.get("pack", "")
 	self.num_exp = kwargs.get("num_exp", 0)
 	self.num_metric = kwargs.get("num_metric", 0)
-	self.name_benchmark = self.user_config.path_benchmark.split("/")[-1].split()[0]
 
         # Indicates whether the graph is shown fully or only partly present.
         self.show_complete = False
@@ -83,7 +83,7 @@ class MonitoringFrame(wx.Frame):
 		metrics.append(metric.name)
         self.combo_metric = wx.ComboBox(self, wx.ID_ANY, choices=metrics, style=wx.CB_DROPDOWN | wx.CB_READONLY)
 
-        self.combo_pack = wx.ComboBox(self, wx.ID_ANY, choices=sorted(self.final_panel.pmc_extract.data.keys()), style=wx.CB_DROPDOWN | wx.CB_READONLY)
+        self.combo_pack = wx.ComboBox(self, wx.ID_ANY, choices=sorted(self.final_panel.pmc_extract.data[self.app_name].keys()), style=wx.CB_DROPDOWN | wx.CB_READONLY)
 	self.label_pack = wx.StaticText(self, -1, self.name_pack + ": ")
         self.label_exp = wx.StaticText(self, -1, _("Experiment") + ": ")
         self.label_metric = wx.StaticText(self, -1, _("Metric") + ": ")
@@ -121,15 +121,24 @@ class MonitoringFrame(wx.Frame):
         self.fig.canvas.mpl_connect('button_press_event', self.on_click_graph)
 
     def __set_properties(self):
-        self.SetTitle("PMCTrack-GUI v" + self.version + " - " + _("Monitoring application '{0}'").format(self.name_benchmark))
+        self.SetTitle("PMCTrack-GUI v" + self.version + " - " + _("Monitoring application '{0}'").format(self.app_name.split()[0]))
         self.SetSize((750, 640))
-	if self.pack != "":
+        if self.combo_pack.GetCount() > 0:
+	    if self.pack != "":
 		self.combo_pack.SetStringSelection(self.pack)
-	        metric = self.user_config.experiments[self.num_exp].metrics[self.num_metric].name.encode("utf-8")
-		self.sizer_graph_staticbox.SetLabel(_("Showing graph with {0} {1}, experiment {2} and metric '{3}'").format(self.name_pack, self.pack, (self.num_exp + 1), metric))
-	else:
+            else:
+                self.combo_pack.SetSelection(0)
+                self.pack = self.combo_pack.GetStringSelection()
+	    metric = self.user_config.experiments[self.num_exp].metrics[self.num_metric].name.encode("utf-8")
+	    self.sizer_graph_staticbox.SetLabel(_("Showing graph with {0} {1}, experiment {2} and metric '{3}'").format(self.name_pack, self.pack, (self.num_exp + 1), metric))
+        else:
+	    	self.SetTitle(self.GetTitle() + " " + _("(waiting)"))
 		self.button_this_window.Disable()
 		self.button_other_window.Disable()
+                self.button_change_vis_graph.Disable()
+                self.button_screenshot.Disable()
+                self.button_hide_controls.Disable()
+                self.button_stop_monitoring.Disable()
         
 	self.combo_exp.SetSelection(self.num_exp)
 	self.combo_metric.SetSelection(self.num_metric)
@@ -200,7 +209,7 @@ class MonitoringFrame(wx.Frame):
         self.canvas = FigCanvas(self, -1, self.fig) 
 
     def __draw_plot(self):
-	graph_data = self.final_panel.pmc_extract.data[self.pack][self.num_exp][self.num_metric]
+	graph_data = self.final_panel.pmc_extract.data[self.app_name][self.pack][self.num_exp][self.num_metric]
 	
 	# Updates the minimum and maximum value of the graph that is displayed (only if it's worth)
 	if len(graph_data[self.samples_draw[self.num_exp].get(self.pack, 0):]) > 0:
@@ -238,42 +247,53 @@ class MonitoringFrame(wx.Frame):
 	self.separator.Layout()
 	
     def on_timer_update_data(self, event):
-	packs_count = self.combo_pack.GetCount()
-	# If a new pack (pid or cpu) is detected update the corresponding graphical controls.
-	if len(self.final_panel.pmc_extract.data) > packs_count:
-		self.combo_pack.SetItems(sorted(self.final_panel.pmc_extract.data))
-		if packs_count > 0:
-			self.combo_pack.SetStringSelection(self.pack)
-		else: # If the first pack (pid or cpu) is detected as what we are currently monitoring pack.
-			self.combo_pack.SetSelection(0)
-			self.pack = self.combo_pack.GetStringSelection()
-	        	metric = self.user_config.experiments[self.num_exp].metrics[self.num_metric].name.encode("utf-8")
-		        self.sizer_graph_staticbox.SetLabel(_("Showing graph with {0} {1}, experiment {2} and metric '{3}'").format(self.name_pack, self.pack, (self.num_exp + 1), metric))
-			self.button_this_window.Enable()
-			self.button_other_window.Enable()
+        if self.final_panel.pmc_extract.error != None and len(self.user_config.applications) == 1:
+            error_msg = _("PMCTrack error") + ":\n" + self.final_panel.pmc_extract.error
+            dlg = wx.MessageDialog(parent=None, message=error_msg, caption=_("Error"), style=wx.OK | wx.ICON_ERROR)
+            if dlg.ShowModal() == wx.ID_OK:
+                self.final_panel.StopMonitoring(False)
+        else:
+	    packs_count = self.combo_pack.GetCount()
+	    # If a new pack (pid or cpu) is detected update the corresponding graphical controls.
+	    if len(self.final_panel.pmc_extract.data[self.app_name]) > packs_count:
+	    	self.combo_pack.SetItems(sorted(self.final_panel.pmc_extract.data[self.app_name]))
+	    	if packs_count > 0:
+	    		self.combo_pack.SetStringSelection(self.pack)
+	    	else: # If the first pack (pid or cpu) is detected as what we are currently monitoring pack.
+	    		self.combo_pack.SetSelection(0)
+	    		self.pack = self.combo_pack.GetStringSelection()
+	            	metric = self.user_config.experiments[self.num_exp].metrics[self.num_metric].name.encode("utf-8")
+                        self.SetTitle("PMCTrack-GUI v" + self.version + " - " + _("Monitoring application '{0}'").format(self.app_name.split()[0]))
+	    	        self.sizer_graph_staticbox.SetLabel(_("Showing graph with {0} {1}, experiment {2} and metric '{3}'").format(self.name_pack, self.pack, (self.num_exp + 1), metric))
+	    		self.button_this_window.Enable()
+	    		self.button_other_window.Enable()
+                        self.button_change_vis_graph.Enable()
+                        self.button_screenshot.Enable()
+                        self.button_hide_controls.Enable()
+                        self.button_stop_monitoring.Enable()
 
-	if self.pack != "":
-		num_graph_data = len(self.final_panel.pmc_extract.data[self.pack][self.num_exp][self.num_metric])
-		
-		# Only if there are outstanding paint painting to the pack (pid or cpu) being displayed data.
-		if num_graph_data > self.samples_draw[self.num_exp].get(self.pack, 0):
-        		self.__draw_plot()
-			self.samples_draw[self.num_exp][self.pack] = num_graph_data
+	    if self.pack != "":
+	    	num_graph_data = len(self.final_panel.pmc_extract.data[self.app_name][self.pack][self.num_exp][self.num_metric])
+	    	
+	    	# Only if there are outstanding paint painting to the pack (pid or cpu) being displayed data.
+	    	if num_graph_data > self.samples_draw[self.num_exp].get(self.pack, 0):
+            		self.__draw_plot()
+	    		self.samples_draw[self.num_exp][self.pack] = num_graph_data
 
-		if self.final_panel.pmc_extract.state == 'F':
-			self.timer_update_data.Stop()
-			self.SetTitle(self.GetTitle() + " " + _("(finished)"))
-			self.button_stop_monitoring.Disable()
-			if len(self.final_panel.mon_frames) > 0 and self.final_panel.mon_frames[0] == self:
-				self.final_panel.button_monitoring.SetLabel(_("Close monitoring windows"))
-				dlg = wx.MessageDialog(parent=None, message=_("The application '{0}' is done.").format(self.name_benchmark), 
-					caption=_("Information"), style=wx.OK|wx.ICON_INFORMATION)
-        			dlg.ShowModal()
-       				dlg.Destroy()
-		elif self.final_panel.pmc_extract.state == 'S':
-			self.timer_update_data.Stop()
-			self.SetTitle(self.GetTitle() + " " + _("(stopped)"))
-        	    	self.button_stop_monitoring.SetLabel(_("Resume application"))
+	    	if self.final_panel.pmc_extract.state[self.app_name] == 'F':
+	    		self.timer_update_data.Stop()
+	    		self.SetTitle(self.GetTitle() + " " + _("(finished)"))
+	    		self.button_stop_monitoring.Disable()
+	    		if len(self.final_panel.mon_frames) > 0 and len(self.user_config.applications) == 1 and self.final_panel.mon_frames[0] == self:
+	    			self.final_panel.button_monitoring.SetLabel(_("Close monitoring windows"))
+	    			dlg = wx.MessageDialog(parent=None, message=_("The application '{0}' is done.").format(self.app_name.split()[0]), 
+	    				caption=_("Information"), style=wx.OK|wx.ICON_INFORMATION)
+            			dlg.ShowModal()
+       	    			dlg.Destroy()
+	    	elif self.final_panel.pmc_extract.state[self.app_name] == 'S':
+	    		self.timer_update_data.Stop()
+	    		self.SetTitle(self.GetTitle() + " " + _("(stopped)"))
+            	    	self.button_stop_monitoring.SetLabel(_("Resume application"))
 
     def on_click_this_window(self, event):
 	self.pack = self.combo_pack.GetStringSelection()
@@ -282,7 +302,7 @@ class MonitoringFrame(wx.Frame):
 	metric = self.user_config.experiments[self.num_exp].metrics[self.num_metric].name.encode('utf-8')
 	self.sizer_graph_staticbox.SetLabel(_("Showing graph with {0} {1}, experiment {2} and metric '{3}'").format(self.name_pack, self.pack, (self.num_exp + 1), metric))
 	self.axes.set_ylabel(metric.decode('utf-8'))
-	graph_data = self.final_panel.pmc_extract.data[self.pack][self.num_exp][self.num_metric]
+	graph_data = self.final_panel.pmc_extract.data[self.app_name][self.pack][self.num_exp][self.num_metric]
 	if self.samples_draw[self.num_exp].get(self.pack, 0) > 0:
 		self.minval = min(graph_data[0:self.samples_draw[self.num_exp][self.pack]])
 		self.maxval = max(graph_data[0:self.samples_draw[self.num_exp][self.pack]])
@@ -295,7 +315,7 @@ class MonitoringFrame(wx.Frame):
 	sel_pack = self.combo_pack.GetStringSelection()
 	sel_exp = self.combo_exp.GetSelection()
 	sel_met = self.combo_metric.GetSelection()
-	mon_frame = MonitoringFrame(None, -1, "", version=self.version, final_panel=self.final_panel, user_config=self.user_config, pack=sel_pack, num_exp=sel_exp, num_metric=sel_met)
+	mon_frame = MonitoringFrame(None, -1, "", app_name=self.app_name, version=self.version, final_panel=self.final_panel, user_config=self.user_config, pack=sel_pack, num_exp=sel_exp, num_metric=sel_met)
     	mon_frame.Show()
 
     def on_change_experiment(self, event):
@@ -308,7 +328,7 @@ class MonitoringFrame(wx.Frame):
     def on_click_graph(self, event):
         if self.fig.canvas.HasCapture():
             self.fig.canvas.ReleaseMouse()
-        if self.graph_style_dialog.ShowModal() == 0:
+        if self.final_panel.pmc_extract.state[self.app_name] != "W" and self.graph_style_dialog.ShowModal() == 0:
             self.axes.set_axis_bgcolor(self.graph_style_dialog.GetBgColor())
        	    self.axes.grid(True, color=self.graph_style_dialog.GetGridColor())
 	    self.plot_data.set_linewidth(self.graph_style_dialog.GetLineWidth())
@@ -325,14 +345,15 @@ class MonitoringFrame(wx.Frame):
 	self.__draw_plot()
 
     def on_click_stop_monitoring(self, event):
-	if self.final_panel.pmc_extract.state == 'R':
+	if self.final_panel.pmc_extract.state[self.app_name] == 'R':
 		self.final_panel.pmc_extract.StopMonitoring()
-	elif self.final_panel.pmc_extract.state == 'S':
+	elif self.final_panel.pmc_extract.state[self.app_name] == 'S':
 		self.final_panel.pmc_extract.ResumeMonitoring()
 		for mon_frame in self.final_panel.mon_frames:
+                    if mon_frame.app_name == self.app_name:
         		mon_frame.timer_update_data.Start(100)
             		mon_frame.button_stop_monitoring.SetLabel(_("Stop application"))
-        		mon_frame.SetTitle("PMCTrack-GUI v" + self.version + " - " + _("Monitoring application '{0}'").format(self.name_benchmark))
+        		mon_frame.SetTitle("PMCTrack-GUI v" + self.version + " - " + _("Monitoring application '{0}'").format(self.app_name.split()[0]))
 
     def on_click_screenshot(self, event):
 	metric = self.user_config.experiments[self.num_exp].metrics[self.num_metric].name
@@ -342,7 +363,7 @@ class MonitoringFrame(wx.Frame):
             self, 
             message=_("Save graph screenshot as..."),
             defaultDir=os.getcwd(),
-            defaultFile="{0}-{1}-{2}.png".format(self.pack, self.num_exp, metric.replace(" ", "_")),
+            defaultFile="{0}-{1}-{2}-{3}.png".format(self.app_name.split()[0], self.pack, self.num_exp, metric.replace(" ", "_")),
             wildcard=file_choices,
             style=wx.SAVE)
         
@@ -357,7 +378,7 @@ class MonitoringFrame(wx.Frame):
 	self.__change_vis_controls(True)
 
     def on_close_frame(self, event):
-	if len(self.final_panel.mon_frames) > 1:
+	if len(self.final_panel.mon_frames) > 1 or len(self.user_config.applications) > 1:
 		self.final_panel.mon_frames.remove(self)
                 self.graph_style_dialog.Destroy()
 		self.Destroy()

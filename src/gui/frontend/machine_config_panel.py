@@ -194,8 +194,9 @@ class MachineConfigPanel():
 	    self.__save_user_config()
 	    pmc_connect = PMCConnect(self.config_frame.user_config.machine)
 	    if self.__validate(pmc_connect):
+                self.config_frame.pmc_connect = pmc_connect
                 self.config_frame.facade_xml = FacadeXML(pmc_connect)
                 self.config_frame.GoToPanel(1)
                 if self.config_frame.panels[2] != None:
-                    self.config_frame.panels[2].UpdateCtrlBenchmark()
+                    self.config_frame.panels[2].UpdateCtrlPathSingleApp()
                     self.config_frame.panels[2].UpdateComboCPU()

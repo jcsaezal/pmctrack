@@ -100,8 +100,7 @@ class UserConfig(object):
 		self.experiments = [] # List of experiments
                 self.virtual_counters = [] # List of selected virtual counters
 		self.machine = None # Information about monitoring machine
-		self.path_benchmark = None
-		self.args_benchmark = None
+		self.applications = []
 		self.cpu = None # CPU number where to run benchmark, or CPU mask
 		self.time = 0 # Time between samples (in miliseconds)
                 self.buffer_size = 0 # Samples buffer size (in bytes)
@@ -132,8 +131,8 @@ class UserConfig(object):
                 for vcounter in self.virtual_counters:
                     copy.virtual_counters.append(vcounter)
 
-		copy.path_benchmark = self.path_benchmark
-		copy.args_benchmark = self.args_benchmark
+                for application in self.applications:
+                    copy.applications.append(application)
 		copy.cpu = self.cpu
 		copy.time = self.time
 		copy.buffer_size = self.buffer_size

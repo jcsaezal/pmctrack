@@ -32,22 +32,25 @@ class PMCConnect(object):
 	def __init__(self, info_machine):
 		self.info_machine = info_machine
 		if info_machine.is_remote:
-			self.ssh_str = info_machine.GetSSHCommand()
+			self.ssh_array = info_machine.GetSSHCommand().split()
 
 	def CheckFileExists(self, file):
+            if file != "" and file != "\n" and file.find("#") == -1:
 		if self.info_machine.is_remote:
-			command = self.ssh_str.split()
-			command.append("cat " + file)
-			pipe = Popen(command, stdout=PIPE, stderr=PIPE)
-			stdout, stderr = pipe.communicate()
-			ok = (stderr == "")
+                    command = self.ssh_array[:]
+		    command.append("ls " + file)
+		    pipe = Popen(command, stdout=PIPE, stderr=PIPE)
+		    stdout, stderr = pipe.communicate()
+		    ok = (stderr == "")
 		else:
-			ok = os.path.exists(file)
-		return ok
+		    ok = os.path.exists(file)
+            else:
+                ok = False
+	    return ok
 
 	def CheckPkgInstalled(self, pkg, remote):
 		command = None
-		if remote: command = self.ssh_str.split()
+                if remote: command = self.ssh_array[:]
 		else: command = []
 		command.append(pkg)
 		try:
@@ -59,9 +62,9 @@ class PMCConnect(object):
 		return installed
 			
 	def CheckConnectivity(self):
-		ssh_array = self.ssh_str.split()
-		ssh_array.append("whoami")
-		pipe = Popen(ssh_array, stdout=PIPE, stderr=PIPE)
+                command = self.ssh_array[:]
+		command.append("whoami")
+		pipe = Popen(command, stdout=PIPE, stderr=PIPE)
 		stdout, stderr = pipe.communicate()
 		msg_error = ""
 		if (stdout.find(self.info_machine.remote_user) != 0):
@@ -79,12 +82,12 @@ class PMCConnect(object):
 
 	def ReadFile(self, file):
 		if self.info_machine.is_remote:
-			ssh_array = self.ssh_str.split()
-			ssh_array.append("cat " + file)
-			pipe = Popen(ssh_array, stdout=PIPE, stderr=PIPE)
-			result = pipe.stdout.read()
+                    command = self.ssh_array[:]
+		    command.append("cat " + file)
+		    pipe = Popen(command, stdout=PIPE, stderr=PIPE)
+		    result = pipe.stdout.read()
 		else:
-			descrip = open(file, 'rU')
-			result = descrip.read()
-			descrip.close()
+		    descrip = open(file, 'rU')
+		    result = descrip.read()
+		    descrip.close()
 		return result

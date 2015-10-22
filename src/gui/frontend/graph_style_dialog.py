@@ -79,6 +79,7 @@ class GraphStyleDialog(wx.Dialog):
         self.__do_layout()
 
 	self.Bind(wx.EVT_LISTBOX, self.on_select_mode, self.list_modes)
+	self.Bind(wx.EVT_LISTBOX_DCLICK, self.on_dclick_list_modes, self.list_modes)
 	self.Bind(wx.EVT_COLOURPICKER_CHANGED, self.on_change_bg_color, self.button_bg_color)
 	self.Bind(wx.EVT_COLOURPICKER_CHANGED, self.on_change_grid_color, self.button_grid_color)
 	self.Bind(wx.EVT_COLOURPICKER_CHANGED, self.on_change_line_color, self.button_line_color)
@@ -164,6 +165,11 @@ class GraphStyleDialog(wx.Dialog):
 	self.plot_data.set_linewidth(line_width)
 
 	self.canvas.draw()
+
+    def on_dclick_list_modes(self, event):
+	style_conf = self.list_modes.GetClientData(self.list_modes.GetSelection())
+	self.__set_colors(style_conf.bg_color, style_conf.grid_color, style_conf.line_color, style_conf.line_style, style_conf.line_width)
+        self.EndModal(0)
 
     def on_select_mode(self, event):
         if self.first_time and self.is_customized:

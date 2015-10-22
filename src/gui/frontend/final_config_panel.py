@@ -28,6 +28,7 @@ import wx
 from backend.facade_xml import *
 from backend.user_config import *
 from backend.pmc_extract import *
+from frontend.multiapp_control_frame import *
 from frontend.monitoring_frame import *
 from frontend.graph_style_dialog import GraphStyleDialog
 
@@ -35,35 +36,44 @@ class FinalConfigPanel():
     def __init__(self, config_frame):
         self.config_frame = config_frame
 	self.panel = wx.Panel(self.config_frame, -1)
-
-	# List of monitoring frames actually in memory.
+        
+        # List of monitoring frames actually in memory.
 	self.mon_frames = []
-	# Stores the object manager to extract all the information pmctrack command.
+	# Stores the object manager to extract all information of the pmctrack commands.
 	self.pmc_extract = None
-
-        self.label_benchmark = wx.StaticText(self.panel, -1, _("Path to application") + ": ")
-	self.browse_benchmark = wx.FilePickerCtrl(self.panel, -1,"", _("Select application to monitor"))
-        self.text_benchmark = wx.TextCtrl(self.panel, -1, "")
-
-	if self.config_frame.user_config.machine.is_remote:
-		self.ctrl_benchmark = self.text_benchmark
-		self.browse_benchmark.Hide()
-	else:
-		self.ctrl_benchmark = self.browse_benchmark
-		self.text_benchmark.Hide()
-	
-        self.label_args_benchmark = wx.StaticText(self.panel, -1, _("Application's arguments") + ": ")
-	self.text_args_benchmark = wx.TextCtrl(self.panel, -1, "")
-	self.label_cpu = wx.StaticText(self.panel, -1, _("Select CPU to bind or type mask") + ": ")
-
-	cpu_choices = [_("No binding")]
+        
+        self.tab_appmode = wx.Notebook(self.panel, -1, style=0)
+        self.singleapp_panel = wx.Panel(self.tab_appmode, -1)
+	self.multiapp_panel = wx.Panel(self.tab_appmode, -1)
+        
+        cpu_choices = [_("No binding")]
 	(vendor, flags, cores) = self.config_frame.facade_xml.getMachineInfo()
 	for i in range(cores):
 		cpu_choices.append(str(i))
 
-        self.combo_cpu = wx.ComboBox(self.panel, -1, choices=cpu_choices, style=wx.CB_DROPDOWN)
-        self.sizer_benchmark_staticbox = wx.StaticBox(self.panel, -1, _("Select application to monitor"))
-        self.grid_sizer_benchmark = wx.FlexGridSizer(3, 2, 5, 0)
+        self.label_path_singleapp = wx.StaticText(self.singleapp_panel, -1, _("Path to application to monitor") + ": ")
+	self.browse_path_singleapp = wx.FilePickerCtrl(self.singleapp_panel, -1,"", _("Select application"))
+        self.text_path_singleapp = wx.TextCtrl(self.singleapp_panel, -1, "")
+
+	if self.config_frame.user_config.machine.is_remote:
+		self.ctrl_path_singleapp = self.text_path_singleapp
+		self.browse_path_singleapp.Hide()
+	else:
+		self.ctrl_path_singleapp = self.browse_path_singleapp
+		self.text_path_singleapp.Hide()
+	
+        self.label_args_singleapp = wx.StaticText(self.singleapp_panel, -1, _("Application's arguments") + ": ")
+	self.text_args_singleapp = wx.TextCtrl(self.singleapp_panel, -1, "")
+	self.label_cpu_singleapp = wx.StaticText(self.singleapp_panel, -1, _("Select CPU to bind or type mask") + ": ")
+	self.combo_cpu_singleapp = wx.ComboBox(self.singleapp_panel, -1, choices=cpu_choices, style=wx.CB_DROPDOWN)
+        self.grid_sizer_singleapp = wx.FlexGridSizer(3, 2, 5, 0)
+
+        self.label_multiapp_file = wx.StaticText(self.multiapp_panel, -1, _("Select multi-application file") + ": ")
+	self.browse_multiapp_file = wx.FilePickerCtrl(self.multiapp_panel, -1,"", _("Select multi-application file"))
+	self.label_cpu_multiapp = wx.StaticText(self.multiapp_panel, -1, _("Select CPU to bind or type mask") + ": ")
+        self.combo_cpu_multiapp = wx.ComboBox(self.multiapp_panel, -1, choices=cpu_choices, style=wx.CB_DROPDOWN)
+        self.grid_sizer_multiapp = wx.FlexGridSizer(3, 2, 5, 0)
+
         self.label_time_samples = wx.StaticText(self.panel, -1, _("Time between samples (in milliseconds)") + ": ")
         self.spin_ctrl_time_samples = wx.SpinCtrl(self.panel, -1, "1000", min=100, max=5000)
         self.label_buffer_size = wx.StaticText(self.panel, -1, _("Samples buffer size (in bytes, 0 for unspecified)") + ": ")
@@ -82,6 +92,7 @@ class FinalConfigPanel():
         self.label_graph_style = wx.StaticText(self.panel, -1, _("Graph style mode") + ": ")
         self.button_graph_style = wx.Button(self.panel, -1, _("Default"))
         self.sizer_graph_style_staticbox = wx.StaticBox(self.panel, -1, _("Select graph style mode or customize one"))
+        self.multiapp_frame = None
 
 	self.graph_style_dialog = GraphStyleDialog(None, -1, "")
         self.button_prev = wx.Button(self.panel, -1, "< " + _("Back"))
@@ -90,7 +101,8 @@ class FinalConfigPanel():
         self.__set_properties()
         self.__do_layout()
 
-	self.ctrl_benchmark.Bind(wx.EVT_FILEPICKER_CHANGED, self.on_change_benchmark)
+	self.ctrl_path_singleapp.Bind(wx.EVT_FILEPICKER_CHANGED, self.on_change_path_singleapp)
+	self.browse_multiapp_file.Bind(wx.EVT_FILEPICKER_CHANGED, self.on_change_multiapp_file)
 	self.checkbox_save_counters.Bind(wx.EVT_CHECKBOX, self.on_change_log_checkboxs)
 	self.checkbox_save_metrics.Bind(wx.EVT_CHECKBOX, self.on_change_log_checkboxs)
 	self.button_graph_style.Bind(wx.EVT_BUTTON, self.on_click_graph_style)
@@ -98,7 +110,11 @@ class FinalConfigPanel():
 	self.button_monitoring.Bind(wx.EVT_BUTTON, self.on_click_monitoring)
 
     def __set_properties(self):
-        self.combo_cpu.SetSelection(0)
+        self.tab_appmode.AddPage(self.singleapp_panel, _("Single-app mode"))
+        self.tab_appmode.AddPage(self.multiapp_panel, _("Multi-app mode"))
+        self.tab_appmode.SetSelection(0)
+        self.combo_cpu_singleapp.SetSelection(0)
+        self.combo_cpu_multiapp.SetSelection(0)
         self.radio_btn_per_thread.SetValue(1)
         self.path_save.Enable(False)
 	self.path_save.SetPath("/tmp")
@@ -125,17 +141,25 @@ class FinalConfigPanel():
 	self.sizer_graph_style_staticbox.Lower()
         sizer_graph_style = wx.StaticBoxSizer(self.sizer_graph_style_staticbox, wx.VERTICAL)
         grid_sizer_graph_style = wx.FlexGridSizer(1, 2, 0, 0)
-        self.sizer_benchmark_staticbox.Lower()
-        sizer_benchmark = wx.StaticBoxSizer(self.sizer_benchmark_staticbox, wx.VERTICAL)
-        self.grid_sizer_benchmark.Add(self.label_benchmark, 0, wx.ALIGN_CENTER_VERTICAL, 0)
-        self.grid_sizer_benchmark.Add(self.ctrl_benchmark, 0, wx.EXPAND, 0)
-        self.grid_sizer_benchmark.Add(self.label_args_benchmark, 0, wx.ALIGN_CENTER_VERTICAL, 0)
-        self.grid_sizer_benchmark.Add(self.text_args_benchmark, 0, wx.EXPAND, 0)
-        self.grid_sizer_benchmark.Add(self.label_cpu, 0, wx.ALIGN_CENTER_VERTICAL, 0)
-        self.grid_sizer_benchmark.Add(self.combo_cpu, 0, wx.EXPAND, 0)
-        self.grid_sizer_benchmark.AddGrowableCol(1)
-        sizer_benchmark.Add(self.grid_sizer_benchmark, 1, wx.ALL | wx.EXPAND, 5)
-        separator.Add(sizer_benchmark, 6, wx.ALL | wx.EXPAND, 5)
+        sizer_singleapp = wx.BoxSizer(wx.VERTICAL)
+        self.grid_sizer_singleapp.Add(self.label_path_singleapp, 0, wx.ALIGN_CENTER_VERTICAL, 0)
+        self.grid_sizer_singleapp.Add(self.ctrl_path_singleapp, 0, wx.EXPAND, 0)
+        self.grid_sizer_singleapp.Add(self.label_args_singleapp, 0, wx.ALIGN_CENTER_VERTICAL, 0)
+        self.grid_sizer_singleapp.Add(self.text_args_singleapp, 0, wx.EXPAND, 0)
+        self.grid_sizer_singleapp.Add(self.label_cpu_singleapp, 0, wx.ALIGN_CENTER_VERTICAL, 0)
+        self.grid_sizer_singleapp.Add(self.combo_cpu_singleapp, 0, wx.EXPAND, 0)
+        self.grid_sizer_singleapp.AddGrowableCol(1)
+        sizer_singleapp.Add(self.grid_sizer_singleapp, 1, wx.ALL | wx.EXPAND, 5)
+        self.singleapp_panel.SetSizer(sizer_singleapp)
+        sizer_multiapp = wx.BoxSizer(wx.VERTICAL)
+        self.grid_sizer_multiapp.Add(self.label_multiapp_file, 0, wx.ALIGN_CENTER_VERTICAL, 0)
+        self.grid_sizer_multiapp.Add(self.browse_multiapp_file, 0, wx.EXPAND, 0)
+        self.grid_sizer_multiapp.Add(self.label_cpu_multiapp, 0, wx.ALIGN_CENTER_VERTICAL, 0)
+        self.grid_sizer_multiapp.Add(self.combo_cpu_multiapp, 0, wx.EXPAND, 0)
+        self.grid_sizer_multiapp.AddGrowableCol(1)
+        sizer_multiapp.Add(self.grid_sizer_multiapp, 1, wx.ALL | wx.EXPAND, 5)
+        self.multiapp_panel.SetSizer(sizer_multiapp)
+        separator.Add(self.tab_appmode, 6, wx.ALL | wx.EXPAND, 5)
         grid_sizer_samples.Add(self.label_time_samples, 0, wx.ALIGN_CENTER_VERTICAL, 0)
         grid_sizer_samples.Add(self.spin_ctrl_time_samples, 0, wx.EXPAND, 0)
         grid_sizer_samples.Add(self.label_buffer_size, 0, wx.ALIGN_CENTER_VERTICAL, 0)
@@ -170,11 +194,21 @@ class FinalConfigPanel():
 	self.panel.SetSizer(separator)
 
     def __save_user_config(self):
-	self.config_frame.user_config.path_benchmark = self.text_benchmark.GetValue()
-	self.config_frame.user_config.args_benchmark = self.text_args_benchmark.GetValue()
+        del self.config_frame.user_config.applications[:]
+        if self.tab_appmode.GetSelection() == 0:
+            self.config_frame.user_config.applications.append(self.text_path_singleapp.GetValue() + " " + self.text_args_singleapp.GetValue())
+        else:
+            multiapp_file = open(self.browse_multiapp_file.GetPath(), "r")
+            for line in multiapp_file:
+                self.config_frame.user_config.applications.append(line.strip())
+            multiapp_file.close()
 
-	if self.combo_cpu.FindString(self.combo_cpu.GetValue()) != 0:
-		self.config_frame.user_config.cpu = self.combo_cpu.GetValue()
+	if self.tab_appmode.GetSelection() == 0 and self.combo_cpu_singleapp.FindString(self.combo_cpu_singleapp.GetValue()) != 0:
+		self.config_frame.user_config.cpu = self.combo_cpu_singleapp.GetValue()
+	elif self.tab_appmode.GetSelection() == 1 and self.combo_cpu_multiapp.FindString(self.combo_cpu_multiapp.GetValue()) != 0:
+		self.config_frame.user_config.cpu = self.combo_cpu_multiapp.GetValue()
+        else:
+		self.config_frame.user_config.cpu = None
 	
 	self.config_frame.user_config.time = self.spin_ctrl_time_samples.GetValue()
 	self.config_frame.user_config.buffer_size = self.spin_ctrl_buffer_size.GetValue()
@@ -196,8 +230,26 @@ class FinalConfigPanel():
 	self.config_frame.user_config.graph_style = GraphStyleConfig(bg_color, grid_color, line_color, line_style,
                 line_width, line_style_number, mode_number)
 	
-    def on_change_benchmark(self, event):
-	self.text_benchmark.SetValue(self.ctrl_benchmark.GetPath())
+    def on_change_path_singleapp(self, event):
+	self.text_path_singleapp.SetValue(self.ctrl_path_singleapp.GetPath())
+
+    def on_change_multiapp_file(self, event):
+        correct = True
+        remote_str = ""
+        multiapp_file = open(self.browse_multiapp_file.GetPath(), "r")
+        for line in multiapp_file:
+            if correct and (line == "" or not self.config_frame.pmc_connect.CheckFileExists(line.split()[0])):
+                    correct = False
+                    break
+        multiapp_file.close()
+        
+        if not correct:
+            if self.config_frame.user_config.machine.is_remote:
+                remote_str = _(" on the remote machine")
+            dlg = wx.MessageDialog(parent=None, message=_("Some of the applications specified in the multi-application file does not exist{0}.\nCheck the multi-application file.").format(remote_str), caption=_("Information"), style=wx.OK|wx.ICON_INFORMATION)
+            dlg.ShowModal()
+            dlg.Destroy()
+            self.browse_multiapp_file.SetPath("")
 
     def on_change_log_checkboxs(self, event):
 	self.path_save.Enable(self.checkbox_save_counters.GetValue() or self.checkbox_save_metrics.GetValue())
@@ -210,47 +262,60 @@ class FinalConfigPanel():
         self.config_frame.GoToPanel(1)
 
     def on_click_monitoring(self, event):
-	if len(self.mon_frames) == 0:
+	if self.multiapp_frame == None and len(self.mon_frames) == 0:
 		self.StartMonitoring()
 	else:
 		self.StopMonitoring()
 
-    def UpdateCtrlBenchmark(self):
+    def UpdateCtrlPathSingleApp(self):
 	if self.config_frame.user_config.machine.is_remote:
-		self.ctrl_benchmark = self.text_benchmark
-		self.browse_benchmark.Hide()
+		self.ctrl_path_singleapp = self.text_path_singleapp
+		self.browse_path_singleapp.Hide()
 	else:
-		self.ctrl_benchmark = self.browse_benchmark
-		self.text_benchmark.Hide()
-	self.grid_sizer_benchmark.Layout()
+		self.ctrl_path_singleapp = self.browse_path_singleapp
+		self.text_path_singleapp.Hide()
+	self.grid_sizer_singleapp.Layout()
 
     def UpdateComboCPU(self):
 	(vendor, flags, cores) = self.config_frame.facade_xml.getMachineInfo()
-        self.combo_cpu.Clear()
-        self.combo_cpu.Append(_("No binding"))
+        self.combo_cpu_singleapp.Clear()
+        self.combo_cpu_multiapp.Clear()
+        self.combo_cpu_singleapp.Append(_("No binding"))
+        self.combo_cpu_multiapp.Append(_("No binding"))
 	for i in range(cores):
-		self.combo_cpu.Append(str(i))
-        self.combo_cpu.SetSelection(0)
+		self.combo_cpu_singleapp.Append(str(i))
+		self.combo_cpu_multiapp.Append(str(i))
+        self.combo_cpu_singleapp.SetSelection(0)
+        self.combo_cpu_multiapp.SetSelection(0)
 
     def StartMonitoring(self):
-	self.__save_user_config()
-	cp_usr_conf = self.config_frame.user_config.GetCopy()
-        self.pmc_extract = PMCExtract(cp_usr_conf)
-	if self.pmc_extract.error is None:
-		mon_frame = MonitoringFrame(None, -1, "", version=self.config_frame.version, final_panel=self, user_config=cp_usr_conf)
-    		mon_frame.Show()
-		self.button_monitoring.SetLabel(_("Cancel monitoring"))
-	else:
-		if self.pmc_extract.error != "": error_msg = _("PMCTrack error") + ":\n" + self.pmc_extract.error
-		else: error_msg = _("The current configuration precludes monitoring.\nCheck all the settings are correct.")
-		dlg = wx.MessageDialog(parent=None, message=error_msg, caption=_("Error"), style=wx.OK | wx.ICON_ERROR)
-		dlg.ShowModal()
+        msg_error = ""
+        if self.tab_appmode.GetSelection() == 0 and not self.config_frame.pmc_connect.CheckFileExists(self.text_path_singleapp.GetValue()):
+            msg_error = _("Can not find any application in the specified path.")
+        elif self.tab_appmode.GetSelection() == 1 and self.browse_multiapp_file.GetPath() == "":
+            msg_error = _("You must select a valid multi-application file.")
+        if msg_error != "":
+            dlg = wx.MessageDialog(parent=None, message=msg_error, caption=_("Information"), style=wx.OK|wx.ICON_INFORMATION)
+            dlg.ShowModal()
+            dlg.Destroy()
+        else:
+	    self.__save_user_config()
+	    cp_usr_conf = self.config_frame.user_config.GetCopy()
+            self.pmc_extract = PMCExtract(cp_usr_conf)
+            if self.tab_appmode.GetSelection() == 0:
+                app = self.pmc_extract.data.keys()[0]
+	        mon_frame = MonitoringFrame(None, -1, "", app_name=app, version=self.config_frame.version, final_panel=self, user_config=cp_usr_conf)
+    	        mon_frame.Show()
+            else: 
+                self.multiapp_frame = MultiAppControlFrame(None, -1, "", version=self.config_frame.version, final_panel=self, user_config=cp_usr_conf)
+    	        self.multiapp_frame.Show()
+	    self.button_monitoring.SetLabel(_("Cancel monitoring"))
 
     def StopMonitoring(self, alert=True):
 	continue_stop = True
-	if self.pmc_extract != None and self.pmc_extract.state in ['R', 'S']:
+	if self.pmc_extract != None and self.pmc_extract.app_running != None:
 		if alert:
-			dlg = wx.MessageDialog(parent=None, message=_("You are about to cancel monitoring, killing the application and closing windows monitoring.\n\nAre you sure you wanna do this?."),
+			dlg = wx.MessageDialog(parent=None, message=_("You are about to cancel monitoring, killing the current application and closing windows monitoring.\n\nAre you sure you wanna do this?."),
                 		caption=_("Advertisement"), style=wx.YES_NO | wx.ICON_EXCLAMATION)
             		if dlg.ShowModal() == wx.ID_YES:
 				self.pmc_extract.KillMonitoring()
@@ -263,6 +328,9 @@ class FinalConfigPanel():
                         mon_frame.graph_style_dialog.Destroy()
 			mon_frame.Destroy()
 		del self.mon_frames[:]
+                if self.multiapp_frame != None:
+                    self.multiapp_frame.Destroy()
+                    self.multiapp_frame = None
 		self.button_monitoring.SetLabel(_("Start monitoring"))
 
     def DestroyComponents(self):
