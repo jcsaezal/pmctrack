@@ -1,13 +1,13 @@
-MODULE_NAME=mchw_arm
+MODULE_NAME=mchw_odroid_xu
 obj-m += $(MODULE_NAME).o 
 $(MODULE_NAME)-objs +=  mchw_core.o mc_experiments.o pmu_config_arm.o cbuffer.o monitoring_mod.o syswide.o \
-	      	     		ipc_sampling_sf_mm.o vexpress_sensors_core.o vexpress_sensors_mm.o 
+	      	     		ipc_sampling_sf_mm.o 
 SYMLINKS=$(patsubst %.o,%.c,$($(MODULE_NAME)-objs))
 SOURCES=$(patsubst %.o,../%.c,$($(MODULE_NAME)-objs))
 
 USER_CFLAGS ?=
 #USER_CFLAGS ?= -ggdb -O0
-EXTRA_CFLAGS := $(USER_CFLAGS) -DCONFIG_PMC_ARM -I$(src)/../include -I$(src)/..
+EXTRA_CFLAGS := $(USER_CFLAGS) -DCONFIG_PMC_ARM -DODROID -I$(src)/../include -I$(src)/..
 
 .PHONY: debug
 

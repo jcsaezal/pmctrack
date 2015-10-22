@@ -60,6 +60,10 @@ typedef struct {
 }
 pmc_metric_t;
 
+/* Helper macros to build simple metric sets */
+#define PMC_ARG(arg) {.type=hw_event_arg,.index=(arg)}
+#define PMC_METRIC(id,op,arg1,arg2,scale_factor) {id,op,PMC_ARG(arg1),PMC_ARG(arg2),scale_factor,0}
+
 /* Helper type for evaluating the value of hl_events */
 typedef struct {
 	arg_type_t type;
@@ -124,6 +128,17 @@ static inline void init_metric_experiment_t(metric_experiment_t* m_exp,int exp_i
 	m_exp->exp_idx=exp_idx;
 }
 
+static inline void clone_metric_experiment_t(metric_experiment_t* dst,
+													metric_experiment_t* orig)
+{
+	int i=0;
+	dst->size = orig->size;   	
+	dst->exp_idx = orig->exp_idx;
+
+	for (i=0;i<orig->size;i++)
+		dst->metrics[i]=orig->metrics[i];
+}
+
 /* Init a set of performance metrics */
 static inline void init_metric_experiment_set_t(metric_experiment_set_t* m_set)
 {
@@ -131,6 +146,15 @@ static inline void init_metric_experiment_set_t(metric_experiment_set_t* m_set)
 	m_set->nr_exps = 0;   		/* Empty set (no nodes)*/
 	for (i=0; i<MAX_MULTIPLEX_EXP_PER_CORETYPE; i++)
 		init_metric_experiment_t(&m_set->exps[i],i);
+}
+
+static inline void clone_metric_experiment_set_t(metric_experiment_set_t* dst,
+													metric_experiment_set_t* orig)
+{
+	int i=0;
+	dst->nr_exps = orig->nr_exps;   		
+	for (i=0; i<orig->nr_exps; i++)
+		clone_metric_experiment_t(&dst->exps[i],&orig->exps[i]);
 }
 
 

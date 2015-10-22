@@ -360,7 +360,7 @@ int parse_pmcs_strconfig(const char *buf,
 	static const unsigned int default_ebs_window=500000000;
 	int read_tokens=0;
 	int idx, val;
-	char cpbuf[256];
+	char cpbuf[PMCTRACK_MAX_LEN_RAW_PMC_STRING];
 	char* strconfig=cpbuf;
 	char* flag;
 	int curr_flag=0;
@@ -371,7 +371,14 @@ int parse_pmcs_strconfig(const char *buf,
 	unsigned int pmc_count=0;
 	int coretype_selected=-1;	/* No coretype for now */
 
-	strncpy(strconfig,buf,256);
+	/* 
+	 * Create a copy of the buf string since strsep()
+	 * actually modifies the string by replacing the delimeter
+	 * with the null byte ('\0') 
+	 */
+	strncpy(strconfig,buf,PMCTRACK_MAX_LEN_RAW_PMC_STRING);
+	strconfig[PMCTRACK_MAX_LEN_RAW_PMC_STRING-1]='\0';
+
 	/* Clear array */
 	memset(pmc_cfg,0,sizeof(pmc_usrcfg_t)*MAX_LL_EXPS);
 

@@ -438,6 +438,11 @@ static void monitoring_counters(struct options* opts,int optind,char** argv)
 		}
 	} else {	// PARENT CODE:
 
+		if (child_finished || (wait4(pid,&child_status,WNOHANG,&child_rusage)>0))	{
+			warnx("Child process finished early\n");
+			exit(1);
+		}
+	
 		if (pmct_attach_process(pid) < 0)
 			exit(-1);
 
@@ -893,10 +898,8 @@ int set_vcount_string_in_options (char* user_vcount_string, struct options* opts
 	                                &opts->virtual_mask,
 	                                &opts->nr_virtual_counters,
 	                                &mnemonics_used,
-	                                &opts->virtcfg)) {
-		warnx("Error parsing virtual counter configuration\n");
+	                                &opts->virtcfg))
 		return 1;
-	}
 
 	if (mnemonics_used)
 		opts->flags |= CMD_FLAG_VIRT_COUNTER_MNEMONICS;

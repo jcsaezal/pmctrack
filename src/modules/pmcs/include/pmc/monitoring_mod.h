@@ -34,7 +34,7 @@ typedef struct {
 	uint_t hwpmc_mask;
 	uint_t nr_virtual_counters;
 	uint_t nr_experiments;
-	char* vcounter_desc[MAX_VIRTUAL_COUNTERS];
+	const char* vcounter_desc[MAX_VIRTUAL_COUNTERS];
 } monitoring_module_counter_usage_t;
 
 /* Interface for monitoring modules */

@@ -1,8 +1,7 @@
-#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
 #
-# pmc_dialog_assign_event.py
+# assign_event_dialog.py
 #
 ##############################################################################
 #
@@ -27,9 +26,8 @@
 
 import wx
 from backend.facade_xml import *
-from backend.user_config import *
 
-class PMCDialogAssignEvent(wx.Dialog):
+class AssignEventDialog(wx.Dialog):
     def __init__(self, *args, **kwargs):
 	kwds = {"style": wx.DEFAULT_FRAME_STYLE}
         wx.Dialog.__init__(self, *args, **kwds)

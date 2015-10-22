@@ -1,8 +1,7 @@
-#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
 #
-# pmc_dialog_graph_style.py
+# graph_style_dialog.py
 #
 ##############################################################################
 #
@@ -28,6 +27,7 @@
 import wx
 import matplotlib
 import platform
+import numpy
 
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_wxagg import FigureCanvasWxAgg as FigCanvas
@@ -38,7 +38,7 @@ def GetColorString(color):
 	else:
 		return color.GetAsString(flags=wx.C2S_HTML_SYNTAX)
 
-class PMCStyleGraph(wx.Dialog):
+class GraphStyleDialog(wx.Dialog):
     def __init__(self, *args, **kwds):
         kwds["style"] = wx.DEFAULT_FRAME_STYLE
         wx.Dialog.__init__(self, *args, **kwds)
@@ -57,20 +57,21 @@ class PMCStyleGraph(wx.Dialog):
         self.spin_line_width = wx.SpinCtrl(self, -1, "", min=1, max=10)
         self.sizer_customize_staticbox = wx.StaticBox(self, -1, _("Customize"))
 	self.button_apply_style = wx.Button(self, -1, _("Apply graph style"))
+        self.first_time = True
+        self.is_customized = False
 
 	self.dpi = 70
         self.fig = Figure((3.0, 3.0), dpi=self.dpi)
         self.fig.subplots_adjust(left=0.05, right=0.945, top=0.95, bottom=0.06) # Adjust the chart to occupy as much space the canvas
         self.axes = self.fig.add_subplot(111)
-        self.axes.set_axis_bgcolor('#FFFFFF')
-        self.axes.grid(True, color='#666666')
-	example_data_y = [0.1,0.2,0.3,0.5,0.8,1.6,2.5,4,4.5,4.8,4.3,3.5,3.8,4.3,6,7.1,7.6]
-	example_data_x = range(17)
-        self.plot_data = self.axes.plot([], linewidth=1, linestyle='solid', color='#0000FF')[0]
+        self.plot_data = self.axes.plot([])[0]
+        example_data_x = numpy.linspace(0, 10)
+        example_data_y = numpy.power(2, example_data_x) / 10
 	self.plot_data.set_xdata(example_data_x)
 	self.plot_data.set_ydata(example_data_y)
-	self.axes.set_xbound(lower=0, upper=15)
-	self.axes.set_ybound(lower=0, upper=8)
+	self.axes.set_xbound(lower=5, upper=10)
+	self.axes.set_ybound(lower=1, upper=90)
+        
         self.canvas = FigCanvas(self, -1, self.fig)
 
 	self.__insert_style_modes()
@@ -90,7 +91,8 @@ class PMCStyleGraph(wx.Dialog):
         self.SetSize((700, 540))
 	self.list_modes.SetSelection(0)
         self.combo_line_style.SetSelection(0)
-	self.button_apply_style.SetMinSize((200, 37))
+	self.button_apply_style.SetMinSize((225, 37))
+	self.__set_colors('#FFFFFF', '#666666', '#0000FF', 0, 1)
 
     def __do_layout(self):
 	separator = wx.BoxSizer(wx.VERTICAL)
@@ -104,7 +106,7 @@ class PMCStyleGraph(wx.Dialog):
         self.sizer_list_modes_staticbox.Lower()
         sizer_list_modes = wx.StaticBoxSizer(self.sizer_list_modes_staticbox, wx.HORIZONTAL)
         sizer_list_modes.Add(self.list_modes, 1, wx.ALL | wx.EXPAND, 5)
-        sizer_div.Add(sizer_list_modes, 1, wx.ALL | wx.EXPAND, 5)
+        sizer_div.Add(sizer_list_modes, 3, wx.ALL | wx.EXPAND, 5)
 	sizer_preview.Add(self.canvas, 1, wx.EXPAND, 0)
         sizer_subdiv.Add(sizer_preview, 1, wx.ALL | wx.EXPAND, 5)
         grid_sizer_customize.Add(self.label_bg_color, 0, wx.ALIGN_CENTER_VERTICAL, 0)
@@ -120,7 +122,7 @@ class PMCStyleGraph(wx.Dialog):
         grid_sizer_customize.AddGrowableCol(1)
         sizer_customize.Add(grid_sizer_customize, 1, wx.ALL | wx.EXPAND, 5)
         sizer_subdiv.Add(sizer_customize, 0, wx.ALL | wx.EXPAND, 5)
-        sizer_div.Add(sizer_subdiv, 1, wx.EXPAND, 0)
+        sizer_div.Add(sizer_subdiv, 4, wx.EXPAND, 0)
 	separator.Add(sizer_div, 1, wx.EXPAND, 0)
 	separator.Add(self.button_apply_style, 0, wx.RIGHT | wx.BOTTOM | wx.ALIGN_RIGHT, 5)
         self.SetSizer(separator)
@@ -148,22 +150,28 @@ class PMCStyleGraph(wx.Dialog):
 	elif n == 3: name = "dotted"
 	return name
 
+    def __set_colors(self, bg_color, grid_color, line_color, line_style, line_width):
+	self.button_bg_color.SetColour(bg_color)
+	self.button_grid_color.SetColour(grid_color)
+	self.button_line_color.SetColour(line_color)
+	self.combo_line_style.SetSelection(line_style)
+	self.spin_line_width.SetValue(line_width)
 
-    def on_select_mode(self, event):
-	style_conf = self.list_modes.GetClientData(self.list_modes.GetSelection())
-	self.button_bg_color.SetColour(style_conf.bg_color)
-	self.button_grid_color.SetColour(style_conf.grid_color)
-	self.button_line_color.SetColour(style_conf.line_color)
-	self.combo_line_style.SetSelection(style_conf.line_style)
-	self.spin_line_width.SetValue(style_conf.line_width)
-
-	self.axes.set_axis_bgcolor(style_conf.bg_color)
-	self.axes.grid(True, color=style_conf.grid_color)
-	self.plot_data.set_color(style_conf.line_color)
-	self.plot_data.set_linestyle(self.__get_name_line_style(style_conf.line_style))
-	self.plot_data.set_linewidth(style_conf.line_width)
+	self.axes.set_axis_bgcolor(bg_color)
+	self.axes.grid(True, color=grid_color)
+	self.plot_data.set_color(line_color)
+	self.plot_data.set_linestyle(self.__get_name_line_style(line_style))
+	self.plot_data.set_linewidth(line_width)
 
 	self.canvas.draw()
+
+    def on_select_mode(self, event):
+        if self.first_time and self.is_customized:
+	    self.list_modes.SetSelection(wx.NOT_FOUND)
+            self.first_time = False
+        else:
+	    style_conf = self.list_modes.GetClientData(self.list_modes.GetSelection())
+	    self.__set_colors(style_conf.bg_color, style_conf.grid_color, style_conf.line_color, style_conf.line_style, style_conf.line_width)
 	
     def on_change_bg_color(self, event):
 	new_bg_color = GetColorString(self.button_bg_color.GetColour()) 
@@ -202,8 +210,10 @@ class PMCStyleGraph(wx.Dialog):
 	name_mode = None
 	if self.list_modes.GetSelection() == wx.NOT_FOUND:
 		name_mode = _("Customized")
-	else:
+        elif self.list_modes.GetSelection() == 0:
 		name_mode = self.list_modes.GetString(self.list_modes.GetSelection())
+        else:
+		name_mode = _("{0} mode").format(self.list_modes.GetString(self.list_modes.GetSelection()))
 	return name_mode
 
     def GetBgColor(self):
@@ -220,6 +230,24 @@ class PMCStyleGraph(wx.Dialog):
 
     def GetLineWidth(self):
 	return self.spin_line_width.GetValue()
+
+    def GetModeNumber(self):
+        return self.list_modes.GetSelection()
+
+    def GetLineStyleNumber(self):
+        return self.combo_line_style.GetSelection()
+
+    def SetModeNumber(self, nr_mode):
+        self.list_modes.SetSelection(nr_mode)
+
+	# It is neccesary to work on OSX systems
+	style_conf = self.list_modes.GetClientData(nr_mode)
+	self.__set_colors(style_conf.bg_color, style_conf.grid_color, style_conf.line_color, style_conf.line_style, style_conf.line_width)
+
+    def SetCustomizedMode(self, bg_color, grid_color, line_color, line_style, line_width):
+        self.is_customized = True
+	self.__set_colors(bg_color, grid_color, line_color, line_style, line_width)
+	self.list_modes.SetSelection(wx.NOT_FOUND)
 
 class ModeStyle(object):
 

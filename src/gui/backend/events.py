@@ -1,13 +1,12 @@
-#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
 #
-# pmctrack-gui
-# Main application executable
+# events.py
+# Encapsulates information of the hardware events and subevents
 #
 ##############################################################################
 #
-# Copyright (c) 2015 Jorge Casas <jorcasas@ucm.es>
+# Copyright (c) 2015 Abel Serrano <abeserra@ucm.es>
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -26,22 +25,37 @@
 #
 ##############################################################################
 
-import importlib
-import wx
-import gettext
-from backend.user_config import *
-from frames.pmc_frame_machine import *
+class Event:
+  
+  def __init__(self):
+    self.name = ''
+    self.descp = ''
+    self.code = '0x'
+    self.subevts = []
+    self.flags = {}
+    
+  def addSubEvt(self,subevt):
+    # Add a SubEvent object to the Event object
+    self.subevts.append(subevt)
+  
+  def addEvtFlag(self,flag_name,flag_value):
+    # Add a flag to this Event object
+    self.flags[flag_name] = flag_value
 
-version = "1.0.2"
+class Subevent:
 
-translate = gettext.translation('pmctrackgui', localedir='locale', fallback=True)
-translate.install()
+  def __init__(self):
+    self.name = ''
+    self.descp = ''
+    self.flags = {}
 
-app = wx.PySimpleApp(0)
-wx.InitAllImageHandlers()
+  def addSubEvtFlag(self,flag_name,flag_value):
+    # Add a flag to the Subevent object
+    self.flags[flag_name] = flag_value
 
-user_config = UserConfig()
-init_frame = PMCFrameMachine(None, -1, "", version=version, user_config=user_config)
-app.SetTopWindow(init_frame)
-init_frame.Show()
-app.MainLoop()
+class PMCDescriptor:
+  
+  def __init__(self):
+    self.name = ''
+    self.pmc_type = ''
+    self.pmc_number = -1
