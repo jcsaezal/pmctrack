@@ -12,6 +12,7 @@
 
 #include <pmc/vexpress_sensors.h>
 #include <linux/ioport.h>
+#include <linux/regmap.h>
 #include <asm/io.h>
 
 #ifdef CONFIG_PMC_ARM64
