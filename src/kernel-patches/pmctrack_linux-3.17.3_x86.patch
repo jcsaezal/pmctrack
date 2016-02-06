@@ -70,10 +70,10 @@ index a26c385..7a964e9 100644
  		dev_dbg(dev->parent,
 diff --git a/include/linux/pmctrack.h b/include/linux/pmctrack.h
 new file mode 100644
-index 0000000..164df53
+index 0000000..523b0ea
 --- /dev/null
 +++ b/include/linux/pmctrack.h
-@@ -0,0 +1,82 @@
+@@ -0,0 +1,77 @@
 +/*
 + *  include/linux/pmctrack.h
 + *
@@ -90,12 +90,7 @@ index 0000000..164df53
 +
 +#ifndef PMCTRACK_H
 +#define PMCTRACK_H
-+#if defined (__linux__)
 +#include <linux/types.h>
-+#else
-+#include <sys/types.h>
-+#endif
-+
 +#include <linux/module.h>
 +#include <linux/device.h>
 +
@@ -249,10 +244,10 @@ index a91e47d..c2bd49e 100644
  	free_thread_info(tsk->stack);
 diff --git a/kernel/pmctrack.c b/kernel/pmctrack.c
 new file mode 100644
-index 0000000..58af21b
+index 0000000..99dde76
 --- /dev/null
 +++ b/kernel/pmctrack.c
-@@ -0,0 +1,366 @@
+@@ -0,0 +1,384 @@
 +/*
 + *  kernel/pmctrack.c
 + *
@@ -351,8 +346,10 @@ index 0000000..58af21b
 +	 * If there is no implementer module or it's being removed
 +	 * from the kernel, return immediately.
 +	 */
-+	if (!implementer || !try_module_get(implementer))
-+		goto unlock_pmcs_alloc;	
++	if (!implementer || !try_module_get(implementer)){
++		spin_unlock(&pmc_ops_lock);
++		return 0;	
++	}
 +
 +	spin_unlock(&pmc_ops_lock);
 +	
@@ -366,10 +363,6 @@ index 0000000..58af21b
 +	/* Allow the module to be removed now */
 +	module_put(implementer);
 +
-+	return ret;
-+
-+unlock_pmcs_alloc:
-+	spin_unlock(&pmc_ops_lock);
 +	return ret;
 +}
 +
@@ -450,17 +443,27 @@ index 0000000..58af21b
 +{
 +	pmc_ops_t* pmc_ops= NULL;
 +
-+	if (!implementer)
-+		return;
++	spin_lock(&pmc_ops_lock);
 +
-+	rcu_read_lock();
++	/* 
++	 * If there is no implementer module or it's being removed
++	 * from the kernel, return immediately.
++	 */
++	if (!implementer || !try_module_get(implementer)){
++		spin_unlock(&pmc_ops_lock);
++		return 0;	
++	}
 +
++	spin_unlock(&pmc_ops_lock);
++	
++	/* Now it's safe to dereference pmc_ops_mod */
 +	pmc_ops=rcu_dereference(pmc_ops_mod);
 +	
 +	if(pmc_ops!=NULL && pmc_ops->pmcs_free_per_thread_data!=NULL)
 +		pmc_ops->pmcs_free_per_thread_data(tsk);
 +
-+	rcu_read_unlock();
++	/* Allow the module to be removed now */
++        module_put(implementer);
 +}
 +
 +/* Invoked when a process exits */ 
@@ -468,17 +471,27 @@ index 0000000..58af21b
 +{
 +	pmc_ops_t* pmc_ops= NULL;
 +
-+	if (!implementer)
-+		return;
++	spin_lock(&pmc_ops_lock);
 +
-+	rcu_read_lock();
++	/* 
++	 * If there is no implementer module or it's being removed
++	 * from the kernel, return immediately.
++	 */
++	if (!implementer || !try_module_get(implementer)){
++		spin_unlock(&pmc_ops_lock);
++		return 0;	
++	}
 +
++	spin_unlock(&pmc_ops_lock);
++	
++	/* Now it's safe to dereference pmc_ops_mod */
 +	pmc_ops=rcu_dereference(pmc_ops_mod);
 +
 +	if(pmc_ops!=NULL && pmc_ops->pmcs_exit_thread!=NULL)
 +		pmc_ops->pmcs_exit_thread(tsk);
 +
-+	rcu_read_unlock();
++	/* Allow the module to be removed now */
++        module_put(implementer);
 +}
 +
 +/* 

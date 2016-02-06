@@ -1,10 +1,10 @@
 /*
  *  include/pmc/hl_events.h
- * 
+ *
  *	Data types and functions to deal with high-level events (performance metrics)
  *
  *  Copyright (c) 2015 Juan Carlos Saez <jcsaezal@ucm.es>
- * 
+ *
  *  This code is licensed under the GNU GPL v2.
  */
 
@@ -20,7 +20,7 @@
 
 /*
  * This enum allows the definition of diferents relations
- * among high-level and low-level events 
+ * among high-level and low-level events
  */
 typedef enum {
 	op_division,
@@ -110,8 +110,8 @@ typedef struct {
 }
 metric_experiment_t;
 
-/* 
- * Makes it possible to define various performance 
+/*
+ * Makes it possible to define various performance
  * metrics in a scenario where event multiplexing is
  * enabled
  */
@@ -129,13 +129,13 @@ static inline void init_metric_experiment_t(metric_experiment_t* m_exp,int exp_i
 }
 
 static inline void clone_metric_experiment_t(metric_experiment_t* dst,
-													metric_experiment_t* orig)
+        metric_experiment_t* orig)
 {
 	int i=0;
-	dst->size = orig->size;   	
+	dst->size = orig->size;
 	dst->exp_idx = orig->exp_idx;
 
-	for (i=0;i<orig->size;i++)
+	for (i=0; i<orig->size; i++)
 		dst->metrics[i]=orig->metrics[i];
 }
 
@@ -149,10 +149,10 @@ static inline void init_metric_experiment_set_t(metric_experiment_set_t* m_set)
 }
 
 static inline void clone_metric_experiment_set_t(metric_experiment_set_t* dst,
-													metric_experiment_set_t* orig)
+        metric_experiment_set_t* orig)
 {
 	int i=0;
-	dst->nr_exps = orig->nr_exps;   		
+	dst->nr_exps = orig->nr_exps;
 	for (i=0; i<orig->nr_exps; i++)
 		clone_metric_experiment_t(&dst->exps[i],&orig->exps[i]);
 }
@@ -174,8 +174,8 @@ static inline int normalize_speedup_factor (int sf)
 
 /*** Common functions for monitoring modules ***/
 
-/* 
- * Obtain the values for a set of performance metrics  
+/*
+ * Obtain the values for a set of performance metrics
  * from HW event counts collected via PMCs (hw_events array)
  */
 static inline void compute_performance_metrics(uint64_t* hw_events, metric_experiment_t* metric_exp)
@@ -200,10 +200,10 @@ static inline void compute_performance_metrics(uint64_t* hw_events, metric_exper
 #endif
 }
 
-/* 
- * Macros, data structures and functions to 
- * aid in detecting program-phase changes 
- * based on high-level performance metrics collected 
+/*
+ * Macros, data structures and functions to
+ * aid in detecting program-phase changes
+ * based on high-level performance metrics collected
  * via hardware performance counters
  */
 

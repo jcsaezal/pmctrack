@@ -2,9 +2,9 @@
  *  ipc_sampling_sf_mm.c
  *
  *	Determine threads' SFs on AMPs via IPC sampling
- * 
+ *
  *  Copyright (c) 2015 Juan Carlos Saez <jcsaezal@ucm.es>
- * 
+ *
  *  This code is licensed under the GNU GPL v2.
  */
 
@@ -152,7 +152,7 @@ static int ipc_sampling_on_read_config(char* str, unsigned int len)
 	dest+=sprintf(dest,"initial_ratio=%d\n",ipc_sampling_sfmodel_config.sfmodel_initial_ratio);
 	dest+=sprintf(dest,"freq_ratio=%d\n",ipc_sampling_sfmodel_config.sfmodel_freq_ratio);
 	dest+=sprintf(dest,"nr_samples_warmup=%d\n",ipc_sampling_sfmodel_config.sfmodel_nr_samples_warmup);
-	
+
 	return dest-str;
 }
 
@@ -221,7 +221,7 @@ static void ipc_sampling_on_exec(pmon_prof_t* prof)
 #endif
 }
 
-/* 
+/*
  * Update the thread's SF based on the latest IPC value on both core types and
  * set the associated virtual count (SF value) in the PMC sample structure
  */

@@ -27,7 +27,7 @@
  *				to libpmctrack functions.
  *  2015-08-10  Modified by Juan Carlos Saez to include support for mnemonic-based
  *				event configurations and system-wide monitoring mode.
- *
+ *  2015-12-20  Support to attach to process by pid
  */
 
 #include <sys/types.h>
@@ -51,6 +51,7 @@
 #include <pmc_user.h> /*For the data type */
 #include <sys/time.h> /* For setitimer */
 #include <pmctrack_internal.h>
+#include <dirent.h>
 
 #ifndef  _GNU_SOURCE
 #define _GNU_SOURCE
@@ -60,7 +61,7 @@
 #define NO_CPU_BINDING 0xffffffff
 #endif
 
- /* Various flag values for the "flags" field in struct options */
+/* Various flag values for the "flags" field in struct options */
 #define CMD_FLAG_ACUM_SAMPLES  (1<<0)
 #define CMD_FLAG_EXTENDED_OUTPUT (1<<1)
 #define CMD_FLAG_RAW_PMC_FORMAT (1<<2)
@@ -68,28 +69,30 @@
 #define CMD_FLAG_SHOW_CHILD_TIMES (1<<4)
 #define CMD_FLAG_VIRT_COUNTER_MNEMONICS (1<<5)
 #define CMD_FLAG_KERNEL_DRIVES_PMCS (1<<6)
+#define CMD_FLAG_SYSTEM_WIDE_MODE	(1<<7)
 
-/* 
- * Structure to store information about command-line options 
+/*
+ * Structure to store information about command-line options
  * specified by the user
  */
 struct options {
 	/* Global switches */
-	int timeout_secs;	
-	int msecs;	
+	int timeout_secs;
+	int msecs;
 	int max_samples;
 	int kernel_buffer_size;
-	unsigned long cpumask;	
+	unsigned long cpumask;
 	int optind;
 	char** argv;
-	unsigned long flags; 
+	unsigned long flags;
+	pid_t target_pid;
 	/* Information on PMCs  */
 	char* user_cfg_str[MAX_COUNTER_CONFIGS];
 	char* strcfg[MAX_RAW_COUNTER_CONFIGS_SAFE];
 	int user_nr_configs;
 	unsigned int pmu_id;
 	counter_mapping_t event_mapping[MAX_PERFORMANCE_COUNTERS];
-	unsigned int global_pmcmask;	
+	unsigned int global_pmcmask;
 	/* Information on virtual counters */
 	char* virtcfg;
 	unsigned int  nr_virtual_counters;
@@ -106,7 +109,7 @@ int stop_profiling, file_flag;
 volatile int child_finished=0;
 int child_status=0;
 int profile_started=0;
-unsigned int ebs_on=0; 
+unsigned int ebs_on=0;
 int extended_output=0;
 FILE *fo;
 struct rusage child_rusage;
@@ -180,7 +183,17 @@ static inline void bind_process_cpumask(int pid, unsigned long cpumask)
 	}
 }
 
-/* 
+static int try_to_bind_process_cpumask(int pid, unsigned long cpumask)
+{
+	if ((cpumask!=NO_CPU_BINDING) && sched_setaffinity(pid, sizeof(unsigned long),&cpumask)!=0) {
+		warnx("Cannot bind process to cpumask 0x%lu",cpumask);
+		return 1;
+	}
+	return 0;
+}
+
+
+/*
  * When using vfork(), it is strongly advisable to use _exit() rather than exit()
  * as stated in the vfork() man page.
  */
@@ -197,17 +210,22 @@ static inline void pmctrack_exit(int status)
 static unsigned int alarm_ms(unsigned int mseconds)
 {
 	struct itimerval new;
+
 	new.it_value.tv_usec = (mseconds*1000) % 1000000;
 	new.it_value.tv_sec = mseconds/1000;
 	new.it_interval=new.it_value;
 
-	if (setitimer (ITIMER_REAL, &new, NULL) < 0)
-		return 0;
+	/* Set interval to zero so that it is a one-shot timer */
+	new.it_interval.tv_usec=0;
+	new.it_interval.tv_sec=0;
+
+	if (setitimer (ITIMER_REAL, &new, NULL) < 0) {}
 	return 1;
+	return 0;
 }
 
-/* 
- * This function takes care of printing event-to-counter mappings  
+/*
+ * This function takes care of printing event-to-counter mappings
  * in the event the user did not specified PMC and virtual-counter
  * configurations using the raw format (kernel)
  * */
@@ -236,8 +254,8 @@ static void print_counter_mappings(FILE* fout,
 
 
 /*
- *  Returns non-zero if the child process has been running longer 
- * than the allowed time period (timeout) 
+ *  Returns non-zero if the child process has been running longer
+ * than the allowed time period (timeout)
  **/
 static int check_timeout(int timeout_secs)
 {
@@ -287,7 +305,7 @@ static void print_process_statistics(FILE* fout,
 
 
 /* Install basic signal handlers for a safe execution */
-static int install_signal_handlers(void)
+static int install_signal_handlers(int install_sigchild)
 {
 	struct sigaction sact;
 
@@ -321,19 +339,21 @@ static int install_signal_handlers(void)
 		return 1;
 	}
 
-	/* processing SIGCHLD signal */
-	sact.sa_handler = sigchld_handler;
-	sact.sa_flags = 0;
-	sigemptyset(&sact.sa_mask);
-	sigaddset(&sact.sa_mask, SIGCHLD);
-	if(sigaction(SIGCHLD, &sact, NULL) < 0) {
-		perror("Can't assign signal handler for SIGHCLD");
-		return 1;
+	if (install_sigchild) {
+		/* processing SIGCHLD signal */
+		sact.sa_handler = sigchld_handler;
+		sact.sa_flags = 0;
+		sigemptyset(&sact.sa_mask);
+		sigaddset(&sact.sa_mask, SIGCHLD);
+		if(sigaction(SIGCHLD, &sact, NULL) < 0) {
+			perror("Can't assign signal handler for SIGHCLD");
+			return 1;
+		}
 	}
 	return 0;
 }
 
-/* Config & Monitoring function for per-thread monitoring mode*/
+/* Config & Monitoring function for per-thread monitoring mode */
 static void monitoring_counters(struct options* opts,int optind,char** argv)
 {
 	unsigned int nr_virtual_counters=0,virtual_mask=0;
@@ -357,7 +377,7 @@ static void monitoring_counters(struct options* opts,int optind,char** argv)
 	virtual_mask=opts->virtual_mask;
 
 
-	if (install_signal_handlers())
+	if (install_signal_handlers(1))
 		exit(1);
 
 	/* Gather info to build header */
@@ -434,7 +454,7 @@ static void monitoring_counters(struct options* opts,int optind,char** argv)
 #endif
 		if(execvp(argv[optind], &argv[optind]) < 0) {
 			warnx( "Error when trying to execute program %s\n", argv[optind] );
-			pmctrack_exit(-1);
+			pmctrack_exit(1);
 		}
 	} else {	// PARENT CODE:
 
@@ -442,9 +462,10 @@ static void monitoring_counters(struct options* opts,int optind,char** argv)
 			warnx("Child process finished early\n");
 			exit(1);
 		}
-	
-		if (pmct_attach_process(pid) < 0)
-			exit(-1);
+
+		if (pmct_attach_process(pid,0) < 0)
+			errx(1,"Can't attach to child process\n");
+
 
 #ifndef USE_VFORK
 		/* Wait for the child process to configure the counters */
@@ -485,9 +506,9 @@ static void monitoring_counters(struct options* opts,int optind,char** argv)
 				if (nr_samples < 0)
 					goto error_path;
 
-				/* 
+				/*
 				 *  If we did not read anything and child already finished,
-				 *  then exit loop 
+				 *  then exit loop
 				 */
 				if (nr_samples==0 && child_finished)
 					break;
@@ -597,7 +618,7 @@ void monitoring_counters_syswide(struct options* opts,int optind,char** argv)
 	nr_virtual_counters=opts->nr_virtual_counters;
 	virtual_mask=opts->virtual_mask;
 
-	if (install_signal_handlers())
+	if (install_signal_handlers(1))
 		exit(1);
 
 	/* Gather info to build header */
@@ -805,6 +826,375 @@ error_path:
 	}//end parent code
 }
 
+/* Pair PID/attach status */
+typedef struct {
+	pid_t pid;
+	unsigned char attached;
+} pid_status_t;
+
+/* Structure to describe a set of PIDs (belonging to the same application) */
+typedef struct {
+	pid_status_t* pid_status; 	/* Array of pid status */
+	unsigned int nr_pids;		/* # of items in pid_status array */
+} pid_set_t;
+
+/* Initialize empty set */
+static pid_set_t* alloc_pid_set(void)
+{
+	pid_set_t* set=NULL;
+
+	if ((set=malloc(sizeof(pid_set_t))) == NULL)
+		return NULL;
+	set->pid_status=NULL; /* Lazy initialization */
+	set->nr_pids=0;
+
+	return set;
+}
+
+/* Free up resources associated with empty set */
+static void destroy_pid_set(pid_set_t* set)
+{
+	if (set) {
+		if (set->pid_status) {
+			free(set->pid_status);
+			set->pid_status=NULL;
+		}
+		free(set);
+	}
+}
+
+/* Skip "." and ".." directories */
+static int filter_entry(const struct dirent *dir)
+{
+	if (dir->d_name[0] == '.')
+		return 0;
+	else
+		return 1;
+}
+
+/*
+ * Iterate directory /proc/<pid>/tasks to fill up the
+ * set with PIDs with threads of the same application
+ * Note that <pid> must exist
+ *
+ * This function returns != on error and 0 upon success
+ */
+static int populate_pid_set(pid_set_t* set,int pid)
+{
+	struct dirent **pidlist = NULL;
+	char name[256];
+	int nr_items=0;
+	pid_status_t* ns=NULL;
+	int i=0;
+	int retval=0;
+
+	sprintf(name, "/proc/%d/task", pid);
+	nr_items = scandir(name, &pidlist, filter_entry, NULL);
+
+	if (nr_items <= 0)
+		return 1;
+
+	if (set->pid_status)
+		ns = realloc(set->pid_status,sizeof(pid_status_t)*nr_items);
+	else
+		ns=malloc(sizeof(pid_status_t)*nr_items);
+
+	if (ns == NULL) {
+		retval=2;
+		goto return_free_pidlist;
+	}
+
+	set->pid_status=ns;
+
+	for (i = 0; i < nr_items; i++) {
+		set->pid_status[i].pid = atoi(pidlist[i]->d_name);
+		set->pid_status[i].attached = 0;
+		printf("PID found: %d\n",set->pid_status[i].pid);
+	}
+	set->nr_pids = nr_items;
+
+return_free_pidlist:
+	for (i = 0; i < nr_items; i++)
+		free(pidlist[i]);
+	free(pidlist);
+	return retval;
+}
+
+/*
+ * Returns the number of pids that could not be attached
+ * The PID of the master thread must be attached for this to succeed
+ */
+static int attach_pid_set(pid_set_t* set,int pid, unsigned long cpumask)
+{
+	int i=0;
+	int nr_attached=0;
+
+	if (pmct_attach_process(pid,1) < 0) {
+		warnx("Can't attach to process with PID %d\n",pid);
+		return -1;
+	}
+
+	try_to_bind_process_cpumask(pid,cpumask);
+
+	nr_attached=1;
+
+	for (i = 0; i < set->nr_pids; i++) {
+		pid_t cur_pid=set->pid_status[i].pid;
+
+		/* Do not attempt to re-attach to master thread */
+		if (cur_pid==pid) {
+			set->pid_status[i].attached=1;
+			continue;
+		}
+
+		if (pmct_attach_process(cur_pid,1) < 0) {
+			warnx("Can't attach to process with PID %d\n",cur_pid);
+		} else {
+			set->pid_status[i].attached=1;
+			nr_attached++;
+			try_to_bind_process_cpumask(cur_pid,cpumask);
+		}
+	}
+
+	return nr_attached;
+}
+
+static void detach_pid_set(pid_set_t* set,int pid)
+{
+	int i=0;
+	int ret=0;
+
+	for (i = 0; i < set->nr_pids; i++) {
+		if (set->pid_status[i].attached) {
+			ret=pmct_detach_process(set->pid_status[i].pid);
+			set->pid_status[i].attached=0;
+			if (ret==0)
+				printf("PID=%d detached successfuly\n",set->pid_status[i].pid);
+		}
+	}
+}
+
+/* Config & Monitoring function for per-thread monitoring mode (attach variant) */
+static void monitoring_counters_attach(struct options* opts,int optind,char** argv)
+{
+	unsigned int nr_virtual_counters=0,virtual_mask=0;
+	int i, cont;
+	unsigned int pmcmask=0;
+	unsigned int npmcs = 0;
+	int fd;
+	struct timespec;
+	pmc_sample_t* samples=NULL;
+	pmc_sample_t** acum_samples=NULL;
+	struct pid_ctrl* pid_ctrl_vector=NULL;
+	int nr_pids=0;
+	int nr_samples;
+	unsigned int nr_experiments;
+	unsigned int max_buffer_samples;
+	pid_set_t* set=alloc_pid_set();
+	int exit_val=0;
+	int detached=1;
+
+	cont = 1;
+	fd = -1;
+	child_status = 0;
+	nr_virtual_counters=opts->nr_virtual_counters;
+	virtual_mask=opts->virtual_mask;
+
+	if (install_signal_handlers(0))
+		exit(1);
+
+	if (!set)
+		errx(1,"Cannot allocate memory for pid set\n");
+
+	if (populate_pid_set(set,opts->target_pid)) {
+		warnx("PID %d not found",opts->target_pid);
+		exit_val=1;
+		goto free_up_pid_set;
+	}
+
+	/* Gather info to build header */
+	if (pmct_check_counter_config((const char**)opts->strcfg,&npmcs,&pmcmask,&ebs_on,&nr_experiments)) {
+		exit_val=1;
+		goto free_up_pid_set;
+	}
+
+	if (!opts->strcfg[0] && npmcs!=0)
+		opts->flags |= CMD_FLAG_KERNEL_DRIVES_PMCS;
+
+	if (nr_virtual_counters==0 && npmcs==0) {
+		fprintf(stderr,"Please specify events to monitor!\n");
+		exit_val=1;
+		goto free_up_pid_set;
+	}
+
+	if (opts->flags & CMD_FLAG_ACUM_SAMPLES) {
+		acum_samples=malloc(sizeof(pmc_sample_t*)*MAX_THREADS_APP);
+		pid_ctrl_vector=malloc(sizeof(struct pid_ctrl)*MAX_THREADS_APP); /* As much as 256 threads */
+		if (!acum_samples || ! pid_ctrl_vector) {
+			fprintf(stderr, "%s\n", "Couldn't reserve memory for cummulative counters");
+			exit_val=1;
+			goto free_up_pid_set;
+		}
+		memset(acum_samples,0,sizeof(pmc_sample_t*)*MAX_THREADS_APP);/* Set NULL POINTERS*/
+	}
+
+	/* Flag this stuff */
+	profile_started=0;
+	child_finished=0;
+	stop_profiling = 0;
+
+	/* Set up kernel buffer size */
+	if (opts->kernel_buffer_size!=-1 && pmct_set_kernel_buffer_size(opts->kernel_buffer_size)) {
+		exit_val=1;
+		goto free_up_pid_set;
+	}
+
+	/* Configure counters if there is something to configure */
+	if (opts->strcfg[0] && pmct_config_counters((const char**)opts->strcfg,0)) {
+		exit_val=1;
+		goto free_up_pid_set;
+	}
+
+	/* Set up sampling period
+		(check whether the kernel control the counters or not)
+	*/
+	if (pmct_config_timeout(opts->msecs,(!(opts->strcfg)[0] && npmcs!=0))) {
+		exit_val=1;
+		goto free_up_pid_set;
+	}
+
+	if (opts->virtcfg && pmct_config_virtual_counters(opts->virtcfg,0)) {
+		exit_val=1;
+		goto free_up_pid_set;
+	}
+
+	/* Keep track of start time */
+	gettimeofday(&start_time, NULL);
+
+	if (attach_pid_set(set,opts->target_pid,opts->cpumask)<0) {
+		exit_val=1;
+		goto free_up_pid_set;
+	}
+
+	detached=0;
+	profile_started=1;
+
+	if ( (fd = pmct_open_monitor_entry())<0 )
+		goto error_path;
+
+	if (opts->kernel_buffer_size<4096) {
+		/* Request shared memory region */
+		if ((samples=pmct_request_shared_memory_region(fd,&max_buffer_samples))==NULL)
+			goto error_path;
+	} else {
+		/* Reserve a big buffer from the heap directly */
+		max_buffer_samples=opts->kernel_buffer_size/sizeof(pmc_sample_t);
+		if ((samples=malloc(max_buffer_samples*sizeof(pmc_sample_t)))==NULL)
+			goto error_path;
+	}
+	/* Print header if necessary */
+	if (!(opts->flags & CMD_FLAG_ACUM_SAMPLES)) {
+		print_counter_mappings(fo,opts,nr_experiments);
+		pmct_print_header(fo,nr_experiments,pmcmask,virtual_mask,extended_output,0);
+	}
+	/* Print child counters */
+	while(!stop_profiling) {
+
+		alarm_ms(opts->msecs);
+		pause();
+
+		/* Check if Ctrl+C was pressed */
+		if(!stop_profiling) {
+			nr_samples=pmct_read_samples(fd,samples,max_buffer_samples);
+
+			if (nr_samples < 0)
+				goto error_path;
+
+			/*
+			 *  If we did not read anything then exit loop
+			 */
+			if (nr_samples==0)
+				break;
+
+			for (i=0; i<nr_samples; i++) {
+				pmc_sample_t* cur=&samples[i];
+
+				if (opts->flags & CMD_FLAG_ACUM_SAMPLES) {
+					int j=0;
+					unsigned char copy_metadata=0;
+
+					/* Search PID in set */
+					while (j<nr_pids && pid_ctrl_vector[j].pid!=cur->pid)
+						j++;
+
+					/* PID not found */
+					if (j==nr_pids) {
+						/* Add new item to set */
+						pid_ctrl_vector[j].pid=cur->pid;
+						pid_ctrl_vector[j].exp_mask=0;
+						nr_pids++;
+						acum_samples[j]=malloc(sizeof(pmc_sample_t)*nr_experiments);
+
+						if (!acum_samples[j]) {
+							fprintf(stderr,"Couldn't reserve memory for cummulative counters");
+							goto error_path;
+						}
+					}
+
+					if (! (pid_ctrl_vector[j].exp_mask & (1<<cur->exp_idx))) {
+						/* Time to copy metadata ... */
+						copy_metadata=1;
+						pid_ctrl_vector[j].exp_mask|=1<<cur->exp_idx;
+						pid_ctrl_vector[j].nr_samples_accum[cur->exp_idx]=1;
+					} else
+						pid_ctrl_vector[j].nr_samples_accum[cur->exp_idx]++;
+
+					pmct_accumulate_sample (nr_experiments,pmcmask,virtual_mask,copy_metadata,cur,&acum_samples[j][cur->exp_idx]);
+				} else {
+					pmct_print_sample (fo,nr_experiments, pmcmask, virtual_mask, extended_output, cont, cur);
+				}
+
+				cont++;
+				if ((opts->max_samples!=-1 && cont>opts->max_samples)
+				    || (opts->timeout_secs!=-1 && check_timeout(opts->timeout_secs))) {
+					detach_pid_set(set,opts->target_pid);
+					detached=1;
+					fprintf(stderr, "Maximum samples/timeout reached. Detaching process %d\n",opts->target_pid);
+				}
+			}
+		}
+	}//end while
+
+	/* Generate output from accumulated values */
+	if (opts->flags & CMD_FLAG_ACUM_SAMPLES) {
+
+		print_counter_mappings(fo,opts,nr_experiments);
+		pmct_print_header(fo,nr_experiments,pmcmask,virtual_mask,extended_output,0);
+
+		/* Generate samples for the various threads */
+		for (i=0; i<nr_pids; i++) {
+			int j=0;
+			for (j=0; j<nr_experiments; j++) {
+				if ( pid_ctrl_vector[i].exp_mask & (1<<j))
+					pmct_print_sample (fo,nr_experiments, pmcmask, virtual_mask,
+					                   extended_output, pid_ctrl_vector[i].nr_samples_accum[j], &acum_samples[i][j]);
+			}
+		}
+	}
+
+error_path:
+	if (!detached)
+		detach_pid_set(set,opts->target_pid);
+
+	if (fd>0)
+		close(fd);
+free_up_pid_set:
+	if (set)
+		destroy_pid_set(set);
+	exit(exit_val);
+
+}
+
 void sigchld_handler(int signo)
 {
 
@@ -845,6 +1235,7 @@ void init_options( struct options* opts)
 	opts->cpumask = NO_CPU_BINDING;
 	opts->max_samples = -1;
 	opts->flags=0;
+	opts->target_pid=-1;
 	opts->kernel_buffer_size = -1;
 	opts->user_nr_configs=0;
 	opts->pmu_id=0;
@@ -925,9 +1316,24 @@ void free_options (struct options* opts)
 
 	if (opts->virtcfg)
 		free(opts->virtcfg);
+}
 
-	if (opts->event_mapping)
-		free(opts->event_mapping);
+int check_options(struct options* opts,char *argv[],int optind)
+{
+	if (opts->target_pid!=-1 && argv[optind]) {
+		warnx("Attach mode enabled but command specified in the command line\n");
+		return 1;
+	} else if (opts->target_pid==-1 && !argv[optind]) {
+		warnx("Command to launch not provided\n");
+		return 2;
+	} else if ( (opts->flags & CMD_FLAG_SYSTEM_WIDE_MODE) && opts->target_pid!=-1 ) {
+		warnx("System wide mode (-S) with -p option (attach process)\n");
+		return 3;
+	} else if ( (opts->flags & CMD_FLAG_SHOW_CHILD_TIMES) && opts->target_pid!=-1 ) {
+		warnx("Attach mode (-p) not compatible with -t option\n");
+		return 4;
+	}
+	return 0;
 }
 
 
@@ -949,9 +1355,10 @@ static void usage(const char* program_name,int status)
 		printf ("\n\t-b\t<cpu or mask>\n\t\tbind monitor program to the specified cpu o cpumask.");
 		printf ("\n\t-S\n\t\tEnable system-wide monitoring mode (per-CPU)");
 		printf ("\n\t-r\t\n\t\tAccept pmc configuration strings in the RAW format");
-		printf ("\n\t-p\t<pmu>\n\t\tSpecify the PMU id to use for the event configuration");
+		printf ("\n\t-P\t<pmu>\n\t\tSpecify the PMU id to use for the event configuration");
 		printf ("\n\t-L\n\t\tLegacy-mode: do not show counter-to-event mapping");
 		printf ("\n\t-t\n\t\tShow real, user and sys time of child process");
+		printf ("\n\t-p\t<pid>\n\t\tAttach to existing process with given pid");
 		printf ("\nPROG + ARGS:\n\t\tCommand line for the program to be monitored.\n");
 		break;
 	case -2:
@@ -973,7 +1380,6 @@ int main(int argc, char *argv[])
 {
 	fo = stdout;
 	char optc;
-	int system_wide=0;
 	static struct options opts;
 
 	init_options(&opts);
@@ -982,7 +1388,7 @@ int main(int argc, char *argv[])
 		usage(argv[0],0);
 
 	/* Process command-line options ... */
-	while ((optc = getopt(argc, argv, "+hc:T:o:b:n:V:B:eAk:Srp:LtN:")) != (char)-1) {
+	while ((optc = getopt(argc, argv, "+hc:T:o:b:n:V:B:eAk:SrP:LtN:p:")) != (char)-1) {
 		switch (optc) {
 		case 'o':
 			if((fo = fopen(optarg, "w")) == NULL)
@@ -1022,12 +1428,12 @@ int main(int argc, char *argv[])
 			opts.kernel_buffer_size=atoi(optarg);
 			break;
 		case 'S':
-			system_wide=1;
+			opts.flags|=CMD_FLAG_SYSTEM_WIDE_MODE;
 			break;
 		case 'r':
 			opts.flags|=CMD_FLAG_RAW_PMC_FORMAT;
 			break;
-		case 'p':
+		case 'P':
 			opts.pmu_id=atoi(optarg);
 			break;
 		case 'L':
@@ -1039,29 +1445,37 @@ int main(int argc, char *argv[])
 		case 'N':
 			opts.timeout_secs=atoi(optarg);
 			break;
+		case 'p':
+			opts.target_pid=atoi(optarg);
+			break;
 		default:
 			fprintf(stderr, "Wrong option: %c\n", optc);
 			exit(1);
 		}
 	}
 
-	/* 
-	 * Translate user-provided PMC configurations 
-	 * into the raw format if necessary 
+	/* Make sure the combination of options makes sense */
+	if (check_options(&opts,argv,optind))
+		exit(1);
+	/*
+	 * Translate user-provided PMC configurations
+	 * into the raw format if necessary
 	 */
 	if (parse_pmc_configuration(&opts))
 		exit(1);
 
-	if (argv[optind]!=NULL) {
-		/* Get rid of stdio buffer */
-		setbuf(fo,NULL);
 
-		/* Invoke main monitoring function for the selected mode */
-		if (system_wide)
-			monitoring_counters_syswide(&opts,optind,argv);
-		else
-			monitoring_counters(&opts,optind,argv);
-	}
+	/* Get rid of stdio buffer */
+	setbuf(fo,NULL);
+
+	/* Invoke main monitoring function for the selected mode */
+	if (opts.flags & CMD_FLAG_SYSTEM_WIDE_MODE)
+		monitoring_counters_syswide(&opts,optind,argv);
+	else if (opts.target_pid!=-1)
+		monitoring_counters_attach(&opts,optind,argv);
+	else
+		monitoring_counters(&opts,optind,argv);
+
 	if(fo != stdout) fclose(fo);
 
 	free_options(&opts);

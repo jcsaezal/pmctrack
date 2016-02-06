@@ -3,10 +3,10 @@
  *
  *  PMCTrack monitoring module that provides support for
  * 	Intel Cache Monitoring Technology (CMT) and Intel Memory Bandwidth
- *  Monitoring (MBM) 
- * 
+ *  Monitoring (MBM)
+ *
  *  Copyright (c) 2015 Juan Carlos Saez <jcsaezal@ucm.es>
- * 
+ *
  *  This code is licensed under the GNU GPL v2.
  */
 
@@ -45,16 +45,16 @@ static inline void __unset_rmid(void);
 #define L3_OCCUPANCY_EVENT_ID	0x01
 #define L3_TOTAL_BW_EVENT_ID	0x02
 #define L3_LOCAL_BW_EVENT_ID	0x03
-/* 
- * We have found empirically that memory bandwith 
+/*
+ * We have found empirically that memory bandwith
  * cumulative counters are 24-bit wide !!
  * That's the reason for this macro.
  */
-#define MAX_CMT_COUNT	((1ULL<<24ULL)-1ULL)	
+#define MAX_CMT_COUNT	((1ULL<<24ULL)-1ULL)
 
 /** Functions to perform RMID allocation **/
 
-/* 
+/*
  * Initialize a pool with the RMID values
  * supported by the current processor
  */
@@ -63,10 +63,10 @@ static int initialize_rmid_pool(void);
 /* Free up the resources associated with the RMID pool */
 static inline void free_rmid_pool(void);
 
-/* 
+/*
  * Decrease the reference counter of a given RMID.
  * If the reference counter reaches 0, put the RMID back in
- * the free RMID pool. 
+ * the free RMID pool.
  */
 static inline void put_rmid(uint_t rmid);
 
@@ -74,7 +74,7 @@ static inline void put_rmid(uint_t rmid);
 static uint_t get_rmid(void);
 
 /* Increase the reference counter of a given RMID */
-static void use_rmid(uint_t rmid); 
+static void use_rmid(uint_t rmid);
 
 /* Supported RMID allocation policies */
 typedef enum {
@@ -108,7 +108,7 @@ static void intel_cmt_module_counter_usage(monitoring_module_counter_usage_t* us
 {
 	usage->hwpmc_mask=0;
 	usage->nr_virtual_counters=CMT_MAX_EVENTS; // L3_USAGE, L3_TOTAL_BW, L3_LOCAL_BW
-	usage->nr_experiments=0; 
+	usage->nr_experiments=0;
 	usage->vcounter_desc[0]="llc_usage";
 	usage->vcounter_desc[1]="total_llc_bw";
 	usage->vcounter_desc[2]="local_llc_bw";
@@ -263,7 +263,7 @@ static int intel_cmt_on_fork(unsigned long clone_flags, pmon_prof_t* prof)
 /* on exec() callback */
 static void intel_cmt_on_exec(pmon_prof_t* prof) { }
 
-/* 
+/*
  * Read the LLC occupancy and cumulative memory bandwidth counters
  * and set the associated virtual counts in the PMC sample structure
  */
@@ -308,7 +308,7 @@ static int intel_cmt_on_new_sample(pmon_prof_t* prof,int cpu,pmc_sample_t* sampl
 					trace_printk("LLC Total BW=%llu bytes/s\n",tdata->last_llc_utilization[llc_id][L3_TOTAL_BW_EVENT_ID-1]);
 				}
 			}
-			
+
 			/* check for l3 local BW */
 			if(event_l3_local_bw) {
 				val = __rmid_read(tdata->rmid,L3_LOCAL_BW_EVENT_ID);
@@ -331,7 +331,7 @@ static int intel_cmt_on_new_sample(pmon_prof_t* prof,int cpu,pmc_sample_t* sampl
 
 			/* Embed virtual counter information so that the user can see what's going on */
 			for(i=0; i<CMT_MAX_EVENTS; i++) {
-				if ((prof->virt_counter_mask & (1<<i) )) { 
+				if ((prof->virt_counter_mask & (1<<i) )) {
 					sample->virt_mask|=(1<<i);
 					sample->nr_virt_counts++;
 					sample->virtual_counts[cnt_virt]=tdata->last_llc_utilization[llc_id][i];
@@ -372,9 +372,9 @@ void intel_cmt_on_switch_in(pmon_prof_t* prof)
 
 	if (data->first_time && data->security_id==current_monitoring_module_security_id()) {
 		// Assign RMID
-		data->rmid=get_rmid(); 
+		data->rmid=get_rmid();
 		data->first_time=0;
-#ifdef DEBUG		
+#ifdef DEBUG
 		trace_printk("Assigned RMID::%u\n",data->rmid);
 #endif
 	}
@@ -407,7 +407,7 @@ rmid_node_t* node_pool; 			/* Array of RMID nodes */
 LIST_HEAD(available_rmids);			/* RMID free pool (doubly linked list) */
 DEFINE_SPINLOCK(rmid_pool_lock);	/* Lock for the RMID pool */
 
-/* 
+/*
  * Initialize a pool with the RMID values
  * supported by the current processor
  */
@@ -500,10 +500,10 @@ static uint_t get_rmid(void)
 
 }
 
-/* 
+/*
  * Decrease the reference counter of a given RMID.
  * If the reference counter reaches 0, put the RMID back in
- * the free RMID pool. 
+ * the free RMID pool.
  */
 static inline void put_rmid(uint_t rmid)
 {

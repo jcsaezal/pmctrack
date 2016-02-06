@@ -1,10 +1,10 @@
 /*
  *  include/pmc/data_str/mc_cbuffer.h
  *
- * 	Integer ring buffer data structure 
+ * 	Integer ring buffer data structure
  *
  *  Copyright (c) 2015 Juan Carlos Saez <jcsaezal@ucm.es>
- * 
+ *
  *  This code is licensed under the GNU GPL v2.
  */
 

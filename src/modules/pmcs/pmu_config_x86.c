@@ -5,12 +5,12 @@
  * 	general-purpose x86 processors
  *
  *  Copyright (c) 2015 Juan Carlos Saez <jcsaezal@ucm.es>
- * 
+ *
  *  This code is licensed under the GNU GPL v2.
  */
- /*
-  * Part of this code is based on oprofile's kernel module.
-  */
+/*
+ * Part of this code is based on oprofile's kernel module.
+ */
 
 
 #include <pmc/pmu_config.h>
@@ -26,12 +26,6 @@ static DEFINE_PER_CPU(unsigned long, saved_lvtpc);
 static int nmi_enabled;  /* Interrupts enabled */
 static int ctr_running;  /* Counters configured */
 
-/*
- * Per-CPU structure to aid in the 
- * implementation of EBS monitoring mode
- */
-DECLARE_PER_CPU(struct cpu_pmc_buffer, pmc_buffer);
-
 /* Variables to aid in detecting the various PMUs in the system */
 int coretype_cpu_static[NR_CPUS];
 int* coretype_cpu=coretype_cpu_static;
@@ -42,9 +36,9 @@ pmu_props_t pmu_props_cputype[PMC_CORE_TYPES];
 pmu_props_t pmu_props_cpu[NR_CPUS];
 
 
-/* 
- * Code to list and detect supported 
- * Intel processors 
+/*
+ * Code to list and detect supported
+ * Intel processors
  */
 #if defined(CONFIG_PMC_CORE_2_DUO) || defined(CONFIG_PMC_CORE_I7)
 
@@ -154,6 +148,24 @@ void init_pmu_props(void)
 	int cpu=0;
 	int model_cpu=0;
 	pmu_props_t* props;
+	int i=0;
+	static pmu_flag_t pmu_flags[]= {
+#ifdef CONFIG_PMC_AMD
+		{"pmc",12,0},
+#else
+		{"pmc",8,0},
+#endif
+		{"usr",1,0},
+		{"os",1,0},
+		{"umask",8,0},
+		{"cmask",8,0},
+		{"edge",1,0},
+		{"inv",1,0},
+		{"ebs",32,0},
+		{"coretype",1,1},
+		{NULL,0,0}
+	};
+
 #if !defined(SCHED_AMP) && !defined(PMCTRACK_QUICKIA)
 #define MAX_CORETYPES 2
 	int processor_model[MAX_CORETYPES];
@@ -213,6 +225,13 @@ void init_pmu_props(void)
 #endif
 		props=&pmu_props_cpu[cpu];
 		pmu_props_cputype[coretype]=(*props);
+		props=&pmu_props_cputype[coretype];
+		/* Add flags */
+		props->nr_flags=0;
+		for (i=0; pmu_flags[i].name!=NULL; i++) {
+			props->flags[i]=pmu_flags[i];
+			props->nr_flags++;
+		}
 		printk("[PMU coretype%d]\n",coretype);
 		printk(KERN_INFO "Version Id:: 0x%lx\n", props->processor_model);
 		printk("GP Counter per Logical Processor:: %d\n",props->nr_gp_pmcs);
@@ -222,8 +241,8 @@ void init_pmu_props(void)
 	printk("***************\n");
 }
 
-/* 
- * Transform an array of platform-agnostic PMC counter configurations (pmc_cfg) 
+/*
+ * Transform an array of platform-agnostic PMC counter configurations (pmc_cfg)
  * into a low level structure that holds the necessary data to configure hardware counters.
  */
 void do_setup_pmcs(pmc_usrcfg_t* pmc_cfg, int used_pmcs_msk,core_experiment_t* exp,int cpu, int exp_idx)
@@ -302,10 +321,14 @@ void do_setup_pmcs(pmc_usrcfg_t* pmc_cfg, int used_pmcs_msk,core_experiment_t* e
 				set_bit_field(&evtsel.m_en,1);
 				set_bit_field(&evtsel.m_inv, pmc_cfg[i].cfg_inv);
 				set_bit_field(&evtsel.m_cmask, pmc_cfg[i].cfg_cmask);
-
+#ifndef	CONFIG_PMC_AMD
+				set_bit_field(&evtsel.m_int, 1);
+#endif
 				/* Set up int just in case */
 				if (pmc_cfg[i].cfg_ebs_mode) {
+#ifdef	CONFIG_PMC_AMD
 					set_bit_field(&evtsel.m_int, 1);
+#endif
 					set_bit_field(&evtsel.m_os, 0);	/* Force os flag to zero in this case */
 					reset_value= ((-pmc_cfg[i].cfg_reset_value) & props_cpu->pmc_width_mask);
 					/* Set EBS idx */
@@ -346,7 +369,7 @@ void do_setup_pmcs(pmc_usrcfg_t* pmc_cfg, int used_pmcs_msk,core_experiment_t* e
 
 
 /*
- * Fill the various fields in a pmc_cfg structure based on a PMC configuration string specified in raw format 
+ * Fill the various fields in a pmc_cfg structure based on a PMC configuration string specified in raw format
  * (e.g., pmc0=0xc0,pmc1=0x76,...).
  */
 int parse_pmcs_strconfig(const char *buf,
@@ -371,10 +394,10 @@ int parse_pmcs_strconfig(const char *buf,
 	unsigned int pmc_count=0;
 	int coretype_selected=-1;	/* No coretype for now */
 
-	/* 
+	/*
 	 * Create a copy of the buf string since strsep()
 	 * actually modifies the string by replacing the delimeter
-	 * with the null byte ('\0') 
+	 * with the null byte ('\0')
 	 */
 	strncpy(strconfig,buf,PMCTRACK_MAX_LEN_RAW_PMC_STRING);
 	strconfig[PMCTRACK_MAX_LEN_RAW_PMC_STRING-1]='\0';
@@ -482,9 +505,9 @@ int parse_pmcs_strconfig(const char *buf,
 	}
 }
 
-/* 
- * Perform a default initialization of all performance monitoring counters 
- * in the current CPU. 
+/*
+ * Perform a default initialization of all performance monitoring counters
+ * in the current CPU.
  */
 void mc_clear_all_platform_counters(pmu_props_t* props_cpu)
 {
@@ -534,7 +557,7 @@ void mc_clear_all_platform_counters(pmu_props_t* props_cpu)
 
 }
 
-/* 
+/*
  * Generate a summary string with the configuration of a hardware counter (lle)
  * in human-readable format. The string is stored in buf.
  */
@@ -633,13 +656,13 @@ static int pmc_do_nmi_counter_overflow(unsigned int cmd, struct pt_regs *regs)
 
 	/* Process Counter overflow */
 	if (overflow_mask)
-		do_count_on_overflow(regs, this_cpu_ptr(&pmc_buffer),overflow_mask);
+		do_count_on_overflow(regs,overflow_mask);
 
 
 	reset_overflow_status();
 	/* Write apic again */
 	apic_write(APIC_LVTPC, APIC_DM_NMI);
-	return 1; 
+	return 1;
 }
 
 
@@ -674,12 +697,15 @@ static void pmc_nmi_cpu_setup(void *dummy)
 }
 
 static void pmc_unfill_addresses(int nr_counts) { }
-static int pmc_fill_in_addresses(void) { return 0; }
+static int pmc_fill_in_addresses(void)
+{
+	return 0;
+}
 
-/* 
+/*
  * Prepare a CPU to handle interrupts on PMC overflow
  * (Function based on nmi_setup() code in the Linux kernel
- * -  arch/oprofile/nmi_int.c ) 
+ * -  arch/oprofile/nmi_int.c )
  */
 static int pmc_nmi_setup(void)
 {
@@ -718,9 +744,9 @@ out_pmcs_nmi_setup:
 	return err;
 }
 
-/* 
+/*
  * Perform the necessary steps to stop receiving interrupts on PMC overflow
- * on the current CPU 
+ * on the current CPU
  */
 static void pmc_nmi_cpu_shutdown(void *dummy)
 {
@@ -787,7 +813,10 @@ int init_pmu(void)
 #ifdef CONFIG_PMC_AMD
 /* No overflow register in AMD processors */
 void reset_overflow_status(void) {}
-unsigned int read_overflow_mask(void) { return 0x1; }
+unsigned int read_overflow_mask(void)
+{
+	return 0x1;
+}
 #else
 /* Reset the PMC overflow register */
 void reset_overflow_status(void)
@@ -810,9 +839,9 @@ void reset_overflow_status(void)
 
 /*
  * Return a bitmask specifiying which PMCs overflowed
- * This bitmask must be in a platform-independent "normalized" format. 
- * bit(i,mask)==1 if pmc_i overflowed  
- * (bear in mind that lower PMC ids are reserved for 
+ * This bitmask must be in a platform-independent "normalized" format.
+ * bit(i,mask)==1 if pmc_i overflowed
+ * (bear in mind that lower PMC ids are reserved for
  * fixed-function PMCs)
  */
 unsigned int read_overflow_mask(void)

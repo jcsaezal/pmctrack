@@ -2,10 +2,10 @@
  *  include/pmc/data_str/bit_field.h
  *
  *	Abstract data types to deal with register bitwise operations
- *	in a more abstract, high-level manner 
+ *	in a more abstract, high-level manner
  *
  *  Copyright (c) 2015 Juan Carlos Saez <jcsaezal@ucm.es>
- * 
+ *
  *  This code is licensed under the GNU GPL v2.
  */
 

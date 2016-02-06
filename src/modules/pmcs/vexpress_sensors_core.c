@@ -1,22 +1,25 @@
 /*
  *  vexpress_sensors_core.c
  *
- * 	Implementation of the high-level API enabling to measure energy consumption 
+ * 	Implementation of the high-level API enabling to measure energy consumption
  *  on the ARM Coretile Express TC2 board and the ARM Juno development board
- * 
+ *
  *  Copyright (c) 2015 Juan Carlos Saez <jcsaezal@ucm.es>
- *	              and Javier Setoain <jsetoain@ucm.es>      
- * 
+ *	              and Javier Setoain <jsetoain@ucm.es>
+ *
  *  This code is licensed under the GNU GPL v2.
  */
 
 #include <pmc/vexpress_sensors.h>
 #include <linux/ioport.h>
-#include <asm/io.h>
 
 #ifdef CONFIG_PMC_ARM64
+#include <asm/io.h>
+
 /* three energy registers (ARM Juno board) */
 enum versatile_sensors {VEXPRESS_ENERGY_BIG,VEXPRESS_ENERGY_LITTLE,VEXPRESS_ENERGY_SYS,VEXPRESS_NR_SENSORS};
+#elif defined(CONFIG_SMART_POWER)
+enum versatile_sensors {VEXPRESS_ENERGY_GBL,VEXPRESS_NR_SENSORS};
 #else
 /* two energy registers (ARM Coretile Express TC2 board) */
 enum versatile_sensors {VEXPRESS_ENERGY_BIG,VEXPRESS_ENERGY_LITTLE,VEXPRESS_NR_SENSORS};
@@ -41,7 +44,7 @@ enum versatile_sensors {VEXPRESS_ENERGY_BIG,VEXPRESS_ENERGY_LITTLE,VEXPRESS_NR_S
 #define ADDR_SYS_ENM_H_SYS_OFFSET		0x104
 
 /* Structure describing an energy meter register */
-struct vexpress_sensor{
+struct vexpress_sensor {
 	unsigned int offset_high;
 	unsigned int offset_low;
 	void* address_high;
@@ -91,16 +94,17 @@ int raw_read_energy_sensor(vexpress_sensor_t* sensor, uint64_t* value)
 	return 0;
 }
 
-/* 
- * Pointer to store the base virtual address  
+/*
+ * Pointer to store the base virtual address
  * used to map the physical addresses of the APB energy registers
  */
 static void* apbregs_base_ptr = NULL;
 
 /* Initialize sensor connection */
 int initialize_energy_sensors(vexpress_sensor_t* sensor_descriptors[],
-							  const char* description[],
-							  int* nr_sensors){
+                              const char* description[],
+                              int* nr_sensors)
+{
 	int i;
 
 	if(request_mem_region(APB_REGISTERS_BASE_ADDRESS, 0x1000,
@@ -112,11 +116,11 @@ int initialize_energy_sensors(vexpress_sensor_t* sensor_descriptors[],
 		return -EINVAL;
 	}
 
-	for (i=0;i<VEXPRESS_NR_SENSORS;i++) {
+	for (i=0; i<VEXPRESS_NR_SENSORS; i++) {
 		energy_sensors[i].address_high =
-            apbregs_base_ptr + energy_sensors[i].offset_high;
-        energy_sensors[i].address_low =
-            apbregs_base_ptr + energy_sensors[i].offset_low;
+		    apbregs_base_ptr + energy_sensors[i].offset_high;
+		energy_sensors[i].address_low =
+		    apbregs_base_ptr + energy_sensors[i].offset_low;
 		sensor_descriptors[i]=&energy_sensors[i];
 	}
 
@@ -129,7 +133,7 @@ int initialize_energy_sensors(vexpress_sensor_t* sensor_descriptors[],
 
 /* Free up resources associated with sensors */
 int release_energy_sensors(vexpress_sensor_t* sensor_descriptors[],
-							  int nr_sensors)
+                           int nr_sensors)
 {
 	if(apbregs_base_ptr) {
 		int i;
@@ -144,6 +148,50 @@ int release_energy_sensors(vexpress_sensor_t* sensor_descriptors[],
 	return 0;
 }
 
+#elif defined(CONFIG_SMART_POWER)
+#include <pmc/smart_power.h>
+/*
+ * For the Odroid Smart Power, there is just one "sensor"
+ * and we don't really need a descriptor.
+ */
+struct vexpress_sensor {
+	char foo;
+};
+
+static vexpress_sensor_t energy_sensors[VEXPRESS_NR_SENSORS]= {
+	{.foo=1},
+};
+
+
+/* Initialize sensor connection */
+int initialize_energy_sensors(vexpress_sensor_t* sensor_descriptors[],
+                              const char* description[],
+                              int* nr_sensors)
+{
+	int retval=0;
+	if ((retval=spower_start_measurements()))
+		return retval;
+
+	sensor_descriptors[0]=&energy_sensors[0];
+	description[0]=	"energy_uj";
+	(*nr_sensors)=1;
+	return retval;
+}
+
+/* Free up resources associated with sensors */
+int release_energy_sensors(vexpress_sensor_t* sensor_descriptors[],
+                           int nr_sensors)
+{
+	spower_stop_measurements();
+	return 0;
+}
+
+/* Read the current value of a specific sensor */
+int raw_read_energy_sensor(vexpress_sensor_t* sensor, uint64_t* value)
+{
+	(*value)=spower_get_energy_count();
+	return 0;
+}
 
 #else
 /** Code path for the ARM Coretile Express TC2 board **/
@@ -153,6 +201,7 @@ int release_energy_sensors(vexpress_sensor_t* sensor_descriptors[],
 #include <linux/hwmon-sysfs.h>
 #include <linux/vexpress.h>
 #include <linux/pmctrack.h>
+#include <linux/regmap.h>
 
 /* "Pasted" necessary structures for the HWMON-PMCTrack bridge to work */
 
@@ -163,7 +212,7 @@ struct hwmon_device {
 #define to_hwmon_device(d) container_of(d, struct hwmon_device, dev)
 #define to_device_attr(attrib) container_of(attrib, struct device_attribute, attr)
 
-/* 
+/*
  * Structures found in the drivers/hwmon/vexpress.c
  * (HWmon driver for vexpress sensors)
  */
@@ -302,8 +351,9 @@ put_device_now:
 
 /* Initialize sensor connection */
 int initialize_energy_sensors(vexpress_sensor_t* sensor_descriptors[],
-							  const char* description[],
-							  int* nr_sensors){
+                              const char* description[],
+                              int* nr_sensors)
+{
 	int nr_sensors_detected;
 	int i=0;
 	int retval=0;
@@ -323,7 +373,7 @@ int initialize_energy_sensors(vexpress_sensor_t* sensor_descriptors[],
 	}
 
 
-	for (i=0;i<VEXPRESS_NR_SENSORS;i++)
+	for (i=0; i<VEXPRESS_NR_SENSORS; i++)
 		sensor_descriptors[i]=&energy_sensors[i];
 
 	description[0]="energy_big";
@@ -335,7 +385,7 @@ int initialize_energy_sensors(vexpress_sensor_t* sensor_descriptors[],
 
 /* Free up resources associated with sensors */
 int release_energy_sensors(vexpress_sensor_t* sensor_descriptors[],
-							  int nr_sensors)
+                           int nr_sensors)
 {
 	int i=0;
 
@@ -349,15 +399,16 @@ int release_energy_sensors(vexpress_sensor_t* sensor_descriptors[],
 
 #endif
 
-/* 
+/*
  * Retrieve energy consumption readings from the sensors.
- * The reading is provided with respect to the last time 
+ * The reading is provided with respect to the last time
  * sensors were checked (difference only).
  */
 void do_read_energy_sensors(vexpress_sensor_t* sensor_descriptors[],
-							vexpress_sensors_count_t* sensor_counts,
-							int nr_sensors,
-						 	int acum){
+                            vexpress_sensors_count_t* sensor_counts,
+                            int nr_sensors,
+                            int acum)
+{
 	int i=0;
 	uint64_t delta;
 

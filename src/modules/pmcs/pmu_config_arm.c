@@ -5,14 +5,14 @@
  * 	ARM Cortex 32-bit processors
  *
  *  Copyright (c) 2015 Juan Carlos Saez <jcsaezal@ucm.es>
- * 
+ *
  *  This code is licensed under the GNU GPL v2.
  */
- /*
-  * The interrupt-handling code found in this file is based 
-  * heavily on that of the arch/arm/kernel/perf_event_cpu.c file 
-  * of the vanilla Linux kernel v3.17.3.
-  */
+/*
+ * The interrupt-handling code found in this file is based
+ * heavily on that of the arch/arm/kernel/perf_event_cpu.c file
+ * of the vanilla Linux kernel v3.17.3.
+ */
 #include <pmc/pmu_config.h>
 #include <linux/irq.h>
 #include <linux/printk.h>
@@ -26,12 +26,6 @@
 
 typedef unsigned int u32;
 
-/*
- * Per-CPU structure to aid in the 
- * implementation of EBS monitoring mode
- */
-DECLARE_PER_CPU(struct cpu_pmc_buffer, pmc_buffer);
-
 /* Variables to aid in detecting the various PMUs in the system */
 int coretype_cpu_static[NR_CPUS];
 int* coretype_cpu=coretype_cpu_static;
@@ -41,16 +35,16 @@ int  nr_core_types=1;
 pmu_props_t pmu_props_cputype[PMC_CORE_TYPES];
 pmu_props_t pmu_props_cpu[NR_CPUS];
 
-/* 
+/*
  * *** IMPORTANT NOTE:***
- * Define the ENABLE_IRQ macro only if using the ARM Coretile 
+ * Define the ENABLE_IRQ macro only if using the ARM Coretile
  * Express Board (TC2) featuring an ARM big.LITTLE processor
- * with 3 small cores (Cortex A7) and 2 big cores (Cortex A15) 
+ * with 3 small cores (Cortex A7) and 2 big cores (Cortex A15)
  * The interrupt lines listed in this source file correspond
  * to those found in this system.
- * 
- * If using a different ARM 32-bit system, set the right interrupt 
- * lines for that system in the sources or comment the line found below. 
+ *
+ * If using a different ARM 32-bit system, set the right interrupt
+ * lines for that system in the sources or comment the line found below.
  */
 #define ENABLE_IRQ
 static void unregister_overflow_irq(void);
@@ -82,8 +76,8 @@ CPU revision    : 1
 
 */
 
-/* 
- * Code to list and detect fully-supported ARM Cortex processors 
+/*
+ * Code to list and detect fully-supported ARM Cortex processors
  */
 static struct pmctrack_cpu_model cpu_models[]= {
 	{0xc0f,"cortex_a15"},{0xc07,"cortex_a7"},
@@ -113,7 +107,7 @@ static void init_pmu_props_cpu(void* dummy)
 
 
 	init_pmcr(&reg);
-	
+
 	props->nr_gp_pmcs=get_bit_field32(&reg.m_n) & ARMV7_PMNC_N_MASK ;
 	props->nr_fixed_pmcs=1; //Cycle counter
 	props->pmc_width=32;
@@ -182,6 +176,15 @@ void init_pmu_props(void)
 	int cpu=0;
 	int model_cpu=0;
 	pmu_props_t* props;
+	int i=0;
+	static pmu_flag_t pmu_flags[]= {
+		{"pmc",8,0},
+		{"usr",1,0},
+		{"os",1,0},
+		{"ebs",32,0},
+		{"coretype",1,1},
+		{NULL,0,0}
+	};
 #define MAX_CORETYPES 2
 	int processor_model[MAX_CORETYPES];
 
@@ -215,6 +218,13 @@ void init_pmu_props(void)
 		cpu=get_any_cpu_coretype(coretype);
 		props=&pmu_props_cpu[cpu];
 		pmu_props_cputype[coretype]=(*props);
+		props=&pmu_props_cputype[coretype];
+		/* Add flags */
+		props->nr_flags=0;
+		for (i=0; pmu_flags[i].name!=NULL; i++) {
+			props->flags[i]=pmu_flags[i];
+			props->nr_flags++;
+		}
 		printk("[PMU coretype%d]\n",coretype);
 		printk(KERN_INFO "Version Id:: 0x%lx\n", props->processor_model);
 		printk("GP Counter per Logical Processor:: %d\n",props->nr_gp_pmcs);
@@ -329,10 +339,10 @@ unsigned int read_overflow_mask(void)
 	return armv7_pmnc_getovf_flags();
 }
 
-/* 
+/*
  *  Interrupt handler to deal with PMC overflow interrupts
- *  (This function is a variant of the armv7pmu_handle_irq() 
- * 	 function found in the arch/arm/kernel/perf_event_cpu.c 
+ *  (This function is a variant of the armv7pmu_handle_irq()
+ * 	 function found in the arch/arm/kernel/perf_event_cpu.c
  *	 file of the Linux kernel)
  */
 static irqreturn_t armv7pmu_handle_irq(int irq_num, void *dev)
@@ -376,7 +386,7 @@ static irqreturn_t armv7pmu_handle_irq(int irq_num, void *dev)
 
 	/* Process Counter overflow (Architecture-independent code) */
 	if (overflow_mask)
-		do_count_on_overflow(regs, &__get_cpu_var(pmc_buffer),overflow_mask);
+		do_count_on_overflow(regs,overflow_mask);
 
 	return IRQ_HANDLED;
 }
@@ -396,11 +406,11 @@ static int setup_overflow_irq(void)
 +			compatible = "arm,cortex-a15-pmu";
 +			interrupt-parent = <&combiner>;
 +			interrupts = <1 2>, <7 0>, <16 6>, <19 2>;
-+	
++
 +			compatible = "arm,cortex-a7-pmu";
 +			interrupt-parent = <&gic>;
 +			interrupts = <0 192 4>, <0 193 4>, <0 194 4>, <0 195 4>;
-+	
++
 +	};
 +
 */
@@ -414,13 +424,13 @@ static int setup_overflow_irq(void)
 #ifdef ODROID
 #define VEXPRESS_NR_IRQS 8
 /* Interrupt lines for the odroid-xu3 board */
-int vexpress_fixed_irqs[VEXPRESS_NR_IRQS]={
+int vexpress_fixed_irqs[VEXPRESS_NR_IRQS]= {
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(3,14,0)
-192,193,194,195,266,312,390,410
+	192,193,194,195,266,312,390,410
 #elif LINUX_VERSION_CODE <= KERNEL_VERSION(4,2,0)
-192,193,194,195,279,280,281,282
+	192,193,194,195,279,280,281,282
 #else
-192,134,135,136,137,193,194,195
+	192,134,135,136,137,193,194,195
 #endif
 };
 #else
@@ -430,10 +440,10 @@ int vexpress_fixed_irqs[VEXPRESS_NR_IRQS]= {160,161,162,100,101};
 #endif
 cpumask_t pmu_active_irqs;
 
-/* 
+/*
  *  Install interrupt handlers to react to PMC overflow interrupts.
- *  (This function is a variant of the cpu_pmu_request_irq() 
- * 	 function found in the arch/arm/kernel/perf_event_cpu.c 
+ *  (This function is a variant of the cpu_pmu_request_irq()
+ * 	 function found in the arch/arm/kernel/perf_event_cpu.c
  *	 file of the Linux kernel)
  */
 static int setup_overflow_irq(void)
@@ -473,17 +483,17 @@ static int setup_overflow_irq(void)
 	return 0;
 }
 
-/* 
+/*
  *  Remove interrupt handlers for PMC overflow interrupts.
- *  (This function is a variant of the cpu_pmu_free_irq() 
- * 	 function found in the arch/arm/kernel/perf_event_cpu.c 
+ *  (This function is a variant of the cpu_pmu_free_irq()
+ * 	 function found in the arch/arm/kernel/perf_event_cpu.c
  *	 file of the Linux kernel)
  */
 static void unregister_overflow_irq(void)
 {
 	int i, irq, irqs;
 
-	irqs = VEXPRESS_NR_IRQS; 
+	irqs = VEXPRESS_NR_IRQS;
 
 	for (i = 0; i < irqs; ++i) {
 		if (!cpumask_test_and_clear_cpu(i, &pmu_active_irqs))
@@ -496,8 +506,8 @@ static void unregister_overflow_irq(void)
 
 #endif
 
-/* 
- * Transform an array of platform-agnostic PMC counter configurations (pmc_cfg) 
+/*
+ * Transform an array of platform-agnostic PMC counter configurations (pmc_cfg)
  * into a low level structure that holds the necessary data to configure hardware counters.
  */
 void do_setup_pmcs(pmc_usrcfg_t* pmc_cfg, int used_pmcs_msk,core_experiment_t* exp,int cpu, int exp_idx)
@@ -568,7 +578,7 @@ void do_setup_pmcs(pmc_usrcfg_t* pmc_cfg, int used_pmcs_msk,core_experiment_t* e
 
 				init_simple_exp (se, 	/* Simple exp */
 				                 i, 	/* Assigned PMC ID */
-				                 evtsel.m_value, 
+				                 evtsel.m_value,
 				                 reset_value
 				                );
 			}
@@ -581,7 +591,7 @@ void do_setup_pmcs(pmc_usrcfg_t* pmc_cfg, int used_pmcs_msk,core_experiment_t* e
 }
 
 /*
- * Fill the various fields in a pmc_cfg structure based on a PMC configuration string specified in raw format 
+ * Fill the various fields in a pmc_cfg structure based on a PMC configuration string specified in raw format
  * (e.g., pmc0=0xc0,pmc1=0x76,...).
  */
 int parse_pmcs_strconfig(const char *buf,
@@ -598,7 +608,7 @@ int parse_pmcs_strconfig(const char *buf,
 	int idx, val;
 	char cpbuf[PMCTRACK_MAX_LEN_RAW_PMC_STRING];
 	char* strconfig=cpbuf;
-        char* flag;
+	char* flag;
 	int curr_flag=0;
 	unsigned int used_pmcs=0; /* Mask to indicate which counters are actually used*/
 	int error=0;
@@ -607,10 +617,10 @@ int parse_pmcs_strconfig(const char *buf,
 	unsigned int pmc_count=0;
 	int coretype_selected=-1;	/* No coretype for now */
 
-	/* 
+	/*
 	 * Create a copy of the buf string since strsep()
 	 * actually modifies the string by replacing the delimeter
-	 * with the null byte ('\0') 
+	 * with the null byte ('\0')
 	 */
 	strncpy(strconfig,buf,PMCTRACK_MAX_LEN_RAW_PMC_STRING);
 	strconfig[PMCTRACK_MAX_LEN_RAW_PMC_STRING-1]='\0';
@@ -692,9 +702,9 @@ int parse_pmcs_strconfig(const char *buf,
 	}
 }
 
-/* 
- * Perform a default initialization of all performance monitoring counters 
- * in the current CPU. 
+/*
+ * Perform a default initialization of all performance monitoring counters
+ * in the current CPU.
  */
 void mc_clear_all_platform_counters(pmu_props_t* props_cpu)
 {

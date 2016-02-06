@@ -110,8 +110,9 @@ void insert_cbuffer_t ( cbuffer_t* cbuffer, char new_item )
 }
 
 /* Inserts nr_items into the buffer */
-void insert_items_cbuffer_t ( cbuffer_t* cbuffer, const char* items, int nr_items)
+void insert_items_cbuffer_t ( cbuffer_t* cbuffer, const void* vitems, int nr_items)
 {
+	char* items=(char*)vitems;
 	int nr_items_left=nr_items;
 	int items_copied;
 	int nr_gaps=cbuffer->max_size-cbuffer->size;
@@ -147,8 +148,9 @@ void insert_items_cbuffer_t ( cbuffer_t* cbuffer, const char* items, int nr_item
 }
 
 /* Removes nr_items from the buffer and returns a copy of them */
-void remove_items_cbuffer_t ( cbuffer_t* cbuffer, char* items, int nr_items)
+void remove_items_cbuffer_t ( cbuffer_t* cbuffer, void* vitems, int nr_items)
 {
+	char* items=(char*)vitems;
 	int nr_items_left=nr_items;
 	int items_copied;
 
@@ -176,7 +178,7 @@ void remove_items_cbuffer_t ( cbuffer_t* cbuffer, char* items, int nr_items)
 	cbuffer->size-=nr_items;
 }
 
-int remove_cbuffer_t_batch(cbuffer_t* cbuffer, char* items, int max_nr_items)
+int remove_cbuffer_t_batch(cbuffer_t* cbuffer, void* items, int max_nr_items)
 {
 	/* Check the maximum number of bytes we can actually retrieve */
 	int nr_items=max_nr_items>cbuffer->size?cbuffer->size:max_nr_items;
@@ -203,6 +205,13 @@ char remove_cbuffer_t ( cbuffer_t* cbuffer)
 	return ret;
 }
 
+/* Removes all items in the buffer */
+void clear_cbuffer_t (cbuffer_t* cbuffer)
+{
+	cbuffer->size = 0;
+	cbuffer->head = 0;
+}
+
 /* Returns the first element in the buffer */
 char* head_cbuffer_t ( cbuffer_t* cbuffer )
 {
@@ -213,5 +222,35 @@ char* head_cbuffer_t ( cbuffer_t* cbuffer )
 	}
 }
 
+/* Build iterator */
+iterator_cbuffer_t get_iterator_cbuffer_t(cbuffer_t* cbuf,int chunk_size)
+{
+	iterator_cbuffer_t it;
 
+	it.cbuf=cbuf;
+	it.chunk_size=chunk_size;
+	it.cur_item=0;
+	it.cur_pos=cbuf->head;
+
+	return it;
+}
+
+/* Returns a pointer to the next item (NULL if the last one) */
+void* iterator_next_cbuffer_t( iterator_cbuffer_t* it)
+{
+	cbuffer_t* cbuf=it->cbuf;
+	void* ptr;
+
+	if (it->cur_item>=cbuf->size)
+		return NULL;
+
+	ptr=&cbuf->data[it->cur_pos];
+	it->cur_item+=it->chunk_size;
+	it->cur_pos+=it->chunk_size;
+
+	if (it->cur_pos>=cbuf->max_size)
+		it->cur_pos-=cbuf->max_size;
+
+	return ptr;
+}
 

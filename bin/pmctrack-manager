@@ -1,6 +1,6 @@
 #!/bin/bash
 action=$1
-available_actions=(build version clean build-phi build-user-tools)
+available_actions=(build version clean build-phi build-user-tools build-android-odroid)
 
 if [ "$action" == "" ]; then
 	action_str=$( echo ${available_actions[*]} | tr ' ' '|' )
@@ -520,6 +520,139 @@ function do_build_phi(){
 	echo "*** BUILD PROCESS COMPLETED SUCCESSFULLY ***"
 }
 
+function do_build_android_odroid(){
+	local bitw=64
+	local vendor_id=0
+	local hz_setting=200
+	local vendor_str="ARM"
+	local separator="============================================"
+	local cross_compile="$1"
+	local kernel_tree="$2"
+
+	## Not enough arguments?
+	if [ "$kernel_tree" == "" ]; then
+		echo "Usage: pmctrack-manager build-phi <cross_compile> <kernel-sources-dir>" 
+		exit 1			
+	fi
+
+	if [ ! -d "${kernel_tree}" ]; then
+		echo "Linux kernel sources for Android not found: ${kernel_tree} " 
+		exit 1			
+	fi
+
+	echo "**** Target system information ***"
+	printf "Processor_vendor=${vendor_str}"
+	printf "\n"
+	echo "Kernel_HZ=${hz_setting}"
+	echo "Processor_bitwidth=${bitw}"
+	echo "Cross_compiler=${cross_compile}gcc"
+	echo "*******************************************************************************************"
+	printf "Press ENTER to start PMCTrack's cross-compilation for Android on the Odroid-XU4 Board ..."
+	read
+	echo "*******************************************************************************************"
+
+	oldp=$PWD
+	
+	## Go to module directory
+	module=odroid-xu
+	modname="mchw_odroid_xu.ko"
+	dir_module="${PMCTRACK_ROOT}/src/modules/pmcs/${module}"
+
+	if [ ! -d ${dir_module} ]; then
+		echo "Module directory not found in the source tree: ${dir_module}"
+		exit 1
+	fi
+
+	## Go to module directory
+	cd ${dir_module}
+
+	## If the ko already exists (clean it)
+	if [ -f ${modname} ]; then
+		echo "Cleaning existing object files for ${modname} module "
+		make -f Makefile.android XCOMP=${cross_compile} KERNEL_TREE=${kernel_tree} clean
+		echo "$separator"
+	fi
+
+	echo "Building kernel module $module...."
+	echo "$separator"
+
+	make -f Makefile.android XCOMP=${cross_compile} KERNEL_TREE=${kernel_tree} 2>&1
+
+	if [ $? -ne 0 ] ; then
+		printf "Error building ${modname}\nIncomplete build!!\n"
+		exit 1
+	fi
+	echo "Done!!"
+	echo "$separator"
+
+	cd $oldp
+
+## Build libpmctrack
+	builddir="${PMCTRACK_ROOT}/src/lib/libpmctrack"
+
+	if [ ! -d ${builddir} ]; then
+		echo "libpmctrack source directory not found in the source tree: ${builddir}"
+		exit 1
+	fi
+
+	cd $builddir
+
+	## If the library files already exist (clean it)
+	if [ -f libpmctrack.so ] || [ -f libpmctrack.a ]; then
+		echo "Cleaning up existing object files for libpmctrack"
+		make clean
+		echo "$separator"		
+	fi
+
+	echo "Building libpmctrack ...."
+	echo "$separator"
+
+	CC=${cross_compile}gcc make ARCH=-DHZ=${hz_setting} 2>&1
+
+	if [ $? -ne 0 ] ; then
+		printf 'Error building libpmctrack\nIncomplete build!!\n'
+		exit 1
+	fi
+	echo "Done!!"
+	echo "$separator"
+## Build pmc-events and pmctrack
+
+	for command in pmc-events pmctrack
+	do
+		builddir="${PMCTRACK_ROOT}/src/cmdtools/${command}"
+		execfile="${PMCTRACK_ROOT}/bin/${command}"
+		if [ ! -d ${builddir} ]; then
+			echo "${command} source directory not found in the source tree: ${builddir}"
+			exit 1
+		fi
+
+		cd $builddir
+
+		## If the library files already exist (clean it)
+		if [ -f ${execfile} ] ; then
+			echo "Cleaning up existing object files for ${command}"
+			make clean
+			echo "$separator"
+		fi
+
+		echo "Building ${command} ...."
+		echo "$separator"
+
+		CC=${cross_compile}gcc make 2>&1
+
+		if [ $? -ne 0 ] ; then
+			printf 'Error building ${command}\nIncomplete build!!\n'
+			exit 1
+		fi
+		echo "Done!!"
+		echo "$separator"
+	done
+
+	echo "*** BUILD PROCESS COMPLETED SUCCESSFULLY ***"
+}
+
+
+
 case $action in 
 	version) do_version
 			 exit 0
@@ -536,7 +669,10 @@ case $action in
 	build-user-tools) do_build 1 | tee build_user.log
 			exit 0
 			;;
-	*)	echo "Unrecognized action :: $action" >&2
+	build-android-odroid*) do_build_android_odroid $2 $3
+			exit 0	
+			;;
+			*)	echo "Unrecognized action :: $action" >&2
 		exit 1
 		;;		 
 esac 

@@ -2,7 +2,7 @@
  *  monitoring_mod.c
  *
  *  Copyright (c) 2015 Juan Carlos Saez <jcsaezal@ucm.es>
- * 
+ *
  *  This code is licensed under the GNU GPL v2.
  */
 
@@ -14,6 +14,7 @@
 #include <linux/vmalloc.h>
 #include <linux/semaphore.h>
 #include <linux/module.h>
+#include <pmc/smart_power.h>
 
 #ifdef DEBUG
 static const char* sample_type_to_str[PMC_NR_SAMPLE_TYPES]= {"tick","ebs","exit","migration"};
@@ -154,7 +155,7 @@ static int dummy_on_fork(unsigned long clone_flags, pmon_prof_t* prof)
 	return 0;
 }
 
-static void dummy_on_exec(pmon_prof_t* prof){ }
+static void dummy_on_exec(pmon_prof_t* prof) { }
 
 static int dummy_on_new_sample(pmon_prof_t* prof,int cpu,pmc_sample_t* sample,int flags,void* data)
 {
@@ -239,10 +240,10 @@ static struct {
 
 /* Make a given monitoring module the default one */
 int activate_monitoring_module(int module_id);
-/* 
+/*
  * Reload a monitoring module.
- * This function may be necessary in the event the 
- * system topology has changed (CPUs enabled/disabled) 
+ * This function may be necessary in the event the
+ * system topology has changed (CPUs enabled/disabled)
  * and a given monitoring module must be notified of that change.
  */
 int reinitialize_monitoring_module(int module_id);
@@ -261,7 +262,7 @@ static const struct file_operations proc_mm_manager_fops = {
 
 /*
  * This is the place to include external declarations
- * for the various monitoring modules 
+ * for the various monitoring modules
  * available in PMCTrack
  */
 
@@ -278,7 +279,9 @@ extern monitoring_module_t ipc_sampling_sf_mm;
 extern monitoring_module_t vexpress_sensors_mm;
 #endif
 #endif
-
+#ifdef CONFIG_SMART_POWER
+extern monitoring_module_t spower_mm;
+#endif
 
 /* Init monitoring module manager */
 int init_mm_manager(struct proc_dir_entry* pmc_dir)
@@ -308,13 +311,21 @@ int init_mm_manager(struct proc_dir_entry* pmc_dir)
 		return ret;
 	}
 
-/*
- * This is the place where the various
- * monitoring modules available in PMCTrack
- * are loaded (with load_monitoring_module())
- */
+#ifdef CONFIG_SMART_POWER
+	if ((ret=spower_register_driver())) {
+		remove_proc_entry("mm_manager", pmc_dir);
+		printk(KERN_INFO "Couldn't register Odroid Smart Power USB driver\n");
+		return ret;
+	}
+#endif
 
-/** @@ Architecture-specific monitoring modules @@ **/
+	/*
+	 * This is the place where the various
+	 * monitoring modules available in PMCTrack
+	 * are loaded (with load_monitoring_module())
+	 */
+
+	/** @@ Architecture-specific monitoring modules @@ **/
 #if defined(CONFIG_PMC_CORE_2_DUO) || defined(CONFIG_PMC_AMD)
 	load_monitoring_module(&ipc_sampling_sf_mm);
 #elif defined(CONFIG_PMC_CORE_I7)
@@ -327,14 +338,17 @@ int init_mm_manager(struct proc_dir_entry* pmc_dir)
 	load_monitoring_module(&vexpress_sensors_mm);
 #endif
 #endif
+#ifdef CONFIG_SMART_POWER
+	load_monitoring_module(&spower_mm);
+#endif
 
 	return 0;
 }
 
-/* 
+/*
  * Free up resources allocated by the monitoring module manager.
  * This is a very dangerous operation: we must first unload estimation modules
- * to make sure nothing bad happens 
+ * to make sure nothing bad happens
  */
 void destroy_mm_manager(struct proc_dir_entry* pmc_dir)
 {
@@ -343,6 +357,9 @@ void destroy_mm_manager(struct proc_dir_entry* pmc_dir)
 		mm_manager.cur_module->disable_module();
 		mm_manager.cur_module=NULL;
 	}
+#ifdef CONFIG_SMART_POWER
+	spower_unregister_driver();
+#endif
 	remove_proc_entry("mm_manager", pmc_dir);
 }
 
@@ -542,6 +559,12 @@ int current_monitoring_module_security_id(void)
 		return SECURITY_IDS_OFFSET+mm_manager.cur_module->id;
 }
 
+/* Get pointer to descriptor to current monitoring module */
+monitoring_module_t* current_monitoring_module(void)
+{
+	return mm_manager.cur_module;
+}
+
 /* Load a specific monitoring module */
 int load_monitoring_module(monitoring_module_t* module)
 {
@@ -591,9 +614,29 @@ int unload_monitoring_module(int module_id)
 	}
 }
 
+static inline int mod_task_is_curr(pmon_prof_t* prof)
+{
+	return prof->task_mod!=NULL && mm_manager.cur_module==prof->task_mod;
+}
+
+static inline int is_valid_monitoring_module(monitoring_module_t* module)
+{
+	monitoring_module_t* cur_entry=NULL;
+
+	if (!module)
+		return 0;
+
+	list_for_each_entry(cur_entry, &mm_manager.modules, links) {
+		if (cur_entry==module)
+			return 1;
+	}
+
+	return 0;
+}
+
 /**
- * Wrapper functions for every operation 
- * in the monitoring_module_t interface 
+ * Wrapper functions for every operation
+ * in the monitoring_module_t interface
  */
 
 int mm_on_read_config(char* str, unsigned int len)
@@ -620,50 +663,57 @@ int mm_on_fork(unsigned long clone_flags, pmon_prof_t* prof)
 
 void mm_on_exec(pmon_prof_t* prof)
 {
-	if (mm_manager.cur_module && mm_manager.cur_module->on_exec)
+	if ( mod_task_is_curr(prof) && mm_manager.cur_module->on_exec)
 		mm_manager.cur_module->on_exec(prof);
 }
 
 int mm_on_new_sample(pmon_prof_t* prof,int cpu,pmc_sample_t* sample,int flags,void* data)
 {
-	if (mm_manager.cur_module && mm_manager.cur_module->on_new_sample)
+	if ( mod_task_is_curr(prof) && mm_manager.cur_module->on_new_sample)
 		return mm_manager.cur_module->on_new_sample(prof,cpu,sample,flags,data);
 	return 0;
 }
 
 void mm_on_migrate(pmon_prof_t* prof, int prev_cpu, int new_cpu)
 {
-	if (mm_manager.cur_module && mm_manager.cur_module->on_migrate)
+	if ( mod_task_is_curr(prof) && mm_manager.cur_module->on_migrate)
 		mm_manager.cur_module->on_migrate(prof,prev_cpu,new_cpu);
 }
 
 void mm_on_exit(pmon_prof_t* prof)
 {
-	if (mm_manager.cur_module && mm_manager.cur_module->on_exit)
+	if ( mod_task_is_curr(prof) && mm_manager.cur_module->on_exit)
 		return mm_manager.cur_module->on_exit(prof);
 }
 
 void mm_on_free_task(pmon_prof_t* prof)
 {
-	if (mm_manager.cur_module && mm_manager.cur_module->on_free_task)
+	if ( mod_task_is_curr(prof) && mm_manager.cur_module->on_free_task)
 		mm_manager.cur_module->on_free_task(prof);
+	else if (prof && prof->monitoring_mod_priv_data)	{
+		/* Free up memory if the monitoring module
+			was changed in between */
+		monitoring_module_t* task_mod=prof->task_mod;
+		if (is_valid_monitoring_module(task_mod) && task_mod->on_free_task)
+			task_mod->on_free_task(prof);
+	}
 }
 
 void mm_on_switch_in(pmon_prof_t* prof)
 {
-	if (mm_manager.cur_module && mm_manager.cur_module->on_switch_in)
+	if ( mod_task_is_curr(prof) && mm_manager.cur_module->on_switch_in)
 		mm_manager.cur_module->on_switch_in(prof);
 }
 
 void mm_on_switch_out(pmon_prof_t* prof)
 {
-	if (mm_manager.cur_module && mm_manager.cur_module->on_switch_out)
+	if ( mod_task_is_curr(prof) && mm_manager.cur_module->on_switch_out)
 		mm_manager.cur_module->on_switch_out(prof);
 }
 
 int mm_get_current_metric_value(pmon_prof_t* prof, int key, uint64_t* value)
 {
-	if (mm_manager.cur_module && mm_manager.cur_module->get_current_metric_value)
+	if ( mod_task_is_curr(prof) && mm_manager.cur_module->get_current_metric_value)
 		return mm_manager.cur_module->get_current_metric_value(prof,key,value);
 	else
 		return -1;
