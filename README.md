@@ -146,10 +146,6 @@ Now kernel-level and user-level components can be easily built with the `pmctrac
 
 The `pmctrack-manager` retrieves key information from the system and builds the command-line tools as well as the different flavors of the PMCTrack kernel module compatible with the current platform. If the build fails, build errors can be found in the `build.log` file created in the current directory.
 
-For a successful build of PMCTrack kernel module on Odroid XU3/XU4 boards, the build script must be invoked as follows:
-	
-	$ ODROID=yes pmctrack-manager build
-
 
 ## Building PMCTrack from source for the Intel Xeon Phi
 
