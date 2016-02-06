@@ -551,7 +551,7 @@ int pmct_open_monitor_entry(void)
 {
 	int fd = open(pmc_monitor_entry, O_RDWR);
 	if(fd == -1) {
-		warnx("Error de apertura de %s\n",pmc_monitor_entry);
+		warnx("can't open %s\n",pmc_monitor_entry);
 	}
 	return fd;
 }
@@ -561,22 +561,49 @@ int pmct_open_monitor_entry(void)
  * Upon invocation to this function the monitor process will
  * be able to retrieve PMC and/or virtual-counter samples
  * using a special file exported by PMCTrack's kernel module
+ *
+ * If config_pmcs !=0, the attached process will inherit PMC and
+ * virtual counter configuration from the parent process
  */
-int pmct_attach_process (pid_t pid)
+int pmct_attach_process (pid_t pid, int config_pmcs)
 {
-	char cad[30];
-	int tam;
+	char str[30];
+	int siz;
 
 	int fd = open(pmc_monitor_entry, O_WRONLY);
 	if(fd == -1) {
-		warnx("Error de apertura de %s\n",pmc_monitor_entry);
-		return(-1);
+		warnx("can't open %s\n",pmc_monitor_entry);
+		return -1;
 	}
-	tam=sprintf(cad, "pid_monitor %d", pid);
-	if(write(fd, cad, tam+1) < 0) {
-		warnx("Error de escritura en %s\n",pmc_monitor_entry);
-		return(-1);
+	if (config_pmcs)
+		siz=sprintf(str, "pid_attach %d", pid);
+ 	else
+		siz=sprintf(str, "pid_monitor %d", pid);
+
+	if(write(fd, str, siz+1) < 0) 
+		return -1;
+	
+	close(fd);
+	return 0;
+}
+
+/*
+ * Detach process from monitor 
+ */
+int pmct_detach_process (pid_t pid){
+	char str[30];
+	int siz;
+
+	int fd = open(pmc_monitor_entry, O_WRONLY);
+	if(fd == -1) {
+		warnx("can't open %s\n",pmc_monitor_entry);
+		return -1;
 	}
+	siz=sprintf(str, "pid_detach %d", pid);
+
+	if(write(fd, str, siz+1) < 0) 
+		return -1;
+	
 	close(fd);
 	return 0;
 }
@@ -592,7 +619,8 @@ int pmct_read_samples (int fd, pmc_sample_t* samples, int max_samples)
 	int max_buffer_size=sizeof(pmc_sample_t)*max_samples;
 
 	if((nbytes = read(fd, samples, max_buffer_size)) < 0) {
-		warnx("Error de lectura en %s\n",pmc_monitor_entry);
+		if (errno!=EINTR)
+			warnx("Can't read from %s\n",pmc_monitor_entry);
 		return -1;
 	}
 

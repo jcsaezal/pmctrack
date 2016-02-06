@@ -2,7 +2,7 @@
  *  include/pmc/pmc_user.h
  *
  *  Copyright (c) 2015 Juan Carlos Saez <jcsaezal@ucm.es>
- * 
+ *
  *  This code is licensed under the GNU GPL v2.
  */
 

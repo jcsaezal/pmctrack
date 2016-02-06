@@ -5,12 +5,12 @@
  * 	the Intel Xeon Phi Coprocessor
  *
  *  Copyright (c) 2015 Juan Carlos Saez <jcsaezal@ucm.es>
- * 
+ *
  *  This code is licensed under the GNU GPL v2.
  */
- /*
-  * Part of this code is based on oprofile's kernel module.
-  */
+/*
+ * Part of this code is based on oprofile's kernel module.
+ */
 
 #include <pmc/pmu_config.h>
 #include <asm/nmi.h>
@@ -23,12 +23,6 @@
 static DEFINE_PER_CPU(unsigned long, saved_lvtpc);
 static int nmi_enabled;  /* Interrupts enabled */
 static int ctr_running;  /* Counters configured */
-
-/*
- * Per-CPU structure to aid in the 
- * implementation of EBS monitoring mode
- */
-DECLARE_PER_CPU(struct cpu_pmc_buffer, pmc_buffer);
 
 /* Variables to aid in detecting the various PMUs in the system */
 int coretype_cpu_static[NR_CPUS];
@@ -89,6 +83,18 @@ void init_pmu_props(void)
 	int cpu=0;
 	int model_cpu=0;
 	pmu_props_t* props;
+	static pmu_flag_t pmu_flags[]= {
+		{"pmc",8,0},
+		{"usr",1,0},
+		{"os",1,0},
+		{"umask",8,0},
+		{"cmask",8,0},
+		{"edge",1,0},
+		{"inv",1,0},
+		{"ebs",32,0},
+		{"coretype",1,1},
+		{NULL,0,0}
+	};
 #if !defined(SCHED_AMP) && !defined(PMCTRACK_QUICKIA)
 #define MAX_CORETYPES 2
 	int processor_model[MAX_CORETYPES];
@@ -144,6 +150,13 @@ void init_pmu_props(void)
 		cpu=get_any_cpu_coretype(coretype);
 		props=&pmu_props_cpu[cpu];
 		pmu_props_cputype[coretype]=(*props);
+		props=&pmu_props_cputype[coretype];
+		/* Add flags */
+		props->nr_flags=0;
+		for (i=0; pmu_flags[i].name!=NULL; i++) {
+			props->flags[i]=pmu_flags[i];
+			props->nr_flags++;
+		}
 		printk("[PMU coretype%d]\n",coretype);
 		printk(KERN_INFO "Version Id:: 0x%lx\n", props->processor_model);
 		printk("GP Counter per Logical Processor:: %d\n",props->nr_gp_pmcs);
@@ -153,8 +166,8 @@ void init_pmu_props(void)
 	printk("***************\n");
 }
 
-/* 
- * Transform an array of platform-agnostic PMC counter configurations (pmc_cfg) 
+/*
+ * Transform an array of platform-agnostic PMC counter configurations (pmc_cfg)
  * into a low level structure that holds the necessary data to configure hardware counters.
  */
 void do_setup_pmcs(pmc_usrcfg_t* pmc_cfg, int used_pmcs_msk,core_experiment_t* exp,int cpu, int exp_idx)
@@ -188,10 +201,10 @@ void do_setup_pmcs(pmc_usrcfg_t* pmc_cfg, int used_pmcs_msk,core_experiment_t* e
 			set_bit_field(&evtsel.m_en,1);
 			set_bit_field(&evtsel.m_inv, pmc_cfg[i].cfg_inv);
 			set_bit_field(&evtsel.m_cmask, pmc_cfg[i].cfg_cmask);
+			set_bit_field(&evtsel.m_int, 1);
 
 			/* Set up int just in case */
 			if (pmc_cfg[i].cfg_ebs_mode) {
-				set_bit_field(&evtsel.m_int, 1);
 				set_bit_field(&evtsel.m_os, 0);	/* Force os flag to zero in this case */
 				reset_value= ((-pmc_cfg[i].cfg_reset_value) & props_cpu->pmc_width_mask);
 				/* Set EBS idx */
@@ -212,18 +225,18 @@ void do_setup_pmcs(pmc_usrcfg_t* pmc_cfg, int used_pmcs_msk,core_experiment_t* e
 			                 evtsel.m_value,
 			                 reset_value
 			                );
-		
-        	/* Add metainfo in the core experiment */
+
+			/* Add metainfo in the core experiment */
 			exp->log_to_phys[exp->size-1]=i;
 			exp->phys_to_log[i]=exp->size-1;
-        }
+		}
 	}
 }
 
 
 
 /*
- * Fill the various fields in a pmc_cfg structure based on a PMC configuration string specified in raw format 
+ * Fill the various fields in a pmc_cfg structure based on a PMC configuration string specified in raw format
  * (e.g., pmc0=0xc0,pmc1=0x76,...).
  */
 int parse_pmcs_strconfig(const char *buf,
@@ -248,10 +261,10 @@ int parse_pmcs_strconfig(const char *buf,
 	unsigned int pmc_count=0;
 	int coretype_selected=-1;	/* No coretype for now */
 
-	/* 
+	/*
 	 * Create a copy of the buf string since strsep()
 	 * actually modifies the string by replacing the delimeter
-	 * with the null byte ('\0') 
+	 * with the null byte ('\0')
 	 */
 	strncpy(strconfig,buf,PMCTRACK_MAX_LEN_RAW_PMC_STRING);
 	strconfig[PMCTRACK_MAX_LEN_RAW_PMC_STRING-1]='\0';
@@ -359,9 +372,9 @@ int parse_pmcs_strconfig(const char *buf,
 	}
 }
 
-/* 
- * Perform a default initialization of all performance monitoring counters 
- * in the current CPU. 
+/*
+ * Perform a default initialization of all performance monitoring counters
+ * in the current CPU.
  */
 void mc_clear_all_platform_counters(pmu_props_t* props_cpu)
 {
@@ -381,11 +394,11 @@ void mc_clear_all_platform_counters(pmu_props_t* props_cpu)
 	}
 }
 
-/* 
+/*
  * Generate a summary string with the configuration of a hardware counter (lle)
  * in human-readable format. The string is stored in buf.
  */
- int print_pmc_config(low_level_exp* lle, char* buf)
+int print_pmc_config(low_level_exp* lle, char* buf)
 {
 	struct hw_event* event=&lle->event;
 	_msr_t* msrdesc=NULL;
@@ -462,7 +475,7 @@ int pmc_do_nmi_counter_overflow(struct notifier_block *self,
 
 		/* Process Counter overflow */
 		if (overflow_mask)
-			do_count_on_overflow(args->regs, &__get_cpu_var(pmc_buffer),overflow_mask);
+			do_count_on_overflow(args->regs,overflow_mask);
 
 		/* Write apic again */
 		apic_write(APIC_LVTPC, APIC_DM_NMI);
@@ -494,7 +507,7 @@ static int pmc_do_nmi_counter_overflow(unsigned int cmd, struct pt_regs *regs)
 
 	/* Process Counter overflow */
 	if (overflow_mask)
-		do_count_on_overflow(regs, &__get_cpu_var(pmc_buffer),overflow_mask);
+		do_count_on_overflow(regs,overflow_mask);
 
 	/* Write apic again */
 	apic_write(APIC_LVTPC, APIC_DM_NMI);
@@ -539,10 +552,10 @@ static int pmc_fill_in_addresses(void)
 }
 
 
-/* 
+/*
  * Prepare a CPU to handle interrupts on PMC overflow
  * (Function based on nmi_setup() code in the Linux kernel
- * -  arch/oprofile/nmi_int.c ) 
+ * -  arch/oprofile/nmi_int.c )
  */
 static int pmc_nmi_setup(void)
 {
@@ -581,9 +594,9 @@ out_pmcs_nmi_setup:
 	return err;
 }
 
-/* 
+/*
  * Perform the necessary steps to stop receiving interrupts
- * upon PMC overflow on the current CPU 
+ * upon PMC overflow on the current CPU
  */
 static void pmc_nmi_cpu_shutdown(void *dummy)
 {
@@ -607,7 +620,7 @@ static void pmc_nmi_cpu_shutdown(void *dummy)
 }
 
 /*
- * Disable both performance counters using 
+ * Disable both performance counters using
  * the global control register
  */
 static void disable_counters(void* dummy)

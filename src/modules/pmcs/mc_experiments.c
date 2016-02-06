@@ -2,7 +2,7 @@
  *  mc_experiments.c
  *
  *  Copyright (c) 2015 Juan Carlos Saez <jcsaezal@ucm.es>
- * 
+ *
  *  This code is licensed under the GNU GPL v2.
  */
 
@@ -303,11 +303,10 @@ int get_any_cpu_coretype(int coretype)
 		return i;
 }
 #endif
- 
+
 /* Allocate a buffer with capacity 'size_bytes' */
 pmc_samples_buffer_t* allocate_pmc_samples_buffer(unsigned int size_bytes)
 {
-
 	pmc_samples_buffer_t* pmc_samples_buf=NULL;
 
 	pmc_samples_buf=kmalloc(sizeof(pmc_samples_buffer_t),GFP_KERNEL);

@@ -2,7 +2,7 @@
  *  include/pmc/core2duo/pmc_const.h
  *
  *  Copyright (c) 2015 Juan Carlos Saez <jcsaezal@ucm.es>
- * 
+ *
  *  This code is licensed under the GNU GPL v2.
  */
 

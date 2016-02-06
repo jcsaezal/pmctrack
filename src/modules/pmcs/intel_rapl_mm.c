@@ -1,11 +1,11 @@
 /*
  *  intel_rapl_mm.c
  *
- * 	PMCTrack monitoring module enabling to measure energy consumption 
- *  using Intel RAPL  
- * 
+ * 	PMCTrack monitoring module enabling to measure energy consumption
+ *  using Intel RAPL
+ *
  *  Copyright (c) 2015 Juan Carlos Saez <jcsaezal@ucm.es>
- * 
+ *
  *  This code is licensed under the GNU GPL v2.
  */
 
@@ -51,9 +51,9 @@ static struct pmctrack_cpu_model supported_models[]= {
 	{0,NULL} /* Marker */
 };
 
-/* 
- * Obtain model information from the current processor 
- * and figure out if it supports RAPL or not 
+/*
+ * Obtain model information from the current processor
+ * and figure out if it supports RAPL or not
  */
 static int processor_is_supported(int* processor_model)
 {
@@ -124,7 +124,7 @@ static void intel_rapl_module_counter_usage(monitoring_module_counter_usage_t* u
 	int i;
 	usage->hwpmc_mask=0;
 	usage->nr_virtual_counters=nr_available_power_domains; // Three domains energy usage
-	usage->nr_experiments=0; 
+	usage->nr_experiments=0;
 	for (i=0; i<usage->nr_virtual_counters; i++)
 		usage->vcounter_desc[i]=available_vcounters[i];
 }
@@ -228,11 +228,11 @@ static void intel_rapl_on_exec(pmon_prof_t* prof)
 #endif
 }
 
-/* 
- * Read RAPL energy registers and update cumulative counters in the 
+/*
+ * Read RAPL energy registers and update cumulative counters in the
  * private thread structure.
  */
-static inline void do_read_energy_msrs(intel_rapl_thread_data_t* tdata, int acum)
+static inline void do_read_energy_msrs(intel_rapl_thread_data_t* tdata, int acum, int remote_core)
 {
 	int i=0;
 	uint_t old_value,foo, delta;
@@ -240,12 +240,16 @@ static inline void do_read_energy_msrs(intel_rapl_thread_data_t* tdata, int acum
 	if (!acum) {
 		/* Read energy count from msrs */
 		for (i=0; i<RAPL_NR_DOMAINS; i++) {
+			if (remote_core && i==RAPL_PP0_DOMAIN)
+				continue;
 			if (available_power_domains_mask & (1<<i)) {
 				rdmsr(rapl_msr_regs_domains[i],tdata->cur_domain_value[i],foo);
 			}
 		}
 	} else {
 		for (i=0; i<RAPL_NR_DOMAINS; i++) {
+			if (remote_core && i==RAPL_PP0_DOMAIN)
+				continue;
 			if (available_power_domains_mask & (1<<i)) {
 				/* Save old value */
 				old_value=tdata->cur_domain_value[i];
@@ -271,7 +275,7 @@ static inline void do_read_energy_msrs(intel_rapl_thread_data_t* tdata, int acum
 	}
 }
 
-/* 
+/*
  * Update cumulative energy counters in the thread structure and
  * set the associated virtual counts in the PMC sample structure
  */
@@ -284,7 +288,7 @@ static int intel_rapl_on_new_sample(pmon_prof_t* prof,int cpu,pmc_sample_t* samp
 
 	if (tdata!=NULL && prof->virt_counter_mask) {
 
-		do_read_energy_msrs(tdata,1);
+		do_read_energy_msrs(tdata,1,flags & MM_NO_CUR_CPU);
 
 		/* Embed virtual counter information so that the user can see what's going on */
 
@@ -322,7 +326,7 @@ void intel_rapl_on_switch_in(pmon_prof_t* prof)
 		return;
 
 	/* Update prev counts */
-	do_read_energy_msrs(data,0);
+	do_read_energy_msrs(data,0,0);
 
 	if (data->first_time)
 		data->first_time=0;
@@ -338,7 +342,7 @@ void intel_rapl_on_switch_out(pmon_prof_t* prof)
 
 	/* Accumulate energy readings */
 	if (!data->first_time)
-		do_read_energy_msrs(data,1);
+		do_read_energy_msrs(data,1,0);
 }
 
 /* Modify this function if necessary to expose energy readings to the OS scheduler */
@@ -400,7 +404,7 @@ static int intel_rapl_on_syswide_start_monitor(int cpu, unsigned int virtual_mas
 	}
 
 	/* Update prev counts */
-	do_read_energy_msrs(data,0);
+	do_read_energy_msrs(data,0,0);
 
 	return 0;
 }
@@ -411,7 +415,7 @@ static void intel_rapl_on_syswide_refresh_monitor(int cpu, unsigned int virtual_
 	intel_rapl_thread_data_t* data=&per_cpu(cpu_syswide, cpu);
 
 	/* Accumulate energy readings */
-	do_read_energy_msrs(data,1);
+	do_read_energy_msrs(data,1,0);
 }
 
 /* 	Dump virtual-counter values for this CPU */

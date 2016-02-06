@@ -1,12 +1,12 @@
 /*
  *  vexpress_sensors_mm.c
  *
- * 	PMCTrack monitoring module enabling to measure energy consumption 
+ * 	PMCTrack monitoring module enabling to measure energy consumption
  *  on the ARM Coretile Express TC2 board and the ARM Juno development board
- * 
+ *
  *  Copyright (c) 2015 Juan Carlos Saez <jcsaezal@ucm.es>
- *	              and Javier Setoain <jsetoain@ucm.es>      
- * 
+ *	              and Javier Setoain <jsetoain@ucm.es>
+ *
  *  This code is licensed under the GNU GPL v2.
  */
 
@@ -20,9 +20,9 @@
 
 /* Per-thread private data for this monitoring module */
 typedef struct {
-    vexpress_sensors_count_t sensor_counts[MAX_VEXPRESS_ENERGY_SENSORS];
-    int first_time;
-    uint_t security_id;
+	vexpress_sensors_count_t sensor_counts[MAX_VEXPRESS_ENERGY_SENSORS];
+	int first_time;
+	uint_t security_id;
 } vexpress_sensors_thread_data_t;
 
 
@@ -41,12 +41,12 @@ static int vexpress_sensors_enable_module(void)
 
 	nr_sensors_available=0;
 	/* Initialize pointer vector */
-	for (i=0;i<MAX_VEXPRESS_ENERGY_SENSORS;i++){
+	for (i=0; i<MAX_VEXPRESS_ENERGY_SENSORS; i++) {
 		sensors_desc[i]=NULL;
 		sensor_information[i]=NULL;
 	}
 
-	if((retval=initialize_energy_sensors(sensors_desc,sensor_information,&nr_sensors_available))){
+	if((retval=initialize_energy_sensors(sensors_desc,sensor_information,&nr_sensors_available))) {
 		printk(KERN_INFO "Couldn't initialize energy sensors");
 		return -EINVAL;
 	}
@@ -80,9 +80,9 @@ static void vexpress_sensors_module_counter_usage(monitoring_module_counter_usag
 	int i=0;
 	usage->hwpmc_mask=0;
 	usage->nr_virtual_counters=nr_sensors_available;
-	usage->nr_experiments=0; 
+	usage->nr_experiments=0;
 
-	for (i=0;i<nr_sensors_available;i++)
+	for (i=0; i<nr_sensors_available; i++)
 		usage->vcounter_desc[i]=sensor_information[i];
 }
 
@@ -111,7 +111,7 @@ static int vexpress_sensors_on_fork(unsigned long clone_flags, pmon_prof_t* prof
 
 	data->security_id=current_monitoring_module_security_id();
 	data->first_time=1;
-	for (i=0; i<nr_sensors_available; i++) 
+	for (i=0; i<nr_sensors_available; i++)
 		initialize_vexpress_sensors_count(&data->sensor_counts[i]);
 
 	prof->monitoring_mod_priv_data = data;
@@ -121,18 +121,18 @@ static int vexpress_sensors_on_fork(unsigned long clone_flags, pmon_prof_t* prof
 /* on exec() callback */
 static void vexpress_sensors_on_exec(pmon_prof_t* prof) { }
 
-/* 
- * Read energy registers/sensors and update cumulative counters in the 
+/*
+ * Read energy registers/sensors and update cumulative counters in the
  * private thread structure.
  */
 static inline void do_read_sensors(vexpress_sensors_thread_data_t* tdata, int acum)
 {
-	 do_read_energy_sensors(sensors_desc,tdata->sensor_counts,
-							nr_sensors_available,acum);
+	do_read_energy_sensors(sensors_desc,tdata->sensor_counts,
+	                       nr_sensors_available,acum);
 }
 
 
-/* 
+/*
  * Update cumulative energy counters in the thread structure and
  * set the associated virtual counts in the PMC sample structure
  */
@@ -155,7 +155,7 @@ static int vexpress_sensors_on_new_sample(pmon_prof_t* prof,int cpu,pmc_sample_t
 		/* Embed virtual counter information so that the user can see what's going on */
 
 		for (i=0; i<nr_sensors_available; i++) {
-			if ((prof->virt_counter_mask & (1<<i)) ) { 
+			if ((prof->virt_counter_mask & (1<<i)) ) {
 				sample->virt_mask|=(1<<i);
 				sample->nr_virt_counts++;
 				sample->virtual_counts[cnt_virt]=tdata->sensor_counts[i].acum;
@@ -222,7 +222,7 @@ static int initialize_system_wide_sensor_structures(void)
 	for_each_possible_cpu(cpu) {
 		data=&per_cpu(cpu_syswide, cpu);
 
-		for (i=0; i<nr_sensors_available; i++) 
+		for (i=0; i<nr_sensors_available; i++)
 			initialize_vexpress_sensors_count(&data->sensor_counts[i]);
 
 		/* These two fields are not used by the system-wide monitor

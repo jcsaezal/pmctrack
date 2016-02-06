@@ -4,7 +4,7 @@
  *	Data types and functions to deal with low-level events (HW event counts)
  *
  *  Copyright (c) 2015 Juan Carlos Saez <jcsaezal@ucm.es>
- * 
+ *
  *  This code is licensed under the GNU GPL v2.
  */
 
@@ -13,7 +13,7 @@
 #include <pmc/common/pmc_const.h>
 #include <pmc/common/pmc_types.h>
 
-/*  
+/*
  * HW event forward declaration.
  * A definition of this structure must be provided for
  * every supported architecture

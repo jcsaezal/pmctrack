@@ -107,9 +107,8 @@ static inline u32 armv7pmu_read_counter(int idx)
 	value = 0;
 	if (idx == ARMV7_IDX_CYCLE_COUNTER)
 		asm volatile("mrc p15, 0, %0, c9, c13, 0" : "=r" (value));
-	else
-		if (armv7_pmnc_select_counter(idx) == idx)
-			asm volatile("mrc p15, 0, %0, c9, c13, 2" : "=r" (value));
+	else if (armv7_pmnc_select_counter(idx) == idx)
+		asm volatile("mrc p15, 0, %0, c9, c13, 2" : "=r" (value));
 	return value;
 }
 

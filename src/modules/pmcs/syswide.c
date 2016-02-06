@@ -22,9 +22,9 @@
 #define SYSWIDE_MONITORING_STARTING -1
 
 
-/* 
+/*
  * Per-CPU structure to hold the necessary
- * information to implement the system-wide 
+ * information to implement the system-wide
  * monitoring mode
  */
 typedef struct {
@@ -49,7 +49,7 @@ typedef struct {
 		Note that pmc_samples_buffer has its own spinlock
 	*/
 	unsigned long syswide_timer_period; /* Inherit from monitor thread */
-	unsigned int pause_syswide_monitor; /* Global pause flag */	
+	unsigned int pause_syswide_monitor; /* Global pause flag */
 	spinlock_t lock;
 } syswide_ctl_t;
 
@@ -63,7 +63,7 @@ static DEFINE_PER_CPU(cpu_syswide_t, cpu_syswide);
 
 
 /*
- * Read performance counters and update statistics 
+ * Read performance counters and update statistics
  * on the current CPU
  */
 static int __refresh_counts_cpu(cpu_syswide_t* cpudata)
@@ -97,7 +97,7 @@ static int __refresh_counts_cpu(cpu_syswide_t* cpudata)
 
 
 /*
- * Read performance counters and update statistics 
+ * Read performance counters and update statistics
  * on the current CPU (SMP-safe version)
  */
 static int refresh_counts_cpu(cpu_syswide_t* cpudata)
@@ -114,7 +114,7 @@ static int refresh_counts_cpu(cpu_syswide_t* cpudata)
 
 
 /*
- * Gather PMC and virtual-counter samples 
+ * Gather PMC and virtual-counter samples
  * on the current CPU
  */
 static void syswide_monitoring_sample_cpu(void* dummy)
@@ -261,8 +261,8 @@ static int setup_cpu_syswide_data(cpu_syswide_t* data,
 }
 
 
-/* 
- * Global initialization function for system-wide mode 
+/*
+ * Global initialization function for system-wide mode
  * (invoked when the module is loaded in the kernel)
  */
 int syswide_monitoring_init(void)
@@ -291,8 +291,8 @@ int syswide_monitoring_init(void)
 	return 0;
 }
 
-/* 
- * Global cleanup function for system-wide mode 
+/*
+ * Global cleanup function for system-wide mode
  * (invoked when the module is removed from the kernel)
  */
 void syswide_monitoring_cleanup(void)
@@ -312,20 +312,20 @@ int syswide_monitoring_enabled(void)
 	return syswide_ctl.syswide_monitor>SYSWIDE_MONITORING_STARTING;
 }
 
-/* 
- *  This function gets invoked on every context switch 
+/*
+ *  This function gets invoked on every context switch
  *  in when syswide monitoring is enabled.
- */	
+ */
 int syswide_monitoring_switch_in(int cpu)
 {
 	/* Do nothing on switch in for now */
 	return 0;
 }
 
-/* 
- *  This function gets invoked on every context switch 
+/*
+ *  This function gets invoked on every context switch
  *  out when syswide monitoring is enabled.
- *	
+ *
  *	Return non-zero if syswide_monitoring is not using PMCs
  *	- This enables to use virtual counters in system-wide mode
  *	  while using PMCs and other virtual counters
@@ -512,28 +512,30 @@ exit_unlock_stop:
 
 
 /* Pause syswide_monitoring */
-int syswide_monitoring_pause(void){
+int syswide_monitoring_pause(void)
+{
 	unsigned long flags=0;
- 	int ret=0;
+	int ret=0;
 
 	spin_lock_irqsave(&syswide_ctl.lock,flags);
 	if (!syswide_monitoring_enabled())
 		ret=-EINVAL;
-	else 
+	else
 		syswide_ctl.pause_syswide_monitor=1;
 	spin_unlock_irqrestore(&syswide_ctl.lock,flags);
 	return ret;
 }
 
 /* Resume syswide_monitoring */
-int syswide_monitoring_resume(void){
+int syswide_monitoring_resume(void)
+{
 	unsigned long flags=0;
- 	int ret=0;
+	int ret=0;
 
 	spin_lock_irqsave(&syswide_ctl.lock,flags);
 	if (!syswide_monitoring_enabled())
 		ret=-EINVAL;
-	else 
+	else
 		syswide_ctl.pause_syswide_monitor=0;
 	spin_unlock_irqrestore(&syswide_ctl.lock,flags);
 	return ret;

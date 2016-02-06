@@ -201,10 +201,19 @@ void pmct_accumulate_sample (unsigned int nr_experiments,
  * be able to retrieve PMC and/or virtual-counter samples
  * using a special file exported by PMCTrack's kernel module
  *
+ * If config_pmcs !=0, the attached process will inherit PMC and
+ * virtual counter configuration from the parent process
+ *
  * The function returns 0 on success, and a non-zero value upon failure.
  * 
  */
-int pmct_attach_process (pid_t pid);
+int pmct_attach_process (pid_t pid, int config_pmcs);
+
+/*
+ * Detach process from monitor 
+ */
+int pmct_detach_process (pid_t pid);
+
 
 /*
  * Obtain a file descriptor of the special file exported by

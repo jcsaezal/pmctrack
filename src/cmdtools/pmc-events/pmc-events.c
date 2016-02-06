@@ -34,7 +34,7 @@
 #include <err.h>
 #include <pmctrack_internal.h>
 
-/* 
+/*
  * Prints to stdout the list of virtual counters available,
  * together with additional comments.
  */
@@ -125,7 +125,7 @@ static void usage(int verbose)
 {
 	printf("Usage: pmc-events [ -h | -v | -I | -L | -V | -n <pmun> | -e <event_string> | -m <processor_model> ]\n");
 
-	if(verbose){
+	if(verbose) {
 		printf ("\n\t-h\n\t\tDisplays this information about the arguments available");
 		printf ("\n\t-v\n\t\tShows extra information for some other options");
 		printf ("\n\t-I\n\t\tDisplays information about the PMU of the processor model");
