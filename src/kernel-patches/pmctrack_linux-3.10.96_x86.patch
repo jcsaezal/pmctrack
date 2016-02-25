@@ -1,26 +1,8 @@
-diff --git a/arch/arm/Kconfig b/arch/arm/Kconfig
-index 3a63c38..9c0ee98 100644
---- a/arch/arm/Kconfig
-+++ b/arch/arm/Kconfig
-@@ -82,6 +82,13 @@ config ARM
- 	  Europe.  There is an ARM Linux project with a web page at
- 	  <http://www.arm.linux.org.uk/>.
- 
-+config LINARO_HACKS
-+        bool
-+        default y
-+        help
-+           This is to enable Linaro hacks in our code. We mix vanilla with Linaro.
-+           Bring it on!!
-+
- config ARM_HAS_SG_CHAIN
- 	select ARCH_HAS_SG_CHAIN
- 	bool
 diff --git a/arch/arm/kernel/perf_event_cpu.c b/arch/arm/kernel/perf_event_cpu.c
-index 4bf4cce..bdb572d 100644
+index 1f2740e..573410f 100644
 --- a/arch/arm/kernel/perf_event_cpu.c
 +++ b/arch/arm/kernel/perf_event_cpu.c
-@@ -346,6 +346,13 @@ static struct platform_driver cpu_pmu_driver = {
+@@ -305,6 +305,13 @@ static struct platform_driver cpu_pmu_driver = {
  	.id_table	= cpu_pmu_plat_device_ids,
  };
  
@@ -29,40 +11,22 @@ index 4bf4cce..bdb572d 100644
 +{
 +        pr_cont("PMCTRACK enabled: only software events available in perf.\n");
 +        return 0;
-+}
++}   
 +#else
  static int __init register_pmu_driver(void)
  {
  	int err;
-@@ -360,4 +367,5 @@ static int __init register_pmu_driver(void)
+@@ -319,4 +326,5 @@ static int __init register_pmu_driver(void)
  
  	return err;
  }
 +#endif
  device_initcall(register_pmu_driver);
-diff --git a/arch/arm64/Kconfig b/arch/arm64/Kconfig
-index 78d3195..f2dd645 100644
---- a/arch/arm64/Kconfig
-+++ b/arch/arm64/Kconfig
-@@ -71,6 +71,13 @@ config ARM64
- 	help
- 	  ARM 64-bit (AArch64) Linux support.
- 
-+config LINARO_HACKS
-+        bool
-+        default y
-+        help
-+           This is to enable Linaro hacks in our code. We mix vanilla with Linaro.
-+           Bring it on!!
-+
- config 64BIT
- 	def_bool y
- 
 diff --git a/arch/arm64/kernel/perf_event.c b/arch/arm64/kernel/perf_event.c
-index baf5afb..2dcc864 100644
+index cea1594..544cb76 100644
 --- a/arch/arm64/kernel/perf_event.c
 +++ b/arch/arm64/kernel/perf_event.c
-@@ -1321,6 +1321,13 @@ static void __init cpu_pmu_init(struct arm_pmu *armpmu)
+@@ -1272,6 +1272,13 @@ static void __init cpu_pmu_init(struct arm_pmu *armpmu)
  	armpmu->get_hw_events = armpmu_get_cpu_events;
  }
  
@@ -76,7 +40,7 @@ index baf5afb..2dcc864 100644
  static int __init init_hw_perf_events(void)
  {
  	u64 dfr = read_cpuid(ID_AA64DFR0_EL1);
-@@ -1342,6 +1349,7 @@ static int __init init_hw_perf_events(void)
+@@ -1293,6 +1300,7 @@ static int __init init_hw_perf_events(void)
  
  	return 0;
  }
@@ -84,76 +48,6 @@ index baf5afb..2dcc864 100644
  early_initcall(init_hw_perf_events);
  
  /*
-diff --git a/arch/x86/kernel/cpu/perf_event.c b/arch/x86/kernel/cpu/perf_event.c
-index 2879ecd..843821a 100644
---- a/arch/x86/kernel/cpu/perf_event.c
-+++ b/arch/x86/kernel/cpu/perf_event.c
-@@ -1515,6 +1515,13 @@ ssize_t x86_event_sysfs_show(char *page, u64 config, u64 event)
- 	return ret;
- }
- 
-+#ifdef CONFIG_PMCTRACK
-+static int __init init_hw_perf_events(void)
-+{
-+        pr_cont("PMCTRACK enabled: only software events available in perf.\n");
-+        return 0;
-+}
-+#else
- static int __init init_hw_perf_events(void)
- {
- 	struct x86_pmu_quirk *quirk;
-@@ -1591,6 +1598,7 @@ static int __init init_hw_perf_events(void)
- 
- 	return 0;
- }
-+#endif
- early_initcall(init_hw_perf_events);
- 
- static inline void x86_pmu_read(struct perf_event *event)
-diff --git a/drivers/hwmon/hwmon.c b/drivers/hwmon/hwmon.c
-index a26c385..7a964e9 100644
---- a/drivers/hwmon/hwmon.c
-+++ b/drivers/hwmon/hwmon.c
-@@ -23,6 +23,7 @@
- #include <linux/spinlock.h>
- #include <linux/pci.h>
- #include <linux/string.h>
-+#include <linux/pmctrack.h>
- 
- #define HWMON_ID_PREFIX "hwmon"
- #define HWMON_ID_FORMAT HWMON_ID_PREFIX "%d"
-@@ -121,6 +122,11 @@ hwmon_device_register_with_groups(struct device *dev, const char *name,
- 	hwdev->dev.of_node = dev ? dev->of_node : NULL;
- 	dev_set_drvdata(&hwdev->dev, drvdata);
- 	dev_set_name(&hwdev->dev, HWMON_ID_FORMAT, id);
-+
-+#ifdef CONFIG_PMCTRACK
-+	if ((err=pmctrack_hwmon_export_device(dev_name(&hwdev->dev), id, &hwdev->dev)))
-+		goto ida_remove;
-+#endif
- 	err = device_register(&hwdev->dev);
- 	if (err)
- 		goto free;
-@@ -128,6 +134,9 @@ hwmon_device_register_with_groups(struct device *dev, const char *name,
- 	return &hwdev->dev;
- 
- free:
-+#ifdef CONFIG_PMCTRACK
-+	pmctrack_hwmon_unexport_device(id);
-+#endif
- 	kfree(hwdev);
- ida_remove:
- 	ida_simple_remove(&hwmon_ida, id);
-@@ -161,6 +170,9 @@ void hwmon_device_unregister(struct device *dev)
- 
- 	if (likely(sscanf(dev_name(dev), HWMON_ID_FORMAT, &id) == 1)) {
- 		device_unregister(dev);
-+#ifdef CONFIG_PMCTRACK	
-+		pmctrack_hwmon_unexport_device(id);
-+#endif
- 		ida_simple_remove(&hwmon_ida, id);
- 	} else
- 		dev_dbg(dev->parent,
 diff --git a/include/linux/pmctrack.h b/include/linux/pmctrack.h
 new file mode 100644
 index 0000000..523b0ea
@@ -238,81 +132,54 @@ index 0000000..523b0ea
 +
 +#endif
 diff --git a/include/linux/sched.h b/include/linux/sched.h
-index 9b37607..465c519 100644
+index 4781332..9497132 100644
 --- a/include/linux/sched.h
 +++ b/include/linux/sched.h
-@@ -1644,6 +1644,10 @@ struct task_struct {
+@@ -1429,6 +1429,10 @@ struct task_struct {
  	unsigned int	sequential_io;
  	unsigned int	sequential_io_avg;
  #endif
 +#ifdef CONFIG_PMCTRACK
-+	void *pmc;                      /* Per-thread PMC-specific data */
-+	unsigned char prof_enabled;     /* This field must be one for the profiler to be active in the current task */
++        void *pmc;                      /* Per-thread PMC-specific data */
++        unsigned char prof_enabled;     /* This field must be one for the profiler to be active in the current task */
 +#endif
  };
  
  /* Future-safe accessor for struct task_struct's cpus_allowed. */
-@@ -1878,8 +1882,10 @@ static inline cputime_t task_gtime(struct task_struct *t)
- extern void task_cputime_adjusted(struct task_struct *p, cputime_t *ut, cputime_t *st);
- extern void thread_group_cputime_adjusted(struct task_struct *p, cputime_t *ut, cputime_t *st);
- 
-+#ifdef CONFIG_LINARO_HACKS
- extern int task_free_register(struct notifier_block *n);
- extern int task_free_unregister(struct notifier_block *n);
-+#endif
- 
- /*
-  * Per process flags
-@@ -1937,11 +1943,13 @@ extern int task_free_unregister(struct notifier_block *n);
- #define tsk_used_math(p) ((p)->flags & PF_USED_MATH)
- #define used_math() tsk_used_math(current)
- 
--/* __GFP_IO isn't allowed if PF_MEMALLOC_NOIO is set in current->flags */
-+/* __GFP_IO isn't allowed if PF_MEMALLOC_NOIO is set in current->flags
-+ * __GFP_FS is also cleared as it implies __GFP_IO.
-+ */
- static inline gfp_t memalloc_noio_flags(gfp_t flags)
- {
- 	if (unlikely(current->flags & PF_MEMALLOC_NOIO))
--		flags &= ~__GFP_IO;
-+		flags &= ~(__GFP_IO | __GFP_FS);
- 	return flags;
- }
- 
 diff --git a/init/Kconfig b/init/Kconfig
-index 80a6907..377f4d1 100644
+index 8fa4f75..9a1aef7 100644
 --- a/init/Kconfig
 +++ b/init/Kconfig
-@@ -1612,6 +1612,15 @@ config DEBUG_PERF_USE_VMALLOC
+@@ -1501,6 +1501,15 @@ config DEBUG_PERF_USE_VMALLOC
  
  	 Say N if unsure.
  
 +config PMCTRACK
-+	bool "PMCTrack performance monitoring tool with in-kernel interface"	
-+	default y
-+	help
-+	  PMCTrack performance monitoring tool with in-kernel interface. 
-+	  Warning: Activating this tool automatically disables HW events in 
-+	  the perf events subsystem on ARM and x86 platforms (including 32 and
-+	  64 bit variants).
++        bool "PMCTrack performance monitoring tool with in-kernel interface"
++        default y
++        help
++          PMCTrack performance monitoring tool with in-kernel interface.
++          Warning: Activating this tool automatically disables HW events in
++          the perf events subsystem on ARM and x86 platforms (including 32 and
++          64 bit variants).
 +
  endmenu
  
  config VM_EVENT_COUNTERS
 diff --git a/kernel/Makefile b/kernel/Makefile
-index dc5c775..0888b8f 100644
+index 271fd31..1ec5661 100644
 --- a/kernel/Makefile
 +++ b/kernel/Makefile
-@@ -27,6 +27,7 @@ obj-y += printk/
- obj-y += irq/
- obj-y += rcu/
+@@ -26,6 +26,7 @@ obj-y += sched/
+ obj-y += power/
+ obj-y += cpu/
  
 +obj-$(CONFIG_PMCTRACK) += pmctrack.o
  obj-$(CONFIG_CHECKPOINT_RESTORE) += kcmp.o
  obj-$(CONFIG_FREEZER) += freezer.o
  obj-$(CONFIG_PROFILING) += profile.o
 diff --git a/kernel/exit.c b/kernel/exit.c
-index 32c58f7..de2b26f 100644
+index 717efbd..78fcaea 100644
 --- a/kernel/exit.c
 +++ b/kernel/exit.c
 @@ -53,6 +53,7 @@
@@ -323,21 +190,21 @@ index 32c58f7..de2b26f 100644
  
  #include <asm/uaccess.h>
  #include <asm/unistd.h>
-@@ -766,6 +767,9 @@ void do_exit(long code)
+@@ -817,6 +818,9 @@ void do_exit(long code)
  	 */
  	perf_event_exit_task(tsk);
  
-+#ifdef CONFIG_PMCTRACK	
-+	pmcs_exit_thread(tsk);
++#ifdef CONFIG_PMCTRACK
++        pmcs_exit_thread(tsk);
 +#endif
- 	cgroup_exit(tsk);
+ 	cgroup_exit(tsk, 1);
  
  	module_put(task_thread_info(tsk)->exec_domain->module);
 diff --git a/kernel/fork.c b/kernel/fork.c
-index 9420124..c06aa03 100644
+index 2358bd4..d5b32cb 100644
 --- a/kernel/fork.c
 +++ b/kernel/fork.c
-@@ -83,6 +83,7 @@
+@@ -80,6 +80,7 @@
  #include <asm/tlbflush.h>
  
  #include <trace/events/sched.h>
@@ -345,185 +212,47 @@ index 9420124..c06aa03 100644
  
  #define CREATE_TRACE_POINTS
  #include <trace/events/task.h>
-@@ -125,6 +126,11 @@ void __weak arch_release_task_struct(struct task_struct *tsk)
- #ifndef CONFIG_ARCH_TASK_STRUCT_ALLOCATOR
- static struct kmem_cache *task_struct_cachep;
- 
-+#ifdef CONFIG_LINARO_HACKS
-+/* Notifier list called when a task struct is freed */
-+static ATOMIC_NOTIFIER_HEAD(task_free_notifier);
-+#endif
-+
- static inline struct task_struct *alloc_task_struct_node(int node)
- {
- 	return kmem_cache_alloc_node(task_struct_cachep, GFP_KERNEL, node);
-@@ -201,9 +207,6 @@ struct kmem_cache *vm_area_cachep;
- /* SLAB cache for mm_struct structures (tsk->mm) */
- static struct kmem_cache *mm_cachep;
- 
--/* Notifier list called when a task struct is freed */
--static ATOMIC_NOTIFIER_HEAD(task_free_notifier);
--
- static void account_kernel_stack(struct thread_info *ti, int account)
- {
- 	struct zone *zone = page_zone(virt_to_page(ti));
-@@ -213,6 +216,9 @@ static void account_kernel_stack(struct thread_info *ti, int account)
+@@ -207,6 +208,9 @@ static void account_kernel_stack(struct thread_info *ti, int account)
  
  void free_task(struct task_struct *tsk)
  {
-+#ifdef CONFIG_PMCTRACK	
-+	pmcs_free_per_thread_data(tsk);	
++#ifdef CONFIG_PMCTRACK
++        pmcs_free_per_thread_data(tsk);
 +#endif
  	account_kernel_stack(tsk->stack, -1);
  	arch_release_thread_info(tsk->stack);
  	free_thread_info(tsk->stack);
-@@ -237,6 +243,7 @@ static inline void put_signal_struct(struct signal_struct *sig)
- 		free_signal_struct(sig);
- }
+@@ -1316,6 +1320,12 @@ static struct task_struct *copy_process(unsigned long clone_flags,
+ 	p->sequential_io_avg	= 0;
+ #endif
  
-+#ifdef CONFIG_LINARO_HACKS
- int task_free_register(struct notifier_block *n)
- {
- 	return atomic_notifier_chain_register(&task_free_notifier, n);
-@@ -248,6 +255,7 @@ int task_free_unregister(struct notifier_block *n)
- 	return atomic_notifier_chain_unregister(&task_free_notifier, n);
- }
- EXPORT_SYMBOL(task_free_unregister);
-+#endif 
++#ifdef CONFIG_PMCTRACK
++        p->prof_enabled = 0;    /* The profiler will be disabled by default */
++        p->pmc = NULL;
++        if (pmcs_alloc_per_thread_data(clone_flags,p))
++                goto bad_fork_cleanup_policy;
++#endif  
+ 	/* Perform scheduler related setup. Assign this task to a CPU. */
+ 	sched_fork(p);
  
- void __put_task_struct(struct task_struct *tsk)
- {
-@@ -260,8 +268,9 @@ void __put_task_struct(struct task_struct *tsk)
- 	exit_creds(tsk);
- 	delayacct_tsk_free(tsk);
- 	put_signal_struct(tsk->signal);
--
-+#ifdef CONFIG_LINARO_HACKS
- 	atomic_notifier_call_chain(&task_free_notifier, 0, tsk);
-+#endif	
- 	if (!profile_handoff_task(tsk))
- 		free_task(tsk);
- }
-@@ -746,8 +755,12 @@ struct mm_struct *mm_access(struct task_struct *task, unsigned int mode)
- 
- 	mm = get_task_mm(task);
- 	if (mm && mm != current->mm &&
-+#ifndef CONFIG_LINARO_HACKS	    
-+			!ptrace_may_access(task, mode)) {
-+#else
- 			!ptrace_may_access(task, mode) &&
- 			!capable(CAP_SYS_RESOURCE)) {
-+#endif
- 		mmput(mm);
- 		mm = ERR_PTR(-EACCES);
- 	}
 diff --git a/kernel/futex.c b/kernel/futex.c
-index 815d7af..17625ba 100644
+index 625a4e6..dbe1ac8 100644
 --- a/kernel/futex.c
 +++ b/kernel/futex.c
-@@ -343,6 +343,8 @@ static void get_futex_key_refs(union futex_key *key)
+@@ -193,6 +193,8 @@ static void get_futex_key_refs(union futex_key *key)
  	case FUT_OFF_MMSHARED:
- 		futex_get_mm(key); /* implies MB (B) */
+ 		atomic_inc(&key->private.mm->mm_count);
  		break;
 +	default:
 +		smp_mb(); /* explicit MB (B) */
  	}
  }
  
-@@ -639,8 +641,16 @@ static struct futex_pi_state * alloc_pi_state(void)
- 	return pi_state;
- }
- 
-+/*
-+ * Must be called with the hb lock held.
-+ */
- static void free_pi_state(struct futex_pi_state *pi_state)
- {
-+#ifndef CONFIG_LINARO_HACKS
-+	if (!pi_state)
-+		return;
-+#endif
-+
- 	if (!atomic_dec_and_test(&pi_state->refcount))
- 		return;
- 
-@@ -1519,15 +1529,17 @@ static int futex_requeue(u32 __user *uaddr1, unsigned int flags,
- 	}
- 
- retry:
--	if (pi_state != NULL) {
--		/*
--		 * We will have to lookup the pi_state again, so free this one
--		 * to keep the accounting correct.
--		 */
--		free_pi_state(pi_state);
--		pi_state = NULL;
--	}
--
-+#ifdef CONFIG_LINARO_HACKS 
-+ 	if (pi_state != NULL) {
-+ 		/*
-+ 		 * We will have to lookup the pi_state again, so free this one
-+ 		 * to keep the accounting correct.
-+ 		 */
-+ 		free_pi_state(pi_state);
-+ 		pi_state = NULL;
-+ 	}
-+#endif
-+ 	
- 	ret = get_futex_key(uaddr1, flags & FLAGS_SHARED, &key1, VERIFY_READ);
- 	if (unlikely(ret != 0))
- 		goto out;
-@@ -1617,6 +1629,10 @@ retry_private:
- 		case 0:
- 			break;
- 		case -EFAULT:
-+#ifndef CONFIG_LINARO_HACKS	
-+			free_pi_state(pi_state);
-+			pi_state = NULL;
-+#endif	
- 			double_unlock_hb(hb1, hb2);
- 			hb_waiters_dec(hb2);
- 			put_futex_key(&key2);
-@@ -1632,6 +1648,10 @@ retry_private:
- 			 *   exit to complete.
- 			 * - The user space value changed.
- 			 */
-+#ifndef CONFIG_LINARO_HACKS	
-+			free_pi_state(pi_state);
-+			pi_state = NULL;
-+#endif			
- 			double_unlock_hb(hb1, hb2);
- 			hb_waiters_dec(hb2);
- 			put_futex_key(&key2);
-@@ -1708,6 +1728,9 @@ retry_private:
- 	}
- 
- out_unlock:
-+#ifndef CONFIG_LINARO_HACKS	
-+	free_pi_state(pi_state);
-+#endif	
- 	double_unlock_hb(hb1, hb2);
- 	hb_waiters_dec(hb2);
- 
-@@ -1725,8 +1748,10 @@ out_put_keys:
- out_put_key1:
- 	put_futex_key(&key1);
- out:
--	if (pi_state != NULL)
--		free_pi_state(pi_state);
-+#ifdef CONFIG_LINARO_HACKS	
-+ 	if (pi_state != NULL)
-+ 		free_pi_state(pi_state);
-+#endif
- 	return ret ? ret : task_count;
- }
- 
 diff --git a/kernel/irq/manage.c b/kernel/irq/manage.c
-index 3dc6a61..28bf0a5 100644
+index a79d267..7afbb02 100644
 --- a/kernel/irq/manage.c
 +++ b/kernel/irq/manage.c
-@@ -232,6 +232,9 @@ int __irq_set_affinity(unsigned int irq, const struct cpumask *mask, bool force)
+@@ -202,6 +202,9 @@ int __irq_set_affinity(unsigned int irq, const struct cpumask *mask, bool force)
  	raw_spin_unlock_irqrestore(&desc->lock, flags);
  	return ret;
  }
@@ -535,10 +264,10 @@ index 3dc6a61..28bf0a5 100644
  {
 diff --git a/kernel/pmctrack.c b/kernel/pmctrack.c
 new file mode 100644
-index 0000000..99dde76
+index 0000000..80549cf
 --- /dev/null
 +++ b/kernel/pmctrack.c
-@@ -0,0 +1,384 @@
+@@ -0,0 +1,389 @@
 +/*
 + *  kernel/pmctrack.c
 + *
@@ -559,12 +288,12 @@ index 0000000..99dde76
 +#include <linux/device.h>
 +#include <linux/err.h>
 +#include <linux/slab.h>
-+#include <linux/spinlock.h>
++#include <linux/rwlock.h>
 +#include <linux/rcupdate.h>
 +
 +static pmc_ops_t* pmc_ops_mod=NULL; /* No implementation is registered by default */
 +static struct module* implementer=NULL;
-+DEFINE_SPINLOCK(pmc_ops_lock);
++DEFINE_RWLOCK(pmc_ops_lock);
 +
 +/* 
 + * PMCTrack's kernel module invokes this function to register 
@@ -573,8 +302,9 @@ index 0000000..99dde76
 +int register_pmc_module(pmc_ops_t* pmc_ops_module, struct module* module)
 +{
 +	int ret=0;
++	unsigned long flags;
 +
-+	spin_lock(&pmc_ops_lock);
++	write_lock_irqsave(&pmc_ops_lock,flags);
 +	
 +	/* Module has been installed already */
 +	if (implementer!=NULL) {
@@ -585,7 +315,7 @@ index 0000000..99dde76
 +		rcu_assign_pointer(pmc_ops_mod,pmc_ops_module);
 +	}
 +
-+	spin_unlock(&pmc_ops_lock);
++	write_unlock_irqrestore(&pmc_ops_lock,flags);
 +	return ret;
 +}
 +
@@ -594,8 +324,9 @@ index 0000000..99dde76
 +int unregister_pmc_module(pmc_ops_t* pmc_ops_module, struct module* module)
 +{
 +	int ret=0;
++	unsigned long flags;
 +
-+	spin_lock(&pmc_ops_lock);
++	write_lock_irqsave(&pmc_ops_lock,flags);
 +
 +	if(implementer!=module){
 +		ret=-EPERM;
@@ -604,7 +335,7 @@ index 0000000..99dde76
 +		implementer=NULL;
 +		rcu_assign_pointer(pmc_ops_mod,NULL);
 +	}
-+	spin_unlock(&pmc_ops_lock);
++	write_unlock_irqrestore(&pmc_ops_lock,flags);
 +
 +	/* 
 +	 * If the operation succeeded wait for all readers to complete. 
@@ -630,19 +361,20 @@ index 0000000..99dde76
 +{
 +	int ret=0;
 +	pmc_ops_t* pmc_ops= NULL;
++	unsigned long flags;
 +
-+	spin_lock(&pmc_ops_lock);
++	read_lock_irqsave(&pmc_ops_lock,flags);
 +
 +	/* 
 +	 * If there is no implementer module or it's being removed
 +	 * from the kernel, return immediately.
 +	 */
 +	if (!implementer || !try_module_get(implementer)){
-+		spin_unlock(&pmc_ops_lock);
++		read_unlock_irqrestore(&pmc_ops_lock,flags);
 +		return 0;	
 +	}
 +
-+	spin_unlock(&pmc_ops_lock);
++	read_unlock_irqrestore(&pmc_ops_lock,flags);
 +	
 +	/* Now it's safe to dereference pmc_ops_mod */
 +	pmc_ops=pmc_ops_mod;
@@ -733,22 +465,23 @@ index 0000000..99dde76
 +void pmcs_free_per_thread_data(struct task_struct* tsk)
 +{
 +	pmc_ops_t* pmc_ops= NULL;
++	unsigned long flags;
 +
-+	spin_lock(&pmc_ops_lock);
++	read_lock_irqsave(&pmc_ops_lock,flags);
 +
 +	/* 
 +	 * If there is no implementer module or it's being removed
 +	 * from the kernel, return immediately.
 +	 */
 +	if (!implementer || !try_module_get(implementer)){
-+		spin_unlock(&pmc_ops_lock);
-+		return 0;	
++		read_unlock_irqrestore(&pmc_ops_lock,flags);
++		return;
 +	}
 +
-+	spin_unlock(&pmc_ops_lock);
++	read_unlock_irqrestore(&pmc_ops_lock,flags);
 +	
 +	/* Now it's safe to dereference pmc_ops_mod */
-+	pmc_ops=rcu_dereference(pmc_ops_mod);
++	pmc_ops=pmc_ops_mod;
 +	
 +	if(pmc_ops!=NULL && pmc_ops->pmcs_free_per_thread_data!=NULL)
 +		pmc_ops->pmcs_free_per_thread_data(tsk);
@@ -761,22 +494,23 @@ index 0000000..99dde76
 +void pmcs_exit_thread(struct task_struct* tsk)
 +{
 +	pmc_ops_t* pmc_ops= NULL;
++	unsigned long flags;
 +
-+	spin_lock(&pmc_ops_lock);
++	read_lock_irqsave(&pmc_ops_lock,flags);
 +
 +	/* 
 +	 * If there is no implementer module or it's being removed
 +	 * from the kernel, return immediately.
 +	 */
 +	if (!implementer || !try_module_get(implementer)){
-+		spin_unlock(&pmc_ops_lock);
-+		return 0;	
++		read_unlock_irqrestore(&pmc_ops_lock,flags);
++		return;	
 +	}
 +
-+	spin_unlock(&pmc_ops_lock);
++	read_unlock_irqrestore(&pmc_ops_lock,flags);
 +	
 +	/* Now it's safe to dereference pmc_ops_mod */
-+	pmc_ops=rcu_dereference(pmc_ops_mod);
++	pmc_ops=pmc_ops_mod;
 +
 +	if(pmc_ops!=NULL && pmc_ops->pmcs_exit_thread!=NULL)
 +		pmc_ops->pmcs_exit_thread(tsk);
@@ -924,7 +658,7 @@ index 0000000..99dde76
 +EXPORT_SYMBOL(pmctrack_hwmon_list_devices);
 +
 diff --git a/kernel/sched/core.c b/kernel/sched/core.c
-index a76a8cf..5f5c303 100644
+index c771f25..9445cde 100644
 --- a/kernel/sched/core.c
 +++ b/kernel/sched/core.c
 @@ -73,6 +73,7 @@
@@ -932,93 +666,65 @@ index a76a8cf..5f5c303 100644
  #include <linux/binfmts.h>
  #include <linux/context_tracking.h>
 +#include <linux/pmctrack.h>
- #include <linux/compiler.h>
  
  #include <asm/switch_to.h>
-@@ -1892,6 +1893,12 @@ int sched_fork(unsigned long clone_flags, struct task_struct *p)
+ #include <asm/tlb.h>
+@@ -1683,7 +1684,6 @@ void sched_fork(struct task_struct *p)
+ 	 * event cannot wake it up and insert it on the runqueue either.
  	 */
  	p->state = TASK_RUNNING;
- 
-+#ifdef CONFIG_PMCTRACK
-+	p->prof_enabled = 0;    /* The profiler will be disabled by default */
-+	p->pmc = NULL;
-+	if (pmcs_alloc_per_thread_data(clone_flags,p))
-+		return -ENOMEM;
-+#endif
+-
  	/*
  	 * Make sure we do not leak PI boosting priority to the child.
  	 */
-@@ -1977,6 +1984,10 @@ unsigned long to_ratio(u64 period, u64 runtime)
- #ifdef CONFIG_SMP
- inline struct dl_bw *dl_bw_of(int i)
- {
-+#ifndef CONFIG_LINARO_HACKS	
-+	rcu_lockdep_assert(rcu_read_lock_sched_held(),
-+			   "sched RCU must be held");
-+#endif 	
- 	return &cpu_rq(i)->rd->dl_bw;
- }
- 
-@@ -1985,6 +1996,10 @@ static inline int dl_bw_cpus(int i)
- 	struct root_domain *rd = cpu_rq(i)->rd;
- 	int cpus = 0;
- 
-+#ifndef CONFIG_LINARO_HACKS
-+	rcu_lockdep_assert(rcu_read_lock_sched_held(),
-+			   "sched RCU must be held");
-+#endif 	
- 	for_each_cpu_and(i, rd->span, cpu_active_mask)
- 		cpus++;
- 
-@@ -2224,6 +2239,9 @@ static void finish_task_switch(struct rq *rq, struct task_struct *prev)
+@@ -1898,6 +1898,9 @@ static void finish_task_switch(struct rq *rq, struct task_struct *prev)
  	vtime_task_switch(prev);
  	finish_arch_switch(prev);
  	perf_event_task_sched_in(prev, current);
 +#ifdef CONFIG_PMCTRACK
-+	pmcs_restore_callback(current->pmc, smp_processor_id()); 		
++        pmcs_restore_callback(current->pmc, smp_processor_id());
 +#endif
  	finish_lock_switch(rq, prev);
  	finish_arch_post_lock_switch();
  
-@@ -2412,6 +2430,9 @@ void sched_exec(void)
+@@ -2656,6 +2659,9 @@ void sched_exec(void)
  	unsigned long flags;
  	int dest_cpu;
  
 +#ifdef CONFIG_PMCTRACK
-+	pmcs_exec_thread(p);
-+#endif	
++        pmcs_exec_thread(p);
++#endif
  	raw_spin_lock_irqsave(&p->pi_lock, flags);
- 	dest_cpu = p->sched_class->select_task_rq(p, task_cpu(p), SD_BALANCE_EXEC, 0);
+ 	dest_cpu = p->sched_class->select_task_rq(p, SD_BALANCE_EXEC, 0);
  	if (dest_cpu == smp_processor_id())
-@@ -2520,6 +2541,9 @@ void scheduler_tick(void)
- 
- 	sched_clock_tick();
+@@ -2741,6 +2747,9 @@ void scheduler_tick(void)
+ 	struct rq *rq = cpu_rq(cpu);
+ 	struct task_struct *curr = rq->curr;
  
 +#ifdef CONFIG_PMCTRACK
-+	pmcs_tbs_tick(curr->pmc, cpu);
++        pmcs_tbs_tick(curr->pmc, cpu);
 +#endif
+ 	sched_clock_tick();
+ 
  	raw_spin_lock(&rq->lock);
- 	update_rq_clock(rq);
- 	curr->sched_class->task_tick(rq, curr, 0);
-@@ -2814,6 +2838,9 @@ need_resched:
+@@ -3019,6 +3028,9 @@ need_resched:
  		rq->curr = next;
  		++*switch_count;
  
 +#ifdef CONFIG_PMCTRACK
-+		pmcs_save_callback(prev->pmc, cpu);
++                pmcs_save_callback(prev->pmc, cpu);
 +#endif
  		context_switch(rq, prev, next); /* unlocks the rq */
  		/*
  		 * The context switch have flipped the stack from under us
-@@ -3196,10 +3223,17 @@ struct task_struct *idle_task(int cpu)
-  *
-  * The task of @pid, if found. %NULL otherwise.
+@@ -3820,10 +3832,17 @@ struct task_struct *idle_task(int cpu)
+  * find_process_by_pid - find a process with a matching PID value.
+  * @pid: the pid in question.
   */
--static struct task_struct *find_process_by_pid(pid_t pid)
 +#ifdef CONFIG_PMCTRACK
 +struct task_struct *find_process_by_pid(pid_t pid)
 +#else
-+static struct task_struct *find_process_by_pid(pid_t pid) 
+ static struct task_struct *find_process_by_pid(pid_t pid)
 +#endif
  {
  	return pid ? find_task_by_vpid(pid) : current;
@@ -1027,113 +733,5 @@ index a76a8cf..5f5c303 100644
 +EXPORT_SYMBOL_GPL(find_process_by_pid);
 +#endif
  
- /*
-  * This function initializes the sched_dl_entity of a newly becoming
-@@ -4004,13 +4038,25 @@ long sched_setaffinity(pid_t pid, const struct cpumask *in_mask)
- 	 * root_domain.
- 	 */
- #ifdef CONFIG_SMP
-+#ifndef CONFIG_LINARO_HACKS
-+	if (task_has_dl_policy(p) && dl_bandwidth_enabled()) {
-+		rcu_read_lock();		
-+		if (!cpumask_subset(task_rq(p)->rd->span, new_mask)) {
-+#else
- 	if (task_has_dl_policy(p)) {
- 		const struct cpumask *span = task_rq(p)->rd->span;
- 
- 		if (dl_bandwidth_enabled() && !cpumask_subset(span, new_mask)) {
-+#endif			
- 			retval = -EBUSY;
-+#ifndef CONFIG_LINARO_HACKS			
-+			rcu_read_unlock();
-+#endif			
- 			goto out_unlock;
- 		}
-+#ifndef CONFIG_LINARO_HACKS		
-+		rcu_read_unlock();
-+#endif			
- 	}
- #endif
- again:
-@@ -7080,6 +7126,7 @@ static inline int preempt_count_equals(int preempt_offset)
- 	return (nested == preempt_offset);
- }
- 
-+#ifdef CONFIG_LINARO_HACKS
- static int __might_sleep_init_called;
- int __init __might_sleep_init(void)
- {
-@@ -7087,6 +7134,7 @@ int __init __might_sleep_init(void)
- 	return 0;
- }
- early_initcall(__might_sleep_init);
-+#endif
- 
- void __might_sleep(const char *file, int line, int preempt_offset)
- {
-@@ -7588,6 +7636,9 @@ static int sched_dl_global_constraints(void)
- 	int cpu, ret = 0;
- 	unsigned long flags;
- 
-+#ifndef CONFIG_LINARO_HACKS
-+	rcu_read_lock();
-+#endif
- 	/*
- 	 * Here we want to check the bandwidth not being set to some
- 	 * value smaller than the currently allocated bandwidth in
-@@ -7609,6 +7660,9 @@ static int sched_dl_global_constraints(void)
- 			break;
- 	}
- 
-+#ifndef CONFIG_LINARO_HACKS
-+	rcu_read_unlock();
-+#endif	
- 	return ret;
- }
- 
-@@ -7624,6 +7678,9 @@ static void sched_dl_do_global(void)
- 	if (global_rt_runtime() != RUNTIME_INF)
- 		new_bw = to_ratio(global_rt_period(), global_rt_runtime());
- 
-+#ifndef CONFIG_LINARO_HACKS		
-+	rcu_read_lock();
-+#endif
- 	/*
- 	 * FIXME: As above...
- 	 */
-@@ -7634,6 +7691,9 @@ static void sched_dl_do_global(void)
- 		dl_b->bw = new_bw;
- 		raw_spin_unlock_irqrestore(&dl_b->lock, flags);
- 	}
-+#ifndef CONFIG_LINARO_HACKS	
-+	rcu_read_unlock();
-+#endif	
- }
- 
- static int sched_rt_global_validate(void)
-@@ -7762,6 +7822,7 @@ static void cpu_cgroup_css_offline(struct cgroup_subsys_state *css)
- 	sched_offline_group(tg);
- }
- 
-+#ifdef CONFIG_LINARO_HACKS
- static int cpu_cgroup_allow_attach(struct cgroup_subsys_state *css,
- 				   struct cgroup_taskset *tset)
- {
-@@ -7779,6 +7840,7 @@ static int cpu_cgroup_allow_attach(struct cgroup_subsys_state *css,
- 
- 	return 0;
- }
-+#endif
- 
- static int cpu_cgroup_can_attach(struct cgroup_subsys_state *css,
- 				 struct cgroup_taskset *tset)
-@@ -8154,7 +8216,9 @@ struct cgroup_subsys cpu_cgrp_subsys = {
- 	.css_offline	= cpu_cgroup_css_offline,
- 	.can_attach	= cpu_cgroup_can_attach,
- 	.attach		= cpu_cgroup_attach,
-+#ifdef CONFIG_LINARO_HACKS
- 	.allow_attach	= cpu_cgroup_allow_attach,
-+#endif
- 	.exit		= cpu_cgroup_exit,
- 	.legacy_cftypes	= cpu_files,
- 	.early_init	= 1,
+ /* Actually do priority change: must hold rq lock. */
+ static void

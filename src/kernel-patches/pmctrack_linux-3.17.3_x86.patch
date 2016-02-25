@@ -244,10 +244,10 @@ index a91e47d..c2bd49e 100644
  	free_thread_info(tsk->stack);
 diff --git a/kernel/pmctrack.c b/kernel/pmctrack.c
 new file mode 100644
-index 0000000..99dde76
+index 0000000..80549cf
 --- /dev/null
 +++ b/kernel/pmctrack.c
-@@ -0,0 +1,384 @@
+@@ -0,0 +1,389 @@
 +/*
 + *  kernel/pmctrack.c
 + *
@@ -268,12 +268,12 @@ index 0000000..99dde76
 +#include <linux/device.h>
 +#include <linux/err.h>
 +#include <linux/slab.h>
-+#include <linux/spinlock.h>
++#include <linux/rwlock.h>
 +#include <linux/rcupdate.h>
 +
 +static pmc_ops_t* pmc_ops_mod=NULL; /* No implementation is registered by default */
 +static struct module* implementer=NULL;
-+DEFINE_SPINLOCK(pmc_ops_lock);
++DEFINE_RWLOCK(pmc_ops_lock);
 +
 +/* 
 + * PMCTrack's kernel module invokes this function to register 
@@ -282,8 +282,9 @@ index 0000000..99dde76
 +int register_pmc_module(pmc_ops_t* pmc_ops_module, struct module* module)
 +{
 +	int ret=0;
++	unsigned long flags;
 +
-+	spin_lock(&pmc_ops_lock);
++	write_lock_irqsave(&pmc_ops_lock,flags);
 +	
 +	/* Module has been installed already */
 +	if (implementer!=NULL) {
@@ -294,7 +295,7 @@ index 0000000..99dde76
 +		rcu_assign_pointer(pmc_ops_mod,pmc_ops_module);
 +	}
 +
-+	spin_unlock(&pmc_ops_lock);
++	write_unlock_irqrestore(&pmc_ops_lock,flags);
 +	return ret;
 +}
 +
@@ -303,8 +304,9 @@ index 0000000..99dde76
 +int unregister_pmc_module(pmc_ops_t* pmc_ops_module, struct module* module)
 +{
 +	int ret=0;
++	unsigned long flags;
 +
-+	spin_lock(&pmc_ops_lock);
++	write_lock_irqsave(&pmc_ops_lock,flags);
 +
 +	if(implementer!=module){
 +		ret=-EPERM;
@@ -313,7 +315,7 @@ index 0000000..99dde76
 +		implementer=NULL;
 +		rcu_assign_pointer(pmc_ops_mod,NULL);
 +	}
-+	spin_unlock(&pmc_ops_lock);
++	write_unlock_irqrestore(&pmc_ops_lock,flags);
 +
 +	/* 
 +	 * If the operation succeeded wait for all readers to complete. 
@@ -339,19 +341,20 @@ index 0000000..99dde76
 +{
 +	int ret=0;
 +	pmc_ops_t* pmc_ops= NULL;
++	unsigned long flags;
 +
-+	spin_lock(&pmc_ops_lock);
++	read_lock_irqsave(&pmc_ops_lock,flags);
 +
 +	/* 
 +	 * If there is no implementer module or it's being removed
 +	 * from the kernel, return immediately.
 +	 */
 +	if (!implementer || !try_module_get(implementer)){
-+		spin_unlock(&pmc_ops_lock);
++		read_unlock_irqrestore(&pmc_ops_lock,flags);
 +		return 0;	
 +	}
 +
-+	spin_unlock(&pmc_ops_lock);
++	read_unlock_irqrestore(&pmc_ops_lock,flags);
 +	
 +	/* Now it's safe to dereference pmc_ops_mod */
 +	pmc_ops=pmc_ops_mod;
@@ -442,22 +445,23 @@ index 0000000..99dde76
 +void pmcs_free_per_thread_data(struct task_struct* tsk)
 +{
 +	pmc_ops_t* pmc_ops= NULL;
++	unsigned long flags;
 +
-+	spin_lock(&pmc_ops_lock);
++	read_lock_irqsave(&pmc_ops_lock,flags);
 +
 +	/* 
 +	 * If there is no implementer module or it's being removed
 +	 * from the kernel, return immediately.
 +	 */
 +	if (!implementer || !try_module_get(implementer)){
-+		spin_unlock(&pmc_ops_lock);
-+		return 0;	
++		read_unlock_irqrestore(&pmc_ops_lock,flags);
++		return;
 +	}
 +
-+	spin_unlock(&pmc_ops_lock);
++	read_unlock_irqrestore(&pmc_ops_lock,flags);
 +	
 +	/* Now it's safe to dereference pmc_ops_mod */
-+	pmc_ops=rcu_dereference(pmc_ops_mod);
++	pmc_ops=pmc_ops_mod;
 +	
 +	if(pmc_ops!=NULL && pmc_ops->pmcs_free_per_thread_data!=NULL)
 +		pmc_ops->pmcs_free_per_thread_data(tsk);
@@ -470,22 +474,23 @@ index 0000000..99dde76
 +void pmcs_exit_thread(struct task_struct* tsk)
 +{
 +	pmc_ops_t* pmc_ops= NULL;
++	unsigned long flags;
 +
-+	spin_lock(&pmc_ops_lock);
++	read_lock_irqsave(&pmc_ops_lock,flags);
 +
 +	/* 
 +	 * If there is no implementer module or it's being removed
 +	 * from the kernel, return immediately.
 +	 */
 +	if (!implementer || !try_module_get(implementer)){
-+		spin_unlock(&pmc_ops_lock);
-+		return 0;	
++		read_unlock_irqrestore(&pmc_ops_lock,flags);
++		return;	
 +	}
 +
-+	spin_unlock(&pmc_ops_lock);
++	read_unlock_irqrestore(&pmc_ops_lock,flags);
 +	
 +	/* Now it's safe to dereference pmc_ops_mod */
-+	pmc_ops=rcu_dereference(pmc_ops_mod);
++	pmc_ops=pmc_ops_mod;
 +
 +	if(pmc_ops!=NULL && pmc_ops->pmcs_exit_thread!=NULL)
 +		pmc_ops->pmcs_exit_thread(tsk);

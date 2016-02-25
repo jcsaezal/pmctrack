@@ -1,9 +1,33 @@
-diff --git a/arch/x86/kernel/cpu/perf_event.c b/arch/x86/kernel/cpu/perf_event.c
-index aa4e3a7..122adfa 100644
---- a/arch/x86/kernel/cpu/perf_event.c
-+++ b/arch/x86/kernel/cpu/perf_event.c
-@@ -1652,6 +1652,13 @@ ssize_t x86_event_sysfs_show(char *page, u64 config, u64 event)
- 	return ret;
+diff --git a/arch/arm/kernel/perf_event_cpu.c b/arch/arm/kernel/perf_event_cpu.c
+index e0665b8..296e531 100644
+--- a/arch/arm/kernel/perf_event_cpu.c
++++ b/arch/arm/kernel/perf_event_cpu.c
+@@ -348,6 +348,13 @@ static struct platform_driver cpu_pmu_driver = {
+ 	.id_table	= cpu_pmu_plat_device_ids,
+ };
+ 
++#ifdef CONFIG_PMCTRACK
++static int __init register_pmu_driver(void)
++{
++        pr_cont("PMCTRACK enabled: only software events available in perf.\n");
++        return 0;
++}   
++#else
+ static int __init register_pmu_driver(void)
+ {
+ 	int err;
+@@ -370,4 +377,5 @@ static int __init register_pmu_driver(void)
+ 
+ 	return err;
+ }
++#endif
+ device_initcall(register_pmu_driver);
+diff --git a/arch/arm64/kernel/perf_event.c b/arch/arm64/kernel/perf_event.c
+index dfcd8fa..48f2d70 100644
+--- a/arch/arm64/kernel/perf_event.c
++++ b/arch/arm64/kernel/perf_event.c
+@@ -1320,6 +1320,13 @@ static void __init cpu_pmu_init(struct arm_pmu *armpmu)
+ 	armpmu->get_hw_events = armpmu_get_cpu_events;
  }
  
 +#ifdef CONFIG_PMCTRACK
@@ -15,59 +39,15 @@ index aa4e3a7..122adfa 100644
 +#else
  static int __init init_hw_perf_events(void)
  {
- 	struct x86_pmu_quirk *quirk;
-@@ -1728,6 +1735,7 @@ static int __init init_hw_perf_events(void)
+ 	u64 dfr = read_cpuid(ID_AA64DFR0_EL1);
+@@ -1341,6 +1348,7 @@ static int __init init_hw_perf_events(void)
  
  	return 0;
  }
 +#endif
  early_initcall(init_hw_perf_events);
  
- static inline void x86_pmu_read(struct perf_event *event)
-diff --git a/drivers/hwmon/hwmon.c b/drivers/hwmon/hwmon.c
-index a26c385..7a964e9 100644
---- a/drivers/hwmon/hwmon.c
-+++ b/drivers/hwmon/hwmon.c
-@@ -23,6 +23,7 @@
- #include <linux/spinlock.h>
- #include <linux/pci.h>
- #include <linux/string.h>
-+#include <linux/pmctrack.h>
- 
- #define HWMON_ID_PREFIX "hwmon"
- #define HWMON_ID_FORMAT HWMON_ID_PREFIX "%d"
-@@ -121,6 +122,11 @@ hwmon_device_register_with_groups(struct device *dev, const char *name,
- 	hwdev->dev.of_node = dev ? dev->of_node : NULL;
- 	dev_set_drvdata(&hwdev->dev, drvdata);
- 	dev_set_name(&hwdev->dev, HWMON_ID_FORMAT, id);
-+
-+#ifdef CONFIG_PMCTRACK
-+	if ((err=pmctrack_hwmon_export_device(dev_name(&hwdev->dev), id, &hwdev->dev)))
-+		goto ida_remove;
-+#endif
- 	err = device_register(&hwdev->dev);
- 	if (err)
- 		goto free;
-@@ -128,6 +134,9 @@ hwmon_device_register_with_groups(struct device *dev, const char *name,
- 	return &hwdev->dev;
- 
- free:
-+#ifdef CONFIG_PMCTRACK
-+	pmctrack_hwmon_unexport_device(id);
-+#endif
- 	kfree(hwdev);
- ida_remove:
- 	ida_simple_remove(&hwmon_ida, id);
-@@ -161,6 +170,9 @@ void hwmon_device_unregister(struct device *dev)
- 
- 	if (likely(sscanf(dev_name(dev), HWMON_ID_FORMAT, &id) == 1)) {
- 		device_unregister(dev);
-+#ifdef CONFIG_PMCTRACK	
-+		pmctrack_hwmon_unexport_device(id);
-+#endif
- 		ida_simple_remove(&hwmon_ida, id);
- 	} else
- 		dev_dbg(dev->parent,
+ /*
 diff --git a/include/linux/pmctrack.h b/include/linux/pmctrack.h
 new file mode 100644
 index 0000000..523b0ea
@@ -152,54 +132,54 @@ index 0000000..523b0ea
 +
 +#endif
 diff --git a/include/linux/sched.h b/include/linux/sched.h
-index 26a2e61..62b9d0d 100644
+index 5229df9..6c4a24e 100644
 --- a/include/linux/sched.h
 +++ b/include/linux/sched.h
-@@ -1724,6 +1724,10 @@ struct task_struct {
- #ifdef CONFIG_DEBUG_ATOMIC_SLEEP
- 	unsigned long	task_state_change;
+@@ -1448,6 +1448,10 @@ struct task_struct {
+ 	unsigned int	sequential_io;
+ 	unsigned int	sequential_io_avg;
  #endif
 +#ifdef CONFIG_PMCTRACK
-+	void *pmc;                      /* Per-thread PMC-specific data */
-+	unsigned char prof_enabled;     /* This field must be one for the profiler to be active in the current task */
-+#endif	
++        void *pmc;                      /* Per-thread PMC-specific data */
++        unsigned char prof_enabled;     /* This field must be one for the profiler to be active in the current task */
++#endif
  };
  
  /* Future-safe accessor for struct task_struct's cpus_allowed. */
 diff --git a/init/Kconfig b/init/Kconfig
-index dc24dec..684b7d6 100644
+index 79b356f..5dbc043 100644
 --- a/init/Kconfig
 +++ b/init/Kconfig
-@@ -1647,6 +1647,15 @@ config DEBUG_PERF_USE_VMALLOC
+@@ -1507,6 +1507,15 @@ config DEBUG_PERF_USE_VMALLOC
  
  	 Say N if unsure.
  
 +config PMCTRACK
-+	bool "PMCTrack performance monitoring tool with in-kernel interface"	
-+	default y
-+	help
-+	  PMCTrack performance monitoring tool with in-kernel interface. 
-+	  Warning: Activating this tool automatically disables HW events in 
-+	  the perf events subsystem on ARM and x86 platforms (including 32 and
-+	  64 bit variants).
++        bool "PMCTrack performance monitoring tool with in-kernel interface"
++        default y
++        help
++          PMCTrack performance monitoring tool with in-kernel interface.
++          Warning: Activating this tool automatically disables HW events in
++          the perf events subsystem on ARM and x86 platforms (including 32 and
++          64 bit variants).
 +
  endmenu
  
  config VM_EVENT_COUNTERS
 diff --git a/kernel/Makefile b/kernel/Makefile
-index 60c302c..770f94b 100644
+index 271fd31..1ec5661 100644
 --- a/kernel/Makefile
 +++ b/kernel/Makefile
-@@ -30,6 +30,7 @@ obj-y += irq/
- obj-y += rcu/
- obj-y += livepatch/
+@@ -26,6 +26,7 @@ obj-y += sched/
+ obj-y += power/
+ obj-y += cpu/
  
 +obj-$(CONFIG_PMCTRACK) += pmctrack.o
  obj-$(CONFIG_CHECKPOINT_RESTORE) += kcmp.o
  obj-$(CONFIG_FREEZER) += freezer.o
  obj-$(CONFIG_PROFILING) += profile.o
 diff --git a/kernel/exit.c b/kernel/exit.c
-index 22fcc05..700b83c 100644
+index 33fde71..31a2bcf 100644
 --- a/kernel/exit.c
 +++ b/kernel/exit.c
 @@ -53,6 +53,7 @@
@@ -210,21 +190,21 @@ index 22fcc05..700b83c 100644
  
  #include <asm/uaccess.h>
  #include <asm/unistd.h>
-@@ -754,6 +755,9 @@ void do_exit(long code)
+@@ -817,6 +818,9 @@ void do_exit(long code)
  	 */
  	perf_event_exit_task(tsk);
  
-+#ifdef CONFIG_PMCTRACK	
-+	pmcs_exit_thread(tsk);
++#ifdef CONFIG_PMCTRACK
++        pmcs_exit_thread(tsk);
 +#endif
- 	cgroup_exit(tsk);
+ 	cgroup_exit(tsk, 1);
  
- 	/*
+ 	module_put(task_thread_info(tsk)->exec_domain->module);
 diff --git a/kernel/fork.c b/kernel/fork.c
-index 03c1eaa..29b0008 100644
+index b066395..55d7015 100644
 --- a/kernel/fork.c
 +++ b/kernel/fork.c
-@@ -84,6 +84,7 @@
+@@ -80,6 +80,7 @@
  #include <asm/tlbflush.h>
  
  #include <trace/events/sched.h>
@@ -232,16 +212,56 @@ index 03c1eaa..29b0008 100644
  
  #define CREATE_TRACE_POINTS
  #include <trace/events/task.h>
-@@ -221,6 +222,9 @@ static void account_kernel_stack(struct thread_info *ti, int account)
+@@ -210,6 +211,9 @@ static void account_kernel_stack(struct thread_info *ti, int account)
  
  void free_task(struct task_struct *tsk)
  {
-+#ifdef CONFIG_PMCTRACK	
-+	pmcs_free_per_thread_data(tsk);	
++#ifdef CONFIG_PMCTRACK
++        pmcs_free_per_thread_data(tsk);
 +#endif
  	account_kernel_stack(tsk->stack, -1);
  	arch_release_thread_info(tsk->stack);
  	free_thread_info(tsk->stack);
+@@ -1374,6 +1378,12 @@ static struct task_struct *copy_process(unsigned long clone_flags,
+ 	p->sequential_io_avg	= 0;
+ #endif
+ 
++#ifdef CONFIG_PMCTRACK
++        p->prof_enabled = 0;    /* The profiler will be disabled by default */
++        p->pmc = NULL;
++        if (pmcs_alloc_per_thread_data(clone_flags,p))
++                goto bad_fork_cleanup_policy;
++#endif  
+ 	/* Perform scheduler related setup. Assign this task to a CPU. */
+ 	sched_fork(p);
+ 
+diff --git a/kernel/futex.c b/kernel/futex.c
+index ad971d0..8865f53 100644
+--- a/kernel/futex.c
++++ b/kernel/futex.c
+@@ -194,6 +194,8 @@ static void get_futex_key_refs(union futex_key *key)
+ 	case FUT_OFF_MMSHARED:
+ 		atomic_inc(&key->private.mm->mm_count);
+ 		break;
++	default:
++		smp_mb(); /* explicit MB (B) */
+ 	}
+ }
+ 
+diff --git a/kernel/irq/manage.c b/kernel/irq/manage.c
+index a79d267..7afbb02 100644
+--- a/kernel/irq/manage.c
++++ b/kernel/irq/manage.c
+@@ -202,6 +202,9 @@ int __irq_set_affinity(unsigned int irq, const struct cpumask *mask, bool force)
+ 	raw_spin_unlock_irqrestore(&desc->lock, flags);
+ 	return ret;
+ }
++#ifdef CONFIG_PMCTRACK
++EXPORT_SYMBOL_GPL(__irq_set_affinity);
++#endif
+ 
+ int irq_set_affinity_hint(unsigned int irq, const struct cpumask *m)
+ {
 diff --git a/kernel/pmctrack.c b/kernel/pmctrack.c
 new file mode 100644
 index 0000000..80549cf
@@ -638,7 +658,7 @@ index 0000000..80549cf
 +EXPORT_SYMBOL(pmctrack_hwmon_list_devices);
 +
 diff --git a/kernel/sched/core.c b/kernel/sched/core.c
-index 1236732..383560d 100644
+index ea4e780..8dfb9dc 100644
 --- a/kernel/sched/core.c
 +++ b/kernel/sched/core.c
 @@ -73,6 +73,7 @@
@@ -646,66 +666,60 @@ index 1236732..383560d 100644
  #include <linux/binfmts.h>
  #include <linux/context_tracking.h>
 +#include <linux/pmctrack.h>
- #include <linux/compiler.h>
  
  #include <asm/switch_to.h>
-@@ -1902,6 +1903,12 @@ int sched_fork(unsigned long clone_flags, struct task_struct *p)
+ #include <asm/tlb.h>
+@@ -1706,7 +1707,6 @@ void sched_fork(struct task_struct *p)
+ 	 * event cannot wake it up and insert it on the runqueue either.
  	 */
  	p->state = TASK_RUNNING;
- 
-+#ifdef CONFIG_PMCTRACK
-+	p->prof_enabled = 0;    /* The profiler will be disabled by default */
-+	p->pmc = NULL;
-+	if (pmcs_alloc_per_thread_data(clone_flags,p))
-+		return -ENOMEM;
-+#endif
+-
  	/*
  	 * Make sure we do not leak PI boosting priority to the child.
  	 */
-@@ -2227,6 +2234,9 @@ static struct rq *finish_task_switch(struct task_struct *prev)
+@@ -1921,6 +1921,9 @@ static void finish_task_switch(struct rq *rq, struct task_struct *prev)
  	vtime_task_switch(prev);
  	finish_arch_switch(prev);
  	perf_event_task_sched_in(prev, current);
 +#ifdef CONFIG_PMCTRACK
-+	pmcs_restore_callback(current->pmc, smp_processor_id()); 		
++        pmcs_restore_callback(current->pmc, smp_processor_id());
 +#endif
  	finish_lock_switch(rq, prev);
  	finish_arch_post_lock_switch();
  
-@@ -2414,6 +2424,9 @@ void sched_exec(void)
+@@ -2679,6 +2682,9 @@ void sched_exec(void)
  	unsigned long flags;
  	int dest_cpu;
  
 +#ifdef CONFIG_PMCTRACK
-+	pmcs_exec_thread(p);
-+#endif	
++        pmcs_exec_thread(p);
++#endif
  	raw_spin_lock_irqsave(&p->pi_lock, flags);
- 	dest_cpu = p->sched_class->select_task_rq(p, task_cpu(p), SD_BALANCE_EXEC, 0);
+ 	dest_cpu = p->sched_class->select_task_rq(p, SD_BALANCE_EXEC, 0);
  	if (dest_cpu == smp_processor_id())
-@@ -2493,6 +2506,9 @@ void scheduler_tick(void)
+@@ -2764,6 +2770,9 @@ void scheduler_tick(void)
+ 	struct rq *rq = cpu_rq(cpu);
+ 	struct task_struct *curr = rq->curr;
  
++#ifdef CONFIG_PMCTRACK
++        pmcs_tbs_tick(curr->pmc, cpu);
++#endif
  	sched_clock_tick();
  
-+#ifdef CONFIG_PMCTRACK
-+	pmcs_tbs_tick(curr->pmc, cpu);
-+#endif
  	raw_spin_lock(&rq->lock);
- 	update_rq_clock(rq);
- 	curr->sched_class->task_tick(rq, curr, 0);
-@@ -2794,7 +2810,9 @@ static void __sched __schedule(void)
- 		rq->nr_switches++;
+@@ -3042,6 +3051,9 @@ need_resched:
  		rq->curr = next;
  		++*switch_count;
--
+ 
 +#ifdef CONFIG_PMCTRACK
-+		pmcs_save_callback(prev->pmc, cpu);
++                pmcs_save_callback(prev->pmc, cpu);
 +#endif
- 		rq = context_switch(rq, prev, next); /* unlocks the rq */
- 		cpu = cpu_of(rq);
- 	} else
-@@ -3222,10 +3240,17 @@ struct task_struct *idle_task(int cpu)
-  *
-  * The task of @pid, if found. %NULL otherwise.
+ 		context_switch(rq, prev, next); /* unlocks the rq */
+ 		/*
+ 		 * The context switch have flipped the stack from under us
+@@ -3843,10 +3855,17 @@ struct task_struct *idle_task(int cpu)
+  * find_process_by_pid - find a process with a matching PID value.
+  * @pid: the pid in question.
   */
 +#ifdef CONFIG_PMCTRACK
 +struct task_struct *find_process_by_pid(pid_t pid)
@@ -716,8 +730,238 @@ index 1236732..383560d 100644
  	return pid ? find_task_by_vpid(pid) : current;
  }
 +#ifdef CONFIG_PMCTRACK
-+EXPORT_SYMBOL_GPL(find_process_by_pid);  
++EXPORT_SYMBOL_GPL(find_process_by_pid);
 +#endif
  
- /*
-  * This function initializes the sched_dl_entity of a newly becoming
+ extern struct cpumask hmp_slow_cpu_mask;
+ 
+diff --git a/scripts/package/builddeb b/scripts/package/builddeb
+index 3001ec5..0d64196 100644
+--- a/scripts/package/builddeb
++++ b/scripts/package/builddeb
+@@ -35,15 +35,17 @@ create_package() {
+ 	sparc*)
+ 		debarch=sparc ;;
+ 	s390*)
+-		debarch=s390 ;;
++		debarch=s390$(grep -q CONFIG_64BIT=y $KCONFIG_CONFIG && echo x || true) ;;
+ 	ppc*)
+ 		debarch=powerpc ;;
+ 	parisc*)
+ 		debarch=hppa ;;
+ 	mips*)
+-		debarch=mips$(grep -q CPU_LITTLE_ENDIAN=y .config && echo el) ;;
++		debarch=mips$(grep -q CPU_LITTLE_ENDIAN=y $KCONFIG_CONFIG && echo el || true) ;;
++	arm64)
++		debarch=arm64 ;;
+ 	arm*)
+-		debarch=arm$(grep -q CONFIG_AEABI=y .config && echo el) ;;
++		debarch=arm$(grep -q CONFIG_AEABI=y $KCONFIG_CONFIG && echo el || true) ;;
+ 	*)
+ 		echo "" >&2
+ 		echo "** ** **  WARNING  ** ** **" >&2
+@@ -78,17 +80,38 @@ tmpdir="$objtree/debian/tmp"
+ fwdir="$objtree/debian/fwtmp"
+ kernel_headers_dir="$objtree/debian/hdrtmp"
+ libc_headers_dir="$objtree/debian/headertmp"
++dbg_dir="$objtree/debian/dbgtmp"
+ packagename=linux-image-$version
+-fwpackagename=linux-firmware-image
++fwpackagename=linux-firmware-image-$version
+ kernel_headers_packagename=linux-headers-$version
+ libc_headers_packagename=linux-libc-dev
++dbg_packagename=$packagename-dbg
+ 
+ if [ "$ARCH" = "um" ] ; then
+ 	packagename=user-mode-linux-$version
+ fi
+ 
++# Not all arches have the same installed path in debian
++# XXX: have each arch Makefile export a variable of the canonical image install
++# path instead
++case $ARCH in
++um)
++	installed_image_path="usr/bin/linux-$version"
++	;;
++parisc|mips|powerpc)
++	installed_image_path="boot/vmlinux-$version"
++	;;
++arm64)
++	installed_image_path="boot/Image-$version"
++	;;
++*)
++	installed_image_path="boot/vmlinuz-$version"
++esac
++
++BUILD_DEBUG="$(grep -s '^CONFIG_DEBUG_INFO=y' $KCONFIG_CONFIG || true)"
++
+ # Setup the directory structure
+-rm -rf "$tmpdir" "$fwdir" "$kernel_headers_dir" "$libc_headers_dir"
++rm -rf "$tmpdir" "$fwdir" "$kernel_headers_dir" "$libc_headers_dir" "$dbg_dir"
+ mkdir -m 755 -p "$tmpdir/DEBIAN"
+ mkdir -p  "$tmpdir/lib" "$tmpdir/boot" "$tmpdir/usr/share/doc/$packagename"
+ mkdir -m 755 -p "$fwdir/DEBIAN"
+@@ -101,26 +124,29 @@ mkdir -p "$kernel_headers_dir/lib/modules/$version/"
+ if [ "$ARCH" = "um" ] ; then
+ 	mkdir -p "$tmpdir/usr/lib/uml/modules/$version" "$tmpdir/usr/bin"
+ fi
++if [ -n "$BUILD_DEBUG" ] ; then
++	mkdir -p "$dbg_dir/usr/share/doc/$dbg_packagename"
++	mkdir -m 755 -p "$dbg_dir/DEBIAN"
++fi
+ 
+ # Build and install the kernel
+ if [ "$ARCH" = "um" ] ; then
+ 	$MAKE linux
+ 	cp System.map "$tmpdir/usr/lib/uml/modules/$version/System.map"
+-	cp .config "$tmpdir/usr/share/doc/$packagename/config"
++	cp $KCONFIG_CONFIG "$tmpdir/usr/share/doc/$packagename/config"
+ 	gzip "$tmpdir/usr/share/doc/$packagename/config"
+-	cp $KBUILD_IMAGE "$tmpdir/usr/bin/linux-$version"
+-else 
++else
+ 	cp System.map "$tmpdir/boot/System.map-$version"
+-	cp .config "$tmpdir/boot/config-$version"
+-	# Not all arches include the boot path in KBUILD_IMAGE
+-	if [ -e $KBUILD_IMAGE ]; then
+-		cp $KBUILD_IMAGE "$tmpdir/boot/vmlinuz-$version"
+-	else
+-		cp arch/$ARCH/boot/$KBUILD_IMAGE "$tmpdir/boot/vmlinuz-$version"
+-	fi
++	cp $KCONFIG_CONFIG "$tmpdir/boot/config-$version"
++fi
++# Not all arches include the boot path in KBUILD_IMAGE
++if [ -e $KBUILD_IMAGE ]; then
++	cp $KBUILD_IMAGE "$tmpdir/$installed_image_path"
++else
++	cp arch/$ARCH/boot/$KBUILD_IMAGE "$tmpdir/$installed_image_path"
+ fi
+ 
+-if grep -q '^CONFIG_MODULES=y' .config ; then
++if grep -q '^CONFIG_MODULES=y' $KCONFIG_CONFIG ; then
+ 	INSTALL_MOD_PATH="$tmpdir" $MAKE KBUILD_SRC= modules_install
+ 	rm -f "$tmpdir/lib/modules/$version/build"
+ 	rm -f "$tmpdir/lib/modules/$version/source"
+@@ -128,6 +154,20 @@ if grep -q '^CONFIG_MODULES=y' .config ; then
+ 		mv "$tmpdir/lib/modules/$version"/* "$tmpdir/usr/lib/uml/modules/$version/"
+ 		rmdir "$tmpdir/lib/modules/$version"
+ 	fi
++	if [ -n "$BUILD_DEBUG" ] ; then
++		(
++			cd $tmpdir
++			for module in $(find lib/modules/ -name *.ko); do
++				mkdir -p $(dirname $dbg_dir/usr/lib/debug/$module)
++				# only keep debug symbols in the debug file
++				$OBJCOPY --only-keep-debug $module $dbg_dir/usr/lib/debug/$module
++				# strip original module from debug symbols
++				$OBJCOPY --strip-debug $module
++				# then add a link to those
++				$OBJCOPY --add-gnu-debuglink=$dbg_dir/usr/lib/debug/$module $module
++			done
++		)
++	fi
+ fi
+ 
+ if [ "$ARCH" != "um" ]; then
+@@ -137,8 +177,15 @@ fi
+ 
+ # Install the maintainer scripts
+ # Note: hook scripts under /etc/kernel are also executed by official Debian
+-# kernel packages, as well as kernel packages built using make-kpkg
++# kernel packages, as well as kernel packages built using make-kpkg.
++# make-kpkg sets $INITRD to indicate whether an initramfs is wanted, and
++# so do we; recent versions of dracut and initramfs-tools will obey this.
+ debhookdir=${KDEB_HOOKDIR:-/etc/kernel}
++if grep -q '^CONFIG_BLK_DEV_INITRD=y' $KCONFIG_CONFIG; then
++	want_initrd=Yes
++else
++	want_initrd=No
++fi
+ for script in postinst postrm preinst prerm ; do
+ 	mkdir -p "$tmpdir$debhookdir/$script.d"
+ 	cat <<EOF > "$tmpdir/DEBIAN/$script"
+@@ -149,7 +196,10 @@ set -e
+ # Pass maintainer script parameters to hook scripts
+ export DEB_MAINT_PARAMS="\$*"
+ 
+-test -d $debhookdir/$script.d && run-parts --arg="$version" $debhookdir/$script.d
++# Tell initramfs builder whether it's wanted
++export INITRD=$want_initrd
++
++test -d $debhookdir/$script.d && run-parts --arg="$version" --arg="/$installed_image_path" $debhookdir/$script.d
+ exit 0
+ EOF
+ 	chmod 755 "$tmpdir/DEBIAN/$script"
+@@ -242,14 +292,17 @@ EOF
+ 
+ fi
+ 
+-# Build header package
+-(cd $srctree; find . -name Makefile\* -o -name Kconfig\* -o -name \*.pl > "$objtree/debian/hdrsrcfiles")
+-(cd $srctree; find arch/$SRCARCH/include include scripts -type f >> "$objtree/debian/hdrsrcfiles")
+-(cd $objtree; find arch/$SRCARCH/include .config Module.symvers include scripts -type f >> "$objtree/debian/hdrobjfiles")
++# Build kernel header package
++(cd $srctree; find . -name Makefile\* -o -name Kconfig\* -o -name \*.pl) > "$objtree/debian/hdrsrcfiles"
++(cd $srctree; find arch/$SRCARCH/include include scripts -type f) >> "$objtree/debian/hdrsrcfiles"
++(cd $srctree; find arch/$SRCARCH -name module.lds -o -name Kbuild.platforms -o -name Platform) >> "$objtree/debian/hdrsrcfiles"
++(cd $srctree; find $(find arch/$SRCARCH -name include -o -name scripts -type d) -type f) >> "$objtree/debian/hdrsrcfiles"
++(cd $objtree; find arch/$SRCARCH/include Module.symvers include scripts -type f) >> "$objtree/debian/hdrobjfiles"
+ destdir=$kernel_headers_dir/usr/src/linux-headers-$version
+ mkdir -p "$destdir"
+-(cd $srctree; tar -c -f - -T "$objtree/debian/hdrsrcfiles") | (cd $destdir; tar -xf -)
+-(cd $objtree; tar -c -f - -T "$objtree/debian/hdrobjfiles") | (cd $destdir; tar -xf -)
++(cd $srctree; tar -c -f - -T -) < "$objtree/debian/hdrsrcfiles" | (cd $destdir; tar -xf -)
++(cd $objtree; tar -c -f - -T -) < "$objtree/debian/hdrobjfiles" | (cd $destdir; tar -xf -)
++(cd $objtree; cp $KCONFIG_CONFIG $destdir/.config) # copy .config manually to be where it's expected to be
+ ln -sf "/usr/src/linux-headers-$version" "$kernel_headers_dir/lib/modules/$version/build"
+ rm -f "$objtree/debian/hdrsrcfiles" "$objtree/debian/hdrobjfiles"
+ 
+@@ -280,6 +333,17 @@ EOF
+ 	create_package "$fwpackagename" "$fwdir"
+ fi
+ 
++# Copy device tree files if generated
++stat arch/$ARCH/boot/dts/*.dtb && {
++	mkdir -p "$tmpdir/lib/firmware/$version/device-tree"
++	cp arch/$ARCH/boot/dts/*.dtb "$tmpdir/lib/firmware/$version/device-tree"
++}
++
++# Copy boot wrapper files if built
++if [ "$ARCH" = "arm64" ] ; then
++	stat arch/arm64/boot/*.axf && cp arch/arm64/boot/*.axf "$tmpdir/boot"
++fi
++
+ cat <<EOF >> debian/control
+ 
+ Package: $libc_headers_packagename
+@@ -298,4 +362,30 @@ fi
+ 
+ create_package "$packagename" "$tmpdir"
+ 
++if [ -n "$BUILD_DEBUG" ] ; then
++	# Build debug package
++	# Different tools want the image in different locations
++	# perf
++	mkdir -p $dbg_dir/usr/lib/debug/lib/modules/$version/
++	cp vmlinux $dbg_dir/usr/lib/debug/lib/modules/$version/
++	# systemtap
++	mkdir -p $dbg_dir/usr/lib/debug/boot/
++	ln -s ../lib/modules/$version/vmlinux $dbg_dir/usr/lib/debug/boot/vmlinux-$version
++	# kdump-tools
++	ln -s lib/modules/$version/vmlinux $dbg_dir/usr/lib/debug/vmlinux-$version
++
++	cat <<EOF >> debian/control
++
++Package: $dbg_packagename
++Section: debug
++Provides: linux-debug, linux-debug-$version
++Architecture: any
++Description: Linux kernel debugging symbols for $version
++ This package will come in handy if you need to debug the kernel. It provides
++ all the necessary debug symbols for the kernel and its modules.
++EOF
++
++	create_package "$dbg_packagename" "$dbg_dir"
++fi
++
+ exit 0

@@ -71,6 +71,13 @@
 #define CMD_FLAG_KERNEL_DRIVES_PMCS (1<<6)
 #define CMD_FLAG_SYSTEM_WIDE_MODE	(1<<7)
 
+/* Monitoring modes supported */
+typedef enum {
+	PMCTRACK_MODE_PROCESS,
+	PMCTRACK_MODE_SYSWIDE,
+	PMCTRACK_MODE_ATTACH
+} monitoring_mode_t;
+
 /*
  * Structure to store information about command-line options
  * specified by the user
@@ -137,6 +144,14 @@ void sigchld_handler(int signo);
 void sigint_handler(int signo);
 static void usage(const char* program_name,int status);
 
+/* Data type predeclaration */
+struct pid_set;
+typedef struct pid_set pid_set_t;
+
+static void process_pmc_counts(struct options* opts, int nr_experiments,unsigned int pmcmask,
+                               unsigned int virtual_mask,struct pid_ctrl* pid_ctrl_vector,
+                               pmc_sample_t** acum_samples, monitoring_mode_t mode,
+                               pid_set_t* set);
 #ifndef USE_VFORK
 static void init_posix_semaphore(sem_t** sem, int value)
 {
@@ -357,21 +372,13 @@ static int install_signal_handlers(int install_sigchild)
 static void monitoring_counters(struct options* opts,int optind,char** argv)
 {
 	unsigned int nr_virtual_counters=0,virtual_mask=0;
-	int i, cont;
 	unsigned int pmcmask=0;
 	unsigned int npmcs = 0;
-	int fd;
 	struct timespec;
-	pmc_sample_t* samples=NULL;
 	pmc_sample_t** acum_samples=NULL;
 	struct pid_ctrl* pid_ctrl_vector=NULL;
-	int nr_pids=0;
-	int nr_samples;
 	unsigned int nr_experiments;
-	unsigned int max_buffer_samples;
 
-	cont = 1;
-	fd = -1;
 	child_status = 0;
 	nr_virtual_counters=opts->nr_virtual_counters;
 	virtual_mask=opts->virtual_mask;
@@ -471,127 +478,11 @@ static void monitoring_counters(struct options* opts,int optind,char** argv)
 		/* Wait for the child process to configure the counters */
 		sem_wait(sem_config_ready);
 #endif
-		profile_started=1;
-
-		if ( (fd = pmct_open_monitor_entry())<0 )
-			goto error_path;
-
-		if (opts->kernel_buffer_size<4096) {
-			/* Request shared memory region */
-			if ((samples=pmct_request_shared_memory_region(fd,&max_buffer_samples))==NULL)
-				goto error_path;
-		} else {
-			/* Reserve a big buffer from the heap directly */
-			max_buffer_samples=opts->kernel_buffer_size/sizeof(pmc_sample_t);
-			if ((samples=malloc(max_buffer_samples*sizeof(pmc_sample_t)))==NULL)
-				goto error_path;
-		}
-		/* Print header if necessary */
-		if (!(opts->flags & CMD_FLAG_ACUM_SAMPLES)) {
-			print_counter_mappings(fo,opts,nr_experiments);
-			pmct_print_header(fo,nr_experiments,pmcmask,virtual_mask,extended_output,0);
-		}
-		/* Print child counters */
-		while(!stop_profiling) {
-			/* Do this while !child_finished*/
-			if (!child_finished) {
-				alarm_ms(opts->msecs);
-				pause();
-			}
-
-			/* Check if Ctrl+C was pressed */
-			if(!stop_profiling) {
-				nr_samples=pmct_read_samples(fd,samples,max_buffer_samples);
-
-				if (nr_samples < 0)
-					goto error_path;
-
-				/*
-				 *  If we did not read anything and child already finished,
-				 *  then exit loop
-				 */
-				if (nr_samples==0 && child_finished)
-					break;
-
-				for (i=0; i<nr_samples; i++) {
-					pmc_sample_t* cur=&samples[i];
-
-					if (opts->flags & CMD_FLAG_ACUM_SAMPLES) {
-						int j=0;
-						unsigned char copy_metadata=0;
-
-						/* Search PID in set */
-						while (j<nr_pids && pid_ctrl_vector[j].pid!=cur->pid)
-							j++;
-
-						/* PID not found */
-						if (j==nr_pids) {
-							/* Add new item to set */
-							pid_ctrl_vector[j].pid=cur->pid;
-							pid_ctrl_vector[j].exp_mask=0;
-							nr_pids++;
-							acum_samples[j]=malloc(sizeof(pmc_sample_t)*nr_experiments);
-
-							if (!acum_samples[j]) {
-								fprintf(stderr,"Couldn't reserve memory for cummulative counters");
-								goto error_path;
-							}
-						}
-
-						if (! (pid_ctrl_vector[j].exp_mask & (1<<cur->exp_idx))) {
-							/* Time to copy metadata ... */
-							copy_metadata=1;
-							pid_ctrl_vector[j].exp_mask|=1<<cur->exp_idx;
-							pid_ctrl_vector[j].nr_samples_accum[cur->exp_idx]=1;
-						} else
-							pid_ctrl_vector[j].nr_samples_accum[cur->exp_idx]++;
-
-						pmct_accumulate_sample (nr_experiments,pmcmask,virtual_mask,copy_metadata,cur,&acum_samples[j][cur->exp_idx]);
-					} else {
-						pmct_print_sample (fo,nr_experiments, pmcmask, virtual_mask, extended_output, cont, cur);
-					}
-
-					cont++;
-					if ((opts->max_samples!=-1 && !child_finished && cont>opts->max_samples)
-					    || (opts->timeout_secs!=-1 && !child_finished && check_timeout(opts->timeout_secs))) {
-						kill(pid,SIGTERM);
-						fprintf(stderr, "Maximum samples/timeout reached. Killing child process %d\n",pid);
-						sleep(2);
-					}
-				}
-			}
-		}//end while
-
-		/* Generate output from accumulated values */
-		if (opts->flags & CMD_FLAG_ACUM_SAMPLES) {
-
-			print_counter_mappings(fo,opts,nr_experiments);
-			pmct_print_header(fo,nr_experiments,pmcmask,virtual_mask,extended_output,0);
-
-			/* Generate samples for the various threads */
-			for (i=0; i<nr_pids; i++) {
-				int j=0;
-				for (j=0; j<nr_experiments; j++) {
-					if ( pid_ctrl_vector[i].exp_mask & (1<<j))
-						pmct_print_sample (fo,nr_experiments, pmcmask, virtual_mask,
-						                   extended_output, pid_ctrl_vector[i].nr_samples_accum[j], &acum_samples[i][j]);
-				}
-			}
-		}
-
-error_path:
-		if (!child_finished) {
-			wait4(pid,&child_status,0,&child_rusage);
-			gettimeofday(&end_time, NULL);
-		}
-		if (opts->flags & CMD_FLAG_SHOW_CHILD_TIMES)
-			print_process_statistics(fo,&child_rusage,&start_time,&end_time);
-
-		if (fd>0)
-			close(fd);
-		exit(child_status);
+		process_pmc_counts(opts,nr_experiments,pmcmask,virtual_mask,
+		                   pid_ctrl_vector,acum_samples,PMCTRACK_MODE_PROCESS,NULL);
 	}//end parent code
 }
+
 
 #define MAX_CPUS 256
 
@@ -599,21 +490,13 @@ error_path:
 void monitoring_counters_syswide(struct options* opts,int optind,char** argv)
 {
 	unsigned int nr_virtual_counters=0,virtual_mask=0;
-	int i, cont;
 	unsigned int pmcmask=0;
 	unsigned int npmcs = 0;
-	int fd;
 	struct timespec;
-	pmc_sample_t* samples=NULL;
 	pmc_sample_t** acum_samples=NULL;
 	struct pid_ctrl* pid_ctrl_vector=NULL;
-	int nr_pids=0;
-	int nr_samples;
 	unsigned int nr_experiments;
-	unsigned int max_buffer_samples;
 
-	cont = 1;
-	fd = -1;
 	child_status = 0;
 	nr_virtual_counters=opts->nr_virtual_counters;
 	virtual_mask=opts->virtual_mask;
@@ -706,123 +589,8 @@ void monitoring_counters_syswide(struct options* opts,int optind,char** argv)
 		/* Wait for the child process to configure the counters */
 		sem_wait(sem_config_ready);
 #endif
-		profile_started=1;
-
-		if ( (fd = pmct_open_monitor_entry())<0 )
-			goto error_path;
-
-		if (opts->kernel_buffer_size<4096) {
-			/* Request shared memory region */
-			if ((samples=pmct_request_shared_memory_region(fd,&max_buffer_samples))==NULL)
-				goto error_path;
-		} else {
-			/* Reserve a big buffer from the heap directly */
-			max_buffer_samples=opts->kernel_buffer_size/sizeof(pmc_sample_t);
-			if ((samples=malloc(max_buffer_samples*sizeof(pmc_sample_t)))==NULL)
-				goto error_path;
-		}
-		/* Print header if necessary */
-		if (!(opts->flags & CMD_FLAG_ACUM_SAMPLES)) {
-			print_counter_mappings(fo,opts,nr_experiments);
-			pmct_print_header(fo,nr_experiments,pmcmask,virtual_mask,extended_output,1);
-		}
-
-		/* Print child counters */
-		while(!stop_profiling) {
-			/* Do this while !child_finished*/
-			if (!child_finished) {
-				alarm_ms(opts->msecs);
-				pause();
-			}
-
-			/* Check if Ctrl+C was pressed */
-			if(!stop_profiling) {
-				nr_samples=pmct_read_samples(fd,samples,max_buffer_samples);
-
-				if (nr_samples < 0)
-					goto error_path;
-
-				/* If we did not read anything and child already finished,
-				                 *  then exit loop */
-				if (nr_samples==0 && child_finished)
-					break;
-
-				for (i=0; i<nr_samples; i++) {
-					pmc_sample_t* cur=&samples[i];
-
-					if (opts->flags & CMD_FLAG_ACUM_SAMPLES) {
-						int j=0;
-						unsigned char copy_metadata=0;
-
-						/* Search PID in set */
-						while (j<nr_pids && pid_ctrl_vector[j].pid!=cur->pid)
-							j++;
-
-						/* Not found */
-						if (j==nr_pids) {
-							/* Add new item to set */
-							pid_ctrl_vector[j].pid=cur->pid;
-							pid_ctrl_vector[j].exp_mask=0;
-							nr_pids++;
-							acum_samples[j]=malloc(sizeof(pmc_sample_t)*nr_experiments);
-
-							if (!acum_samples[j]) {
-								fprintf(stderr,"Couldn't reserve memory for cummulative counters");
-								goto error_path;
-							}
-						}
-
-						if (! (pid_ctrl_vector[j].exp_mask & (1<<cur->exp_idx))) {
-							/* Time to copy metadata ... */
-							copy_metadata=1;
-							pid_ctrl_vector[j].exp_mask|=1<<cur->exp_idx;
-							pid_ctrl_vector[j].nr_samples_accum[cur->exp_idx]=1;
-						} else
-							pid_ctrl_vector[j].nr_samples_accum[cur->exp_idx]++;
-
-						pmct_accumulate_sample (nr_experiments,pmcmask,virtual_mask,copy_metadata,cur,&acum_samples[j][cur->exp_idx]);
-					} else {
-						pmct_print_sample (fo,nr_experiments, pmcmask, virtual_mask, extended_output, cont, cur);
-					}
-
-					cont++;
-					if ((opts->max_samples!=-1 && !child_finished && cont>opts->max_samples)
-					    || (opts->timeout_secs!=-1 && !child_finished && check_timeout(opts->timeout_secs))) {
-						kill(pid,SIGTERM);
-						fprintf(stderr, "Maximum samples/timeout reached. Killing child process %d\n",pid);
-						sleep(2);
-					}
-				}
-			}
-		}//end while
-
-		/* Generate output from accumulated values */
-		if (opts->flags & CMD_FLAG_ACUM_SAMPLES) {
-
-			print_counter_mappings(fo,opts,nr_experiments);
-			pmct_print_header(fo,nr_experiments,pmcmask,virtual_mask,extended_output,1);
-
-			/* Generate samples for the various threads */
-			for (i=0; i<nr_pids; i++) {
-				int j=0;
-				for (j=0; j<nr_experiments; j++) {
-					if ( pid_ctrl_vector[i].exp_mask & (1<<j))
-						pmct_print_sample (fo,nr_experiments, pmcmask, virtual_mask,
-						                   extended_output, pid_ctrl_vector[i].nr_samples_accum[j], &acum_samples[i][j]);
-				}
-			}
-		}
-
-error_path:
-		if (!child_finished) {
-			wait4(pid,&child_status,0,&child_rusage);
-			gettimeofday(&end_time, NULL);
-		}
-		if (opts->flags & CMD_FLAG_SHOW_CHILD_TIMES)
-			print_process_statistics(fo,&child_rusage,&start_time,&end_time);
-		if (fd>0)
-			close(fd);
-		exit(child_status);
+		process_pmc_counts(opts,nr_experiments,pmcmask,virtual_mask,
+		                   pid_ctrl_vector,acum_samples,PMCTRACK_MODE_SYSWIDE,NULL);
 	}//end parent code
 }
 
@@ -833,10 +601,10 @@ typedef struct {
 } pid_status_t;
 
 /* Structure to describe a set of PIDs (belonging to the same application) */
-typedef struct {
+struct pid_set {
 	pid_status_t* pid_status; 	/* Array of pid status */
 	unsigned int nr_pids;		/* # of items in pid_status array */
-} pid_set_t;
+};
 
 /* Initialize empty set */
 static pid_set_t* alloc_pid_set(void)
@@ -978,24 +746,15 @@ static void detach_pid_set(pid_set_t* set,int pid)
 static void monitoring_counters_attach(struct options* opts,int optind,char** argv)
 {
 	unsigned int nr_virtual_counters=0,virtual_mask=0;
-	int i, cont;
 	unsigned int pmcmask=0;
 	unsigned int npmcs = 0;
-	int fd;
 	struct timespec;
-	pmc_sample_t* samples=NULL;
 	pmc_sample_t** acum_samples=NULL;
 	struct pid_ctrl* pid_ctrl_vector=NULL;
-	int nr_pids=0;
-	int nr_samples;
 	unsigned int nr_experiments;
-	unsigned int max_buffer_samples;
 	pid_set_t* set=alloc_pid_set();
 	int exit_val=0;
-	int detached=1;
 
-	cont = 1;
-	fd = -1;
 	child_status = 0;
 	nr_virtual_counters=opts->nr_virtual_counters;
 	virtual_mask=opts->virtual_mask;
@@ -1076,7 +835,31 @@ static void monitoring_counters_attach(struct options* opts,int optind,char** ar
 		goto free_up_pid_set;
 	}
 
-	detached=0;
+	process_pmc_counts(opts,nr_experiments,pmcmask,virtual_mask,
+	                   pid_ctrl_vector,acum_samples,PMCTRACK_MODE_ATTACH,set);
+	return;
+
+free_up_pid_set:
+	if (set)
+		destroy_pid_set(set);
+	exit(exit_val);
+}
+
+static void process_pmc_counts(struct options* opts, int nr_experiments,unsigned int pmcmask,
+                               unsigned int virtual_mask,struct pid_ctrl* pid_ctrl_vector,
+                               pmc_sample_t** acum_samples, monitoring_mode_t mode, pid_set_t* set)
+{
+	int i=0,cont=1;
+	int fd=-1;
+	pmc_sample_t* samples=NULL;
+	int nr_pids=0;
+	int nr_samples;
+	unsigned int max_buffer_samples;
+	int detached=1;
+
+	if (mode==PMCTRACK_MODE_ATTACH)
+		detached=0;
+
 	profile_started=1;
 
 	if ( (fd = pmct_open_monitor_entry())<0 )
@@ -1095,13 +878,18 @@ static void monitoring_counters_attach(struct options* opts,int optind,char** ar
 	/* Print header if necessary */
 	if (!(opts->flags & CMD_FLAG_ACUM_SAMPLES)) {
 		print_counter_mappings(fo,opts,nr_experiments);
-		pmct_print_header(fo,nr_experiments,pmcmask,virtual_mask,extended_output,0);
+		pmct_print_header(fo,nr_experiments,pmcmask,virtual_mask,extended_output,mode==PMCTRACK_MODE_SYSWIDE);
 	}
 	/* Print child counters */
 	while(!stop_profiling) {
-
-		alarm_ms(opts->msecs);
-		pause();
+		/*
+		 * Do this while !child_finished
+		 * Note that in the ATTACH mode, child_finished is always false
+		 */
+		if (!child_finished) {
+			alarm_ms(opts->msecs);
+			pause();
+		}
 
 		/* Check if Ctrl+C was pressed */
 		if(!stop_profiling) {
@@ -1111,10 +899,16 @@ static void monitoring_counters_attach(struct options* opts,int optind,char** ar
 				goto error_path;
 
 			/*
-			 *  If we did not read anything then exit loop
+			 *  If we did not read anything and child already finished,
+			 *  then exit loop.
+			 *  Note that in the ATTACH mode, child_finished is always false.
 			 */
-			if (nr_samples==0)
+			if (nr_samples==0 && (mode==PMCTRACK_MODE_ATTACH || child_finished) )
 				break;
+
+			/* Make sure not to exceed the maximum number of samples requested */
+			if (opts->max_samples!=-1 && (cont+nr_samples>opts->max_samples))
+					nr_samples=opts->max_samples-(cont-1);
 
 			for (i=0; i<nr_samples; i++) {
 				pmc_sample_t* cur=&samples[i];
@@ -1155,11 +949,21 @@ static void monitoring_counters_attach(struct options* opts,int optind,char** ar
 				}
 
 				cont++;
-				if ((opts->max_samples!=-1 && cont>opts->max_samples)
-				    || (opts->timeout_secs!=-1 && check_timeout(opts->timeout_secs))) {
-					detach_pid_set(set,opts->target_pid);
-					detached=1;
-					fprintf(stderr, "Maximum samples/timeout reached. Detaching process %d\n",opts->target_pid);
+
+				/* Control for -n /-t options */
+				if (mode==PMCTRACK_MODE_ATTACH) {
+					if ((opts->max_samples!=-1 && cont>opts->max_samples)
+					    || (opts->timeout_secs!=-1 && check_timeout(opts->timeout_secs))) {
+						detach_pid_set(set,opts->target_pid);
+						detached=1;
+						fprintf(stderr, "Maximum samples/timeout reached. Detaching process %d\n",opts->target_pid);
+					}
+				} else {
+					if ((opts->max_samples!=-1 && !child_finished && cont>opts->max_samples)
+					    || (opts->timeout_secs!=-1 && !child_finished && check_timeout(opts->timeout_secs))) {
+						kill(pid,SIGTERM);
+						fprintf(stderr, "Maximum samples/timeout reached. Killing child process %d\n",pid);
+					}
 				}
 			}
 		}
@@ -1169,7 +973,7 @@ static void monitoring_counters_attach(struct options* opts,int optind,char** ar
 	if (opts->flags & CMD_FLAG_ACUM_SAMPLES) {
 
 		print_counter_mappings(fo,opts,nr_experiments);
-		pmct_print_header(fo,nr_experiments,pmcmask,virtual_mask,extended_output,0);
+		pmct_print_header(fo,nr_experiments,pmcmask,virtual_mask,extended_output,mode==PMCTRACK_MODE_SYSWIDE);
 
 		/* Generate samples for the various threads */
 		for (i=0; i<nr_pids; i++) {
@@ -1186,18 +990,21 @@ error_path:
 	if (!detached)
 		detach_pid_set(set,opts->target_pid);
 
+	if (mode!=PMCTRACK_MODE_ATTACH && !child_finished) {
+		wait4(pid,&child_status,0,&child_rusage);
+		gettimeofday(&end_time, NULL);
+	}
+	if (opts->flags & CMD_FLAG_SHOW_CHILD_TIMES)
+		print_process_statistics(fo,&child_rusage,&start_time,&end_time);
 	if (fd>0)
 		close(fd);
-free_up_pid_set:
 	if (set)
 		destroy_pid_set(set);
-	exit(exit_val);
-
+	exit(child_status);
 }
 
 void sigchld_handler(int signo)
 {
-
 	/* Error since profile was not started when the child process finished */
 	if (!profile_started)
 		exit(1);

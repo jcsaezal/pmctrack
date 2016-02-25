@@ -1,5 +1,5 @@
 diff --git a/arch/arm/boot/dts/exynos5422_evt0.dtsi b/arch/arm/boot/dts/exynos5422_evt0.dtsi
-index 2f9c95d..8be5fee 100755
+index 5dfee28..6ced97e 100644
 --- a/arch/arm/boot/dts/exynos5422_evt0.dtsi
 +++ b/arch/arm/boot/dts/exynos5422_evt0.dtsi
 @@ -91,6 +91,17 @@
@@ -128,10 +128,10 @@ index 0000000..523b0ea
 +
 +#endif
 diff --git a/include/linux/sched.h b/include/linux/sched.h
-index 6d9dcc3..58c1381 100644
+index c32ac01..f34cdfc 100644
 --- a/include/linux/sched.h
 +++ b/include/linux/sched.h
-@@ -1454,6 +1454,10 @@ struct task_struct {
+@@ -1455,6 +1455,10 @@ struct task_struct {
  	unsigned int	sequential_io;
  	unsigned int	sequential_io_avg;
  #endif
@@ -175,7 +175,7 @@ index 271fd31..1ec5661 100644
  obj-$(CONFIG_FREEZER) += freezer.o
  obj-$(CONFIG_PROFILING) += profile.o
 diff --git a/kernel/exit.c b/kernel/exit.c
-index 33fde71..31a2bcf 100644
+index 59b6c86..fa3e0b0 100644
 --- a/kernel/exit.c
 +++ b/kernel/exit.c
 @@ -53,6 +53,7 @@
@@ -186,7 +186,7 @@ index 33fde71..31a2bcf 100644
  
  #include <asm/uaccess.h>
  #include <asm/unistd.h>
-@@ -817,6 +818,9 @@ void do_exit(long code)
+@@ -818,6 +819,9 @@ void do_exit(long code)
  	 */
  	perf_event_exit_task(tsk);
  
@@ -197,7 +197,7 @@ index 33fde71..31a2bcf 100644
  
  	module_put(task_thread_info(tsk)->exec_domain->module);
 diff --git a/kernel/fork.c b/kernel/fork.c
-index 7176c4a..9da4388 100644
+index 4a12cd5..4b15b22 100644
 --- a/kernel/fork.c
 +++ b/kernel/fork.c
 @@ -80,6 +80,7 @@
@@ -260,10 +260,10 @@ index a79d267..7afbb02 100644
  {
 diff --git a/kernel/pmctrack.c b/kernel/pmctrack.c
 new file mode 100644
-index 0000000..99dde76
+index 0000000..80549cf
 --- /dev/null
 +++ b/kernel/pmctrack.c
-@@ -0,0 +1,384 @@
+@@ -0,0 +1,389 @@
 +/*
 + *  kernel/pmctrack.c
 + *
@@ -284,12 +284,12 @@ index 0000000..99dde76
 +#include <linux/device.h>
 +#include <linux/err.h>
 +#include <linux/slab.h>
-+#include <linux/spinlock.h>
++#include <linux/rwlock.h>
 +#include <linux/rcupdate.h>
 +
 +static pmc_ops_t* pmc_ops_mod=NULL; /* No implementation is registered by default */
 +static struct module* implementer=NULL;
-+DEFINE_SPINLOCK(pmc_ops_lock);
++DEFINE_RWLOCK(pmc_ops_lock);
 +
 +/* 
 + * PMCTrack's kernel module invokes this function to register 
@@ -298,8 +298,9 @@ index 0000000..99dde76
 +int register_pmc_module(pmc_ops_t* pmc_ops_module, struct module* module)
 +{
 +	int ret=0;
++	unsigned long flags;
 +
-+	spin_lock(&pmc_ops_lock);
++	write_lock_irqsave(&pmc_ops_lock,flags);
 +	
 +	/* Module has been installed already */
 +	if (implementer!=NULL) {
@@ -310,7 +311,7 @@ index 0000000..99dde76
 +		rcu_assign_pointer(pmc_ops_mod,pmc_ops_module);
 +	}
 +
-+	spin_unlock(&pmc_ops_lock);
++	write_unlock_irqrestore(&pmc_ops_lock,flags);
 +	return ret;
 +}
 +
@@ -319,8 +320,9 @@ index 0000000..99dde76
 +int unregister_pmc_module(pmc_ops_t* pmc_ops_module, struct module* module)
 +{
 +	int ret=0;
++	unsigned long flags;
 +
-+	spin_lock(&pmc_ops_lock);
++	write_lock_irqsave(&pmc_ops_lock,flags);
 +
 +	if(implementer!=module){
 +		ret=-EPERM;
@@ -329,7 +331,7 @@ index 0000000..99dde76
 +		implementer=NULL;
 +		rcu_assign_pointer(pmc_ops_mod,NULL);
 +	}
-+	spin_unlock(&pmc_ops_lock);
++	write_unlock_irqrestore(&pmc_ops_lock,flags);
 +
 +	/* 
 +	 * If the operation succeeded wait for all readers to complete. 
@@ -355,19 +357,20 @@ index 0000000..99dde76
 +{
 +	int ret=0;
 +	pmc_ops_t* pmc_ops= NULL;
++	unsigned long flags;
 +
-+	spin_lock(&pmc_ops_lock);
++	read_lock_irqsave(&pmc_ops_lock,flags);
 +
 +	/* 
 +	 * If there is no implementer module or it's being removed
 +	 * from the kernel, return immediately.
 +	 */
 +	if (!implementer || !try_module_get(implementer)){
-+		spin_unlock(&pmc_ops_lock);
++		read_unlock_irqrestore(&pmc_ops_lock,flags);
 +		return 0;	
 +	}
 +
-+	spin_unlock(&pmc_ops_lock);
++	read_unlock_irqrestore(&pmc_ops_lock,flags);
 +	
 +	/* Now it's safe to dereference pmc_ops_mod */
 +	pmc_ops=pmc_ops_mod;
@@ -458,22 +461,23 @@ index 0000000..99dde76
 +void pmcs_free_per_thread_data(struct task_struct* tsk)
 +{
 +	pmc_ops_t* pmc_ops= NULL;
++	unsigned long flags;
 +
-+	spin_lock(&pmc_ops_lock);
++	read_lock_irqsave(&pmc_ops_lock,flags);
 +
 +	/* 
 +	 * If there is no implementer module or it's being removed
 +	 * from the kernel, return immediately.
 +	 */
 +	if (!implementer || !try_module_get(implementer)){
-+		spin_unlock(&pmc_ops_lock);
-+		return 0;	
++		read_unlock_irqrestore(&pmc_ops_lock,flags);
++		return;
 +	}
 +
-+	spin_unlock(&pmc_ops_lock);
++	read_unlock_irqrestore(&pmc_ops_lock,flags);
 +	
 +	/* Now it's safe to dereference pmc_ops_mod */
-+	pmc_ops=rcu_dereference(pmc_ops_mod);
++	pmc_ops=pmc_ops_mod;
 +	
 +	if(pmc_ops!=NULL && pmc_ops->pmcs_free_per_thread_data!=NULL)
 +		pmc_ops->pmcs_free_per_thread_data(tsk);
@@ -486,22 +490,23 @@ index 0000000..99dde76
 +void pmcs_exit_thread(struct task_struct* tsk)
 +{
 +	pmc_ops_t* pmc_ops= NULL;
++	unsigned long flags;
 +
-+	spin_lock(&pmc_ops_lock);
++	read_lock_irqsave(&pmc_ops_lock,flags);
 +
 +	/* 
 +	 * If there is no implementer module or it's being removed
 +	 * from the kernel, return immediately.
 +	 */
 +	if (!implementer || !try_module_get(implementer)){
-+		spin_unlock(&pmc_ops_lock);
-+		return 0;	
++		read_unlock_irqrestore(&pmc_ops_lock,flags);
++		return;	
 +	}
 +
-+	spin_unlock(&pmc_ops_lock);
++	read_unlock_irqrestore(&pmc_ops_lock,flags);
 +	
 +	/* Now it's safe to dereference pmc_ops_mod */
-+	pmc_ops=rcu_dereference(pmc_ops_mod);
++	pmc_ops=pmc_ops_mod;
 +
 +	if(pmc_ops!=NULL && pmc_ops->pmcs_exit_thread!=NULL)
 +		pmc_ops->pmcs_exit_thread(tsk);

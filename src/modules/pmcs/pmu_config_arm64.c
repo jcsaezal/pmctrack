@@ -20,9 +20,9 @@
 #include <linux/cpu.h>
 #include <linux/interrupt.h>
 #include <asm/cputype.h>
-#include <asm/cpu.h>
 #include <asm/smp_plat.h>
 #include <linux/ftrace.h>
+#include <linux/version.h>
 
 typedef unsigned int u32;
 
@@ -304,7 +304,7 @@ static int setup_overflow_irq(void)
 
 /* Interrupt lines for the ARM Juno Development Board */
 #define VEXPRESS_NR_IRQS 6
-#ifdef LINUX_40
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4,0,0)) || (LINUX_VERSION_CODE == KERNEL_VERSION(3,10,68)) 
 int vexpress_fixed_irqs[VEXPRESS_NR_IRQS]= {50,34,38,54,58,62};
 #else
 int vexpress_fixed_irqs[VEXPRESS_NR_IRQS]= {50,54,58,62,34,38};
