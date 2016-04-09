@@ -420,3 +420,5 @@ The scheduler can communicate with the active monitoring module to obtain per-th
 For simplicity, each metric is assigned a numerical ID, known by the scheduler and the monitoring module. To obtain the up-to date value for a specific metric, the aforementioned function may be invoked from the tick processing function in the scheduler. 
 
 Monitoring modules make it possible for a scheduling policy relying on PMC or virtual counter metrics to be seamlessly extended to new architectures or processor models as long as the hardware enables to collect necessary monitoring data. All that needs to be done is to build a monitoring module or adapt an existing one to the platform in question. 
+
+[![Analytics](https://ga-beacon.appspot.com/UA-76163836-1/github-pmctrack/readme)](https://github.com/igrigorik/ga-beacon)
