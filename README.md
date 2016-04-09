@@ -2,6 +2,8 @@ PMCTrack is an open-source OS-oriented performance monitoring tool for GNU/Linux
 
 Despite being an OS-oriented tool, PMCTrack still allows gathering PMC values from user space, enabling kernel developers to carry out the necessary offline analysis and debugging to assist them during the scheduler design process. In addition, the tool provides both the scheduler and the userspace PMCTrack components with other insightful metrics available in modern processors that are not directly exposed as PMCs, such as cache occupancy or energy consumption. 
 
+[![Analytics](https://ga-beacon.appspot.com/UA-76163836-1/github-pmctrack/readme)](https://github.com/igrigorik/ga-beacon)
+
 ## Project Contributors
 
 * Juan Carlos Saez Alcaide (<jcsaezal@ucm.es>) - Creator of PMCTrack and main maintainer. 
@@ -420,5 +422,3 @@ The scheduler can communicate with the active monitoring module to obtain per-th
 For simplicity, each metric is assigned a numerical ID, known by the scheduler and the monitoring module. To obtain the up-to date value for a specific metric, the aforementioned function may be invoked from the tick processing function in the scheduler. 
 
 Monitoring modules make it possible for a scheduling policy relying on PMC or virtual counter metrics to be seamlessly extended to new architectures or processor models as long as the hardware enables to collect necessary monitoring data. All that needs to be done is to build a monitoring module or adapt an existing one to the platform in question. 
-
-[![Analytics](https://ga-beacon.appspot.com/UA-76163836-1/github-pmctrack/readme)](https://github.com/igrigorik/ga-beacon)
