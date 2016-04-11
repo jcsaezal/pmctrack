@@ -1,4 +1,4 @@
-CC ?= gcc
+CC = gcc
 #To build for 32-bit system run: 'make ARCH=-m32'
 ARCH :=
 LIBPMCTRACK_DIR=../../lib/libpmctrack

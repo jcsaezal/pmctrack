@@ -7,7 +7,7 @@ HEADERS=$(wildcard ../include/*.h)
 ARCH :=
 CFLAGS=$(ARCH) -Wall -g -fpic -I ../include -I ../../../modules/pmcs/include/pmc
 LDFLAGS=$(ARCH)
-CC ?= gcc
+CC = gcc
 
 
 # Para depurar usar: make debug=1

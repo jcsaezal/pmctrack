@@ -218,7 +218,7 @@ function do_build(){
 	echo "Building libpmctrack ...."
 	echo "$separator"
 
-	if ! make ARCH=-DHZ=${hz_setting} 2>&1 ; then
+	if ! make 2>&1 ; then
 		printf 'Error building libpmctrack\nIncomplete build!!\n'
 		exit 1
 	fi
@@ -476,7 +476,7 @@ function do_build_phi(){
 	echo "Building libpmctrack ...."
 	echo "$separator"
 
-	CC=k1om-mpss-linux-gcc make ARCH=-DHZ=${hz_setting} 2>&1
+	CC=k1om-mpss-linux-gcc make 2>&1
 
 	if [ $? -ne 0 ] ; then
 		printf 'Error building libpmctrack\nIncomplete build!!\n'
@@ -607,7 +607,7 @@ function do_build_android_odroid(){
 	echo "Building libpmctrack ...."
 	echo "$separator"
 
-	CC=${cross_compile}gcc make ARCH=-DHZ=${hz_setting} 2>&1
+	CC=${cross_compile}gcc make 2>&1
 
 	if [ $? -ne 0 ] ; then
 		printf 'Error building libpmctrack\nIncomplete build!!\n'

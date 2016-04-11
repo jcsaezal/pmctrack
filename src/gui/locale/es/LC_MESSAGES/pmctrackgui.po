@@ -5,8 +5,8 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: PMCTrackGUI\n"
-"POT-Creation-Date: 2015-10-19 21:23+CEST\n"
-"PO-Revision-Date: 2015-10-19 21:45+0100\n"
+"POT-Creation-Date: 2016-03-03 15:52+CET\n"
+"PO-Revision-Date: 2016-03-03 16:05+0100\n"
 "Last-Translator: Jorge Casas Hernán <jorcasas@ucm.es>\n"
 "Language-Team: \n"
 "Language: es\n"
@@ -14,7 +14,7 @@ msgstr ""
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Generated-By: pygettext.py 1.5\n"
-"X-Generator: Poedit 1.6.10\n"
+"X-Generator: Poedit 1.5.4\n"
 
 #: backend/pmc_connect.py:72
 msgid "The SSH key provided is invalid."
@@ -80,7 +80,7 @@ msgstr "Eliminar exp."
 msgid "Virtual counters available"
 msgstr "Contadores virtuales disponibles"
 
-#: frontend/counters_config_panel.py:47 frontend/final_config_panel.py:98
+#: frontend/counters_config_panel.py:47 frontend/final_config_panel.py:107
 msgid "Back"
 msgstr "Volver"
 
@@ -102,8 +102,8 @@ msgid "This is the only existing experiment and at least there must be one."
 msgstr "Éste es el único experimento existente, no puedes eliminarlo."
 
 #: frontend/counters_config_panel.py:154 frontend/counters_config_panel.py:189
-#: frontend/experiment_tabpanel.py:151 frontend/final_config_panel.py:249
-#: frontend/final_config_panel.py:298 frontend/machine_config_panel.py:145
+#: frontend/experiment_tabpanel.py:151 frontend/final_config_panel.py:289
+#: frontend/final_config_panel.py:314 frontend/machine_config_panel.py:145
 #: frontend/monitoring_frame.py:290 frontend/multiapp_control_frame.py:102
 msgid "Information"
 msgstr "Información"
@@ -120,7 +120,7 @@ msgstr ""
 "\n"
 "¿Estás seguro de que quieres hacer esto?."
 
-#: frontend/counters_config_panel.py:160 frontend/final_config_panel.py:319
+#: frontend/counters_config_panel.py:160 frontend/final_config_panel.py:365
 #: frontend/machine_config_panel.py:185
 msgid "Advertisement"
 msgstr "Advertencia"
@@ -221,112 +221,128 @@ msgstr ""
 msgid "Help - Format formula"
 msgstr "Ayuda - Formato de la fórmula"
 
-#: frontend/final_config_panel.py:49 frontend/final_config_panel.py:283
-#: frontend/final_config_panel.py:284
+#: frontend/final_config_panel.py:50 frontend/final_config_panel.py:335
+#: frontend/final_config_panel.py:336
 msgid "No binding"
 msgstr "Sin especificar"
 
-#: frontend/final_config_panel.py:54
+#: frontend/final_config_panel.py:55
+msgid "Is the app to monitor running?"
+msgstr "¿La app a monitorizar está en ejecución?"
+
+#: frontend/final_config_panel.py:56
+msgid "Yes"
+msgstr "Sí"
+
+#: frontend/final_config_panel.py:57
+msgid "No"
+msgstr "No"
+
+#: frontend/final_config_panel.py:58
 msgid "Path to application to monitor"
 msgstr "Ruta de la aplicación a monitorizar"
 
-#: frontend/final_config_panel.py:55
+#: frontend/final_config_panel.py:59
 msgid "Select application"
 msgstr "Seleccionar aplicación"
 
-#: frontend/final_config_panel.py:65
+#: frontend/final_config_panel.py:69
 msgid "Application's arguments"
 msgstr "Argumentos de la aplicación"
 
-#: frontend/final_config_panel.py:67 frontend/final_config_panel.py:73
+#: frontend/final_config_panel.py:71 frontend/final_config_panel.py:81
 msgid "Select CPU to bind or type mask"
 msgstr "Selecciona o introduce máscara CPU"
 
-#: frontend/final_config_panel.py:71 frontend/final_config_panel.py:72
+#: frontend/final_config_panel.py:75
+msgid "Application's PID"
+msgstr "PID de la aplicación"
+
+#: frontend/final_config_panel.py:79 frontend/final_config_panel.py:80
 msgid "Select multi-application file"
 msgstr "Selecciona archivo multi-aplicación"
 
-#: frontend/final_config_panel.py:77
+#: frontend/final_config_panel.py:86
 msgid "Time between samples (in milliseconds)"
 msgstr "Tiempo entre muestras (en milisegundos)"
 
-#: frontend/final_config_panel.py:79
+#: frontend/final_config_panel.py:88
 msgid "Samples buffer size (in bytes, 0 for unspecified)"
 msgstr "Tamaño del buffer de muestras (en bytes, 0 para no especificar)"
 
-#: frontend/final_config_panel.py:81
+#: frontend/final_config_panel.py:90
 msgid "Samples configuration"
 msgstr "Configuración de las muestras"
 
-#: frontend/final_config_panel.py:82
+#: frontend/final_config_panel.py:91
 msgid "Select counter mode"
 msgstr "Selecciona el modo de contador"
 
-#: frontend/final_config_panel.py:83
+#: frontend/final_config_panel.py:92
 msgid "What counter mode you want to use?"
 msgstr "¿Qué modo de contador quieres usar?"
 
-#: frontend/final_config_panel.py:84
+#: frontend/final_config_panel.py:93
 msgid "Per-thread mode"
 msgstr "Modo de contador por hilo"
 
-#: frontend/final_config_panel.py:85
+#: frontend/final_config_panel.py:94
 msgid "System-wide mode"
 msgstr "Modo system-wide"
 
-#: frontend/final_config_panel.py:86
+#: frontend/final_config_panel.py:95
 msgid "What monitoring logs want to save?"
 msgstr "¿Qué logs deseas guardar?"
 
-#: frontend/final_config_panel.py:87
+#: frontend/final_config_panel.py:96
 msgid "Counters samples log"
 msgstr "Log de muestras de contadores"
 
-#: frontend/final_config_panel.py:88
+#: frontend/final_config_panel.py:97
 msgid "Metrics samples log"
 msgstr "Log de muestras de métricas"
 
-#: frontend/final_config_panel.py:89
+#: frontend/final_config_panel.py:98
 msgid "Path to save monitoring logs"
 msgstr "Ruta donde guardar los logs"
 
-#: frontend/final_config_panel.py:90
+#: frontend/final_config_panel.py:99
 msgid "Select directory where to save the output file"
 msgstr "Seleccionar directorio donde guardar el fichero"
 
-#: frontend/final_config_panel.py:91
+#: frontend/final_config_panel.py:100
 msgid "Save monitoring logs into files"
 msgstr "Guardar logs de monitorización en ficheros"
 
-#: frontend/final_config_panel.py:92
+#: frontend/final_config_panel.py:101
 msgid "Graph style mode"
 msgstr "Estilo de la gráfica"
 
-#: frontend/final_config_panel.py:93 frontend/graph_style_dialog.py:136
+#: frontend/final_config_panel.py:102 frontend/graph_style_dialog.py:136
 msgid "Default"
 msgstr "Por defecto"
 
-#: frontend/final_config_panel.py:94
+#: frontend/final_config_panel.py:103
 msgid "Select graph style mode or customize one"
 msgstr "Seleccionar modo de estilo de gráfica o personalizar uno"
 
-#: frontend/final_config_panel.py:99 frontend/final_config_panel.py:334
+#: frontend/final_config_panel.py:108 frontend/final_config_panel.py:380
 msgid "Start monitoring"
 msgstr "Iniciar monitorización"
 
-#: frontend/final_config_panel.py:113
+#: frontend/final_config_panel.py:124
 msgid "Single-app mode"
 msgstr "Modo única aplicación"
 
-#: frontend/final_config_panel.py:114
+#: frontend/final_config_panel.py:125
 msgid "Multi-app mode"
 msgstr "Modo múltiples aplicaciones"
 
-#: frontend/final_config_panel.py:248
+#: frontend/final_config_panel.py:288
 msgid " on the remote machine"
 msgstr " en la máquina remota"
 
-#: frontend/final_config_panel.py:249
+#: frontend/final_config_panel.py:289
 msgid ""
 "Some of the applications specified in the multi-application file does not "
 "exist{0}.\n"
@@ -336,19 +352,23 @@ msgstr ""
 "existen{0}.\n"
 "Comprueba el archivo multi-app."
 
-#: frontend/final_config_panel.py:294
+#: frontend/final_config_panel.py:308
 msgid "Can not find any application in the specified path."
 msgstr "No se encuentra ninguna aplicación en la ruta especificada."
 
-#: frontend/final_config_panel.py:296
+#: frontend/final_config_panel.py:310
+msgid "No application running with the PID indicated."
+msgstr "No hay ninguna aplicación en ejecución con el PID indicado."
+
+#: frontend/final_config_panel.py:312
 msgid "You must select a valid multi-application file."
 msgstr "Debes seleccionar un archivo multi-aplicación válido."
 
-#: frontend/final_config_panel.py:312
+#: frontend/final_config_panel.py:354
 msgid "Cancel monitoring"
 msgstr "Cancelar monitorización"
 
-#: frontend/final_config_panel.py:318
+#: frontend/final_config_panel.py:362
 msgid ""
 "You are about to cancel monitoring, killing the current application and "
 "closing windows monitoring.\n"
@@ -357,6 +377,18 @@ msgid ""
 msgstr ""
 "Estás a punto de cancelar la monitorización, matando la aplicación actual y "
 "cerrando las ventanas de monitorización.\n"
+"\n"
+"¿Estás seguro de que quieres hacer esto?."
+
+#: frontend/final_config_panel.py:364
+msgid ""
+"You are about to cancel monitoring, closing windows monitoring but without "
+"killing the monitored application.\n"
+"\n"
+"Are you sure you wanna do this?."
+msgstr ""
+"Estás a punto de cancelar la monitorización, cerrando las ventanas de "
+"monitorización pero sin matar la aplicación monitorizada.\n"
 "\n"
 "¿Estás seguro de que quieres hacer esto?."
 
@@ -653,12 +685,6 @@ msgstr "Configuración final de monitorización"
 #~ msgstr ""
 #~ "La configuración actual impide llevar a cabo la monitorización.\n"
 #~ "Revisa que toda la configuración sea correcta."
-
-#~ msgid "Yes"
-#~ msgstr "Sí"
-
-#~ msgid "No"
-#~ msgstr "No"
 
 #~ msgid "Path to the output file"
 #~ msgstr "Ruta donde guardar el fichero"

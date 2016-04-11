@@ -1107,9 +1107,8 @@ static ssize_t proc_pmc_config_write(struct file *filp, const char __user *buff,
 
 	kbuf[len]='\0';
 
-	if(sscanf(kbuf,"nticks %i",&val)==1 && val>0) {
-		printk("--Setting nticks\n");
-		pmcs_pmon_config.pmon_nticks = val;
+	if(sscanf(kbuf,"sched_sampling_period %i",&val)==1 && val>0) {
+		pmcs_pmon_config.pmon_nticks = msecs_to_jiffies(val);
 	} else if(sscanf(kbuf,"kernel_buffer_size %i",&val)==1 && val>0) {
 		unsigned int new_size=(val/sizeof(pmc_sample_t))*sizeof(pmc_sample_t);
 		if (new_size == 0)
@@ -1137,19 +1136,17 @@ static ssize_t proc_pmc_config_write(struct file *filp, const char __user *buff,
 		val=configure_virtual_counters_thread(kbuf,current,1);
 		if (val!=0)
 			ret=val;
-
-	} else if (sscanf(kbuf, "nticks_t %i",&val)==1 && val>0) {
+	} else if (sscanf(kbuf, "sched_sampling_period_t %i",&val)==1 && val>0) {
 		pmon_prof_t* prof=(pmon_prof_t*)current->pmc;
 
 		if (prof) {
-			prof->nticks_sampling_period=val;
+			prof->nticks_sampling_period=msecs_to_jiffies(val);
 		}
 	} else if (sscanf(kbuf, "timeout %i",&val)==1 && val>0) {
 		pmon_prof_t* prof=(pmon_prof_t*)current->pmc;
-		int new_interval=(HZ*val)/1000;
 
 		if (prof) {
-			prof->pmc_jiffies_interval=new_interval;
+			prof->pmc_jiffies_interval=msecs_to_jiffies(val);
 		}
 	} else if(sscanf(kbuf,"kernel_buffer_size_t %i",&val)==1 && val>0) {
 		pmon_prof_t* prof=(pmon_prof_t*)current->pmc;
@@ -1191,8 +1188,8 @@ static ssize_t proc_pmc_config_read(struct file *filp, char __user *buf, size_t 
 	dst=kbuf;
 
 	/* Configuration parameters first */
-	dst+=sprintf(dst,"nticks = %d\n",
-	             pmcs_pmon_config.pmon_nticks);
+	dst+=sprintf(dst,"sched_sampling_period = %d\n",
+	             jiffies_to_msecs(pmcs_pmon_config.pmon_nticks));
 	dst+=sprintf(dst,"kernel_buffer_size = %u bytes (%zu samples)\n",
 	             pmcs_pmon_config.pmon_kernel_buffer_size,
 	             pmcs_pmon_config.pmon_kernel_buffer_size/sizeof(pmc_sample_t));

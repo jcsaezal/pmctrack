@@ -39,8 +39,12 @@ int main(int argc, char *argv[])
 	int k=0;
 	int A[N],B[N],C[N];
 	pmctrack_desc_t* desc;
+#if defined(__arm__) || defined(__aarch64__)
+	const char* strcfg[]= {"instr,cycles","0x8,llc_misses",NULL};
+#else
 	const char* strcfg[]= {"instr,cycles","0xc0,llc_misses",NULL};
-	char* virtual_cfg="energy_pkg"; //"virt0";
+#endif
+	char* virtual_cfg=NULL; //"energy_pkg";
 
 	/* Initialize the thread descriptor */
 	if ((desc=pmctrack_init(100))==NULL)

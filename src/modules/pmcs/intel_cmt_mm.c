@@ -474,7 +474,7 @@ static uint_t get_rmid(void)
 		rmid_node=list_first_entry(&available_rmids,rmid_node_t,links);
 		break;
 	case RMID_LIFO:
-		rmid_node=list_last_entry(&available_rmids,rmid_node_t,links);
+		rmid_node=list_entry(available_rmids.prev,rmid_node_t,links); /* list_last_entry */
 		break;
 	case RMID_RANDOM:
 		random_item=(get_random_int()%nr_available_rmids);

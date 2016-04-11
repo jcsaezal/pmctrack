@@ -58,9 +58,6 @@
 #define PAGE_SIZE 4096
 #endif
 
-#ifndef HZ
-#define HZ 250
-#endif
 
 const char* pmc_enable_entry="/proc/pmc/enable";
 const char* pmc_monitor_entry="/proc/pmc/monitor";
@@ -287,25 +284,19 @@ int pmct_config_timeout(int msecs, int kernel_control)
 	int len=0;
 	char buf[MAX_CONFIG_STRING_SIZE];
 	int fd=open(pmc_config_entry, O_WRONLY);
-	int value;
 	char *key=NULL;
 
-
-	if (kernel_control) {
-		value=(HZ*msecs)/1000; // Specify in ticks
-		key="nticks_t";
-	} else {
-		value=msecs; // Specify in ms
+	if (kernel_control) 
+		key="sched_sampling_period_t";
+	else
 		key="timeout";
-	}
 
 	if(fd ==-1) {
 		warnx("Can't open %s\n",pmc_config_entry);
 		return -1;
 	}
 
-
-	len=sprintf(buf,"%s %d\n",key,value);
+	len=sprintf(buf,"%s %d\n",key,msecs);
 	len=write(fd,buf,len);
 
 	if(len <= 0) {

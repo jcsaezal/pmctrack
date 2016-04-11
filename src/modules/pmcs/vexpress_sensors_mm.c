@@ -22,12 +22,20 @@
 typedef struct {
 	vexpress_sensors_count_t sensor_counts[MAX_VEXPRESS_ENERGY_SENSORS];
 	int first_time;
+	unsigned long timestamp;
 	uint_t security_id;
 } vexpress_sensors_thread_data_t;
 
 
 /* Initialize resources to support system-wide monitoring */
+#ifdef CONFIG_PMC_ARM64
 static int initialize_system_wide_sensor_structures(void);
+#else
+static inline int initialize_system_wide_sensor_structures(void)
+{
+	return 0;
+}
+#endif
 static vexpress_sensor_t* sensors_desc[MAX_VEXPRESS_ENERGY_SENSORS];
 static const char* sensor_information[MAX_VEXPRESS_ENERGY_SENSORS];
 static int nr_sensors_available=0;
@@ -48,14 +56,20 @@ static int vexpress_sensors_enable_module(void)
 
 	if((retval=initialize_energy_sensors(sensors_desc,sensor_information,&nr_sensors_available))) {
 		printk(KERN_INFO "Couldn't initialize energy sensors");
-		return -EINVAL;
+		return retval;
 	}
 
 	if ((retval=initialize_system_wide_sensor_structures())) {
 		printk(KERN_INFO "Couldn't initialize system-wide sensor structures");
-		return retval;
+		goto err_path;
 	}
 
+#ifdef CONFIG_PMC_ARM
+	if ((retval=init_syswide_monitor(1))) {
+		printk(KERN_INFO "Couldn't initialize system-wide monitor task");
+		goto err_path;
+	}
+#endif
 	for (i = 0; i < nr_sensors_available; i++) {
 		raw_read_energy_sensor(sensors_desc[i],&value);
 		printk(KERN_INFO "sensor[%i]=%llu\n",i,value);
@@ -63,11 +77,17 @@ static int vexpress_sensors_enable_module(void)
 
 	printk(KERN_ALERT "%s module loaded!!\n",ARM_VERSATILE_SENSORS_STR);
 	return 0;
+err_path:
+	release_energy_sensors(sensors_desc,nr_sensors_available);
+	return retval;
 }
 
 /* MM cleanup function */
 static void vexpress_sensors_disable_module(void)
 {
+#ifdef CONFIG_PMC_ARM
+	stop_syswide_monitor();
+#endif
 	release_energy_sensors(sensors_desc,nr_sensors_available);
 	printk(KERN_ALERT "%s module unloaded!!\n",ARM_VERSATILE_SENSORS_STR);
 }
@@ -88,11 +108,24 @@ static void vexpress_sensors_module_counter_usage(monitoring_module_counter_usag
 
 static int vexpress_sensors_on_read_config(char* str, unsigned int len)
 {
+#ifdef CONFIG_PMC_ARM
+	char* buf=str;
+	buf+=sprintf(buf,"syswide_timer_period=%d\n",get_syswide_timer_period());
+	return buf-str;
+#else
 	return 0;
+#endif
 }
 
 static int vexpress_sensors_on_write_config(const char *str, unsigned int len)
 {
+#ifdef CONFIG_PMC_ARM
+	int val;
+	if (sscanf(str,"syswide_timer_period %d",&val)==1 && val>=50) {
+		set_up_syswide_timer_period(val);
+		return len;
+	}
+#endif
 	return 0;
 }
 
@@ -111,6 +144,7 @@ static int vexpress_sensors_on_fork(unsigned long clone_flags, pmon_prof_t* prof
 
 	data->security_id=current_monitoring_module_security_id();
 	data->first_time=1;
+	data->timestamp=jiffies;
 	for (i=0; i<nr_sensors_available; i++)
 		initialize_vexpress_sensors_count(&data->sensor_counts[i]);
 
@@ -127,8 +161,13 @@ static void vexpress_sensors_on_exec(pmon_prof_t* prof) { }
  */
 static inline void do_read_sensors(vexpress_sensors_thread_data_t* tdata, int acum)
 {
+#ifdef CONFIG_PMC_ARM
+	syswide_do_read_energy_sensors(tdata->sensor_counts, nr_sensors_available, tdata->timestamp);
+	tdata->timestamp=jiffies;
+#else
 	do_read_energy_sensors(sensors_desc,tdata->sensor_counts,
 	                       nr_sensors_available,acum);
+#endif
 }
 
 
@@ -141,12 +180,6 @@ static int vexpress_sensors_on_new_sample(pmon_prof_t* prof,int cpu,pmc_sample_t
 	vexpress_sensors_thread_data_t* tdata=prof->monitoring_mod_priv_data;
 	int i=0;
 	int cnt_virt=0;
-
-#ifdef CONFIG_PMC_ARM
-	/* Avoid reading energy counters from process context (it crashes when doing so) */
-	if (flags & MM_EXIT)
-		return 0;
-#endif
 
 	if (tdata!=NULL) {
 
@@ -184,9 +217,10 @@ void vexpress_sensors_on_switch_in(pmon_prof_t* prof)
 	if (!data || data->security_id!=current_monitoring_module_security_id() )
 		return;
 
+#ifdef CONFIG_PMC_ARM64
 	/* Update prev counts */
 	do_read_sensors(data,0);
-
+#endif
 	if (data->first_time)
 		data->first_time=0;
 }
@@ -199,9 +233,11 @@ void vexpress_sensors_on_switch_out(pmon_prof_t* prof)
 	if (!data || data->security_id!=current_monitoring_module_security_id())
 		return;
 
+#ifdef CONFIG_PMC_ARM64
 	/* Accumulate energy readings */
 	if (!data->first_time)
 		do_read_sensors(data,1);
+#endif
 }
 
 /* Modify this function if necessary to expose energy readings to the OS scheduler */
@@ -210,6 +246,7 @@ static int vexpress_sensors_get_current_metric_value(pmon_prof_t* prof, int key,
 	return -1;
 }
 
+#ifdef CONFIG_PMC_ARM64
 /* Support for system-wide power measurement (Reuse per-thread info as is) */
 static DEFINE_PER_CPU(vexpress_sensors_thread_data_t, cpu_syswide);
 
@@ -292,6 +329,7 @@ static void vexpress_sensors_on_syswide_dump_virtual_counters(int cpu, unsigned 
 		data->sensor_counts[i].acum=0;
 	}
 }
+#endif
 
 /* Implementation of the monitoring_module_t interface */
 monitoring_module_t vexpress_sensors_mm = {
@@ -309,7 +347,9 @@ monitoring_module_t vexpress_sensors_mm = {
 	.on_switch_out=vexpress_sensors_on_switch_out,
 	.get_current_metric_value=vexpress_sensors_get_current_metric_value,
 	.module_counter_usage=vexpress_sensors_module_counter_usage,
+#ifdef CONFIG_PMC_ARM64
 	.on_syswide_start_monitor=vexpress_sensors_on_syswide_start_monitor,
 	.on_syswide_refresh_monitor=vexpress_sensors_on_syswide_refresh_monitor,
 	.on_syswide_dump_virtual_counters=vexpress_sensors_on_syswide_dump_virtual_counters
+#endif
 };

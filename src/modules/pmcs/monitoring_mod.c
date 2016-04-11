@@ -421,6 +421,7 @@ static ssize_t proc_mm_manager_write(struct file *filp, const char __user *buff,
 	char line[MAX_STR_MM_MANAGER+1]="";
 	int val;
 	int ret=0;
+	int retval=0;
 
 	if (len>MAX_STR_MM_MANAGER)
 		return -ENOMEM;
@@ -435,28 +436,28 @@ static ssize_t proc_mm_manager_write(struct file *filp, const char __user *buff,
 		return -EINTR;
 
 	if (sscanf(line,"activate %i",&val)==1) {
-		if (activate_monitoring_module(val)==-1) {
+		if ((retval=activate_monitoring_module(val))<0) {
 			printk(KERN_ALERT "Unable to activate the desired module");
-			ret=-EINVAL;
+			ret=retval;
 			goto up_semaphore;
 		}
 	} else if (strncmp(line,"deactivate",10)==0) {
-		if (activate_monitoring_module(-1)==-1) {
+		if ((retval=activate_monitoring_module(-1))<0) {
 			printk(KERN_ALERT "Unable to deactivate the desired module");
-			ret=-EINVAL;
+			ret=retval;
 			goto up_semaphore;
 		}
 	} else if (sscanf(line,"reinitialize %i",&val)==1) {
-		if (reinitialize_monitoring_module(val)==-1) {
+		if ((retval=reinitialize_monitoring_module(val))) {
 			printk(KERN_ALERT "Unable to reinitialize the desired module");
-			ret=-EINVAL;
+			ret=retval;
 			goto up_semaphore;
 		}
 	}
 
 up_semaphore:
 	up(&mm_manager.sem);
-	return len;
+	return ret;
 }
 
 /* Make a given monitoring module the default one */

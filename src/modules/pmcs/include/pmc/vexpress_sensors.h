@@ -57,4 +57,12 @@ void do_read_energy_sensors(vexpress_sensor_t* sensor_descriptors[],
                             int nr_sensors,
                             int acum);
 
+#ifdef CONFIG_PMC_ARM
+int init_syswide_monitor(int cpu);
+void stop_syswide_monitor(void);
+void syswide_do_read_energy_sensors(vexpress_sensors_count_t* sensor_counts, int nr_sensors, unsigned long from);
+void set_up_syswide_timer_period(int period_ms);
+int get_syswide_timer_period(void);
+#endif
+
 #endif

@@ -201,6 +201,9 @@ int raw_read_energy_sensor(vexpress_sensor_t* sensor, uint64_t* value)
 #include <linux/hwmon-sysfs.h>
 #include <linux/vexpress.h>
 #include <linux/pmctrack.h>
+#include <linux/version.h>
+
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3,17,0))
 #include <linux/regmap.h>
 
 /* "Pasted" necessary structures for the HWMON-PMCTrack bridge to work */
@@ -232,15 +235,13 @@ struct vexpress_sensor {
 	struct device* dev;
 	struct regmap* reg;
 	unsigned char big_cluster;
-} ;
-
+};
 /* Array of energy sensors */
 vexpress_sensor_t energy_sensors[VEXPRESS_NR_SENSORS];
 
 /* Low-level code to retrieve energy readings */
 int raw_read_energy_sensor(vexpress_sensor_t* sensor, uint64_t* value)
 {
-
 	int err;
 	u32 value_hi, value_lo;
 
@@ -281,6 +282,7 @@ static int find_energy_sensors(void)
 	pmctrack_hwmon_list_devices(20,available_sns,&nr_sensors);
 
 	printk(KERN_INFO "Hwmon devices found: %d\n", nr_sensors);
+
 	for (i=0; i<nr_sensors; i++) {
 		/* Retrieve device */
 		dev=pmctrack_hwmon_get_device(available_sns[i]);
@@ -290,10 +292,10 @@ static int find_energy_sensors(void)
 
 		hwmon_dev=to_hwmon_device(dev);
 
-		printk(KERN_INFO "%s (%s) \n", available_sns[i], hwmon_dev->name);
+		printk(KERN_INFO "%s %p (%s) \n", available_sns[i], hwmon_dev, hwmon_dev->name);
 
 		/* Deal only with vexpress_energy sensors */
-		if (strcmp(hwmon_dev->name,"vexpress_energy")!=0)
+		if (!hwmon_dev->name && strcmp(hwmon_dev->name,"vexpress_energy")!=0)
 			goto put_device_now;
 
 		hwmon_data = dev_get_drvdata(dev);
@@ -349,6 +351,113 @@ put_device_now:
 	return nr_sensors_found;
 }
 
+#else
+#include <linux/of.h>
+#include <linux/of_device.h>
+#include <linux/platform_device.h>
+#include <linux/vexpress.h>
+
+#define to_vexpress_hwmon_data(dev) dev_get_drvdata(dev)
+#define to_device_attr(attrib) container_of(attrib, struct device_attribute, attr)
+
+
+struct vexpress_hwmon_data {
+	struct device *hwmon_dev;
+	struct vexpress_config_func *func;
+};
+
+/* Structure describing an energy sensor in the TC2 board */
+struct vexpress_sensor {
+	struct device* dev;
+	struct vexpress_config_func *func;
+	unsigned char big_cluster;
+};
+
+/* Array of energy sensors */
+vexpress_sensor_t energy_sensors[VEXPRESS_NR_SENSORS];
+
+/* Low-level code to retrieve energy readings */
+int raw_read_energy_sensor(vexpress_sensor_t* sensor, uint64_t* value)
+{
+	int err;
+	u32 value_hi, value_lo;
+
+	if (!sensor->func)
+		return -EINVAL;
+
+	err = vexpress_config_read(sensor->func, 0, &value_lo);
+	if (err) {
+		(*value)=0;
+		return err;
+	}
+
+	err = vexpress_config_read(sensor->func, 1, &value_hi);
+	if (err) {
+		(*value)=0;
+		return err;
+	}
+
+	(*value)=( ((u64)value_hi << 32) | (u64) value_lo);
+
+	return 0;
+}
+
+/* Get a reference to hwmon devices associated with energy sensors */
+static int find_energy_sensors(void)
+{
+	const char* available_sns[20];
+	int nr_sensors=0;
+	int i=0;
+	struct device* dev;
+	struct vexpress_hwmon_data* hwmon_data;
+	int nr_sensors_found=0;
+	vexpress_sensor_t* curr;
+	const char* name;
+	const char* label;
+
+	pmctrack_hwmon_list_devices(20,available_sns,&nr_sensors);
+
+	printk(KERN_INFO "Hwmon devices found: %d\n", nr_sensors);
+
+	for (i=0; i<nr_sensors; i++) {
+		/* Retrieve device */
+		dev=pmctrack_hwmon_get_device(available_sns[i]);
+
+		if (!dev)
+			continue;
+
+		hwmon_data=to_vexpress_hwmon_data(dev);
+		name=of_get_property(dev->of_node, "compatible",
+		                     NULL);
+		label=of_get_property(dev->of_node, "label",
+		                      NULL);
+
+		printk(KERN_INFO "%s %p (name=%s,label=%s) \n", available_sns[i], hwmon_data,name,label);
+
+		/* Deal only with vexpress_energy sensors */
+		if (!hwmon_data || !name || strcmp(name,"arm,vexpress-energy")!=0)
+			goto put_device_now;
+		/* We found a sensor, Now it's time to initialize the structure... */
+		curr=&energy_sensors[nr_sensors_found++];
+		curr->func=hwmon_data->func;
+		curr->dev=dev;
+		//curr->da=NULL;
+		curr->big_cluster=0; /* Assume little for now */
+
+
+		if (strncmp(label,"A15",3)==0)
+			curr->big_cluster=1;
+
+		continue;	/* Do not decrease ref count since we're using the sensor .... */
+put_device_now:
+		/* Decrease ref count */
+		pmctrack_hwmon_put_device(dev);
+	}
+
+	return nr_sensors_found;
+}
+
+#endif
 /* Initialize sensor connection */
 int initialize_energy_sensors(vexpress_sensor_t* sensor_descriptors[],
                               const char* description[],
@@ -432,3 +541,128 @@ void do_read_energy_sensors(vexpress_sensor_t* sensor_descriptors[],
 		}
 	}
 }
+
+#ifdef CONFIG_PMC_ARM
+#include <linux/rwlock.h>
+#include <linux/kthread.h>
+#include <linux/kernel.h>
+#include <pmc/data_str/cbuffer.h>
+#define CBUFFER_CAPACITY        10
+#define VEXPRESS_DEFAULT_TIMER_PERIOD     100
+
+struct vexpress_ctl {
+	cbuffer_t* cbuffer;                     /* Sample buffer */
+	unsigned int timer_period;      /* Period for the timer */
+	struct task_struct *monitor_task;
+	uint64_t last_value[VEXPRESS_NR_SENSORS];
+	rwlock_t lock;                          /* RW lock for the various fields */
+} energy_gbl;
+
+struct energy_sample {
+	uint64_t energy_value[VEXPRESS_NR_SENSORS];
+	unsigned long timestamp;
+};
+
+static int monitoring_thread(void *arg)
+{
+	struct energy_sample sample;
+	uint64_t cur_value[VEXPRESS_NR_SENSORS];
+	unsigned long flags=0;
+	int i;
+
+	while (!kthread_should_stop()) {
+		set_current_state(TASK_INTERRUPTIBLE);
+		schedule_timeout(energy_gbl.timer_period);
+
+		/* Read samples (might block) */
+		for (i = 0; i < VEXPRESS_NR_SENSORS; i++)
+			raw_read_energy_sensor(&energy_sensors[i],&cur_value[i]);
+
+		/* Set up timestamp */
+		sample.timestamp=jiffies;
+
+		/* Update counts */
+		for (i = 0; i < VEXPRESS_NR_SENSORS; i++) {
+			sample.energy_value[i]=cur_value[i]-energy_gbl.last_value[i];
+			energy_gbl.last_value[i]=cur_value[i];
+		}
+
+		/* Push sample cbuffer */
+		write_lock_irqsave(&energy_gbl.lock,flags);
+		insert_items_cbuffer_t (energy_gbl.cbuffer,&sample,sizeof(struct energy_sample));
+		write_unlock_irqrestore(&energy_gbl.lock,flags);
+
+	}
+	return 0;
+}
+
+void set_up_syswide_timer_period(int period_ms)
+{
+	energy_gbl.timer_period=msecs_to_jiffies(period_ms);
+}
+
+int get_syswide_timer_period(void)
+{
+	return jiffies_to_msecs(energy_gbl.timer_period);
+}
+
+int init_syswide_monitor(int cpu)
+{
+	int i=0;
+
+	rwlock_init(&energy_gbl.lock);
+
+	energy_gbl.timer_period=HZ/10;
+
+	energy_gbl.cbuffer=create_cbuffer_t(CBUFFER_CAPACITY*sizeof(struct energy_sample));
+
+	if (!energy_gbl.cbuffer)
+		return -ENOMEM;
+
+	energy_gbl.monitor_task = kthread_create(monitoring_thread, NULL, "vexpress-monitor");
+
+	if (IS_ERR(energy_gbl.monitor_task)) {
+		destroy_cbuffer_t(energy_gbl.cbuffer);
+		return -ENOMEM;
+	}
+
+	kthread_bind(energy_gbl.monitor_task,cpu);
+	wake_up_process(energy_gbl.monitor_task);
+
+	for (i = 0; i < VEXPRESS_NR_SENSORS; i++)
+		raw_read_energy_sensor(&energy_sensors[i],&energy_gbl.last_value[i]);
+	return 0;
+}
+
+void stop_syswide_monitor(void)
+{
+	if (energy_gbl.monitor_task) {
+		kthread_stop(energy_gbl.monitor_task);
+		energy_gbl.monitor_task=NULL;
+	}
+}
+
+void syswide_do_read_energy_sensors(vexpress_sensors_count_t* sensor_counts, int nr_sensors, unsigned long from)
+{
+	unsigned long flags;
+	struct energy_sample* cur;
+	iterator_cbuffer_t it;
+	int i=0;
+
+	read_lock_irqsave(&energy_gbl.lock,flags);
+
+	it=get_iterator_cbuffer_t(energy_gbl.cbuffer,sizeof(struct energy_sample));
+
+	for (i = 0; i < nr_sensors; i++)
+		sensor_counts[i].acum=0;
+
+	while ((cur=iterator_next_cbuffer_t(&it))) {
+		if (cur->timestamp>=from) {
+			for (i = 0; i < nr_sensors; i++)
+				sensor_counts[i].acum+=cur->energy_value[i];
+		}
+	}
+	read_unlock_irqrestore(&energy_gbl.lock,flags);
+}
+
+#endif

@@ -104,6 +104,7 @@ class UserConfig(object):
 		self.cpu = None # CPU number where to run benchmark, or CPU mask
 		self.time = 0 # Time between samples (in miliseconds)
                 self.buffer_size = 0 # Samples buffer size (in bytes)
+		self.pid_app_running = None # Application's PID (if app to monitor is running)
                 self.system_wide = False # Indicates if system-wide mode is activated
                 self.save_counters_log = False
                 self.save_metrics_log = False
@@ -136,6 +137,7 @@ class UserConfig(object):
 		copy.cpu = self.cpu
 		copy.time = self.time
 		copy.buffer_size = self.buffer_size
+		copy.pid_app_running = self.pid_app_running
                 copy.system_wide = self.system_wide
                 copy.save_counters_log = self.save_counters_log
                 copy.save_metrics_log = self.save_metrics_log

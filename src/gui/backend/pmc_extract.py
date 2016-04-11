@@ -159,6 +159,8 @@ class PMCExtract(object):
                 self.__create_pipe(app)
                 self.pos.clear()
 		line_head = self.pipe.stdout.readline()
+		if line_head.find("PID found") >= 0:
+			line_head = self.pipe.stdout.readline()
                 # This if checks if exists pmctrack command header
 		if(line_head.find("nsample") >= 0 and line_head.find(self.pack) >= 0 and line_head.find("event") >= 0):
 		    ind_h = 0
@@ -276,6 +278,9 @@ class PMCExtract(object):
                         str_command += "virt" + str(self.user_config.virtual_counters[i])
                         if i < len(self.user_config.virtual_counters) - 1:
                             str_command += ","
-
-                str_command += " " + self.path[app]
+		if self.user_config.pid_app_running == None:
+                	str_command += " " + self.path[app]
+		else:
+			str_command += " -p " + self.user_config.pid_app_running
+		print str_command
                 return str_command

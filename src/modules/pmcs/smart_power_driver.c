@@ -171,7 +171,7 @@ int spower_start_measurements(void)
 
 	write_lock_irqsave(&spower_gbl.lock,flags);
 	if (spower_gbl.started || !spower_gbl.dev ) {
-		retval=-EINVAL;
+		retval=-ENODEV;
 		goto unlock;
 	}
 
