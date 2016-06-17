@@ -22,7 +22,7 @@
  *
  ******************************************************************************
  *
- *  2015-05-10  Modified by Abel Serrano to move the code of low-level routines 
+ *  2015-05-10  Modified by Abel Serrano to move the code of low-level routines
  				defined previously in pmctrack.c (command-line tool). This was a major
  				code refactoring operation.
  *  2015-08-10  Modified by Juan Carlos Saez to include support for mnemonic-based
@@ -66,11 +66,11 @@ const char* pmc_props_entry="/proc/pmc/properties";
 
 static const char* sample_type_to_str[PMC_NR_SAMPLE_TYPES]= {"tick","ebs","exit","migration","self"};
 
-/* 
- * Tell PMCTrack's kernel module which virtual counters 
+/*
+ * Tell PMCTrack's kernel module which virtual counters
  * must be monitored.
  */
-int pmct_config_virtual_counters(const char* virtcfg, int syswide)
+int pmct_config_virtual_counters(const char* virtcfg, unsigned long flags)
 {
 	int len=0;
 	char buf[MAX_CONFIG_STRING_SIZE+1+9];
@@ -81,7 +81,7 @@ int pmct_config_virtual_counters(const char* virtcfg, int syswide)
 		return -1;
 	}
 
-	if (syswide)
+	if (flags & PMCT_CONFIG_SYSWIDE)
 		len=sprintf(buf,"%s\n",virtcfg);
 	else
 		len=sprintf(buf,"selfcfg %s\n",virtcfg);
@@ -92,13 +92,19 @@ int pmct_config_virtual_counters(const char* virtcfg, int syswide)
 		return -1;
 	}
 
+	/* Enable self monitoring */
+	if (flags & PMCT_FLAG_SELF_MONITORING) {
+		lseek(fd,0,SEEK_SET);
+		len=write(fd,"selfmon",7);
+	}
+
 	close(fd);
 	return 0;
 }
 
 /*
- * The function parses a null-terminated array of strings 
- * with PMC configurations in the raw format (userpmccfg), and 
+ * The function parses a null-terminated array of strings
+ * with PMC configurations in the raw format (userpmccfg), and
  * returns the following information: (1) Number of PMCs in use
  * across experiments in the specified configuration, (2) bitmask that indicates
  * which PMCs are used across experiments, (3) flag (ebs) that indicates
@@ -236,8 +242,8 @@ int pmct_check_counter_config(const char* userpmccfg[],unsigned int* nr_counters
 
 /*
  * Parse a string that specifies the virtual-counter configuration
- * in the raw format and return the following information: 
- * (1) Number of virtual counters specified in the string and 
+ * in the raw format and return the following information:
+ * (1) Number of virtual counters specified in the string and
  * (2) bitmask that indicates which virtual counters are used
  *
  */
@@ -274,7 +280,7 @@ int pmct_check_vcounter_config(const char* virtcfg,unsigned int* nr_virtual_coun
 	return 0;
 }
 
-/* 
+/*
  * Setup timeout for TBS or scheduler-driven monitoring mode (specified in ms).
  * If the kernel forced the PMC configuration a non-zero value should be specified
  * as the "kernel_control" parameter
@@ -286,7 +292,7 @@ int pmct_config_timeout(int msecs, int kernel_control)
 	int fd=open(pmc_config_entry, O_WRONLY);
 	char *key=NULL;
 
-	if (kernel_control) 
+	if (kernel_control)
 		key="sched_sampling_period_t";
 	else
 		key="timeout";
@@ -308,11 +314,11 @@ int pmct_config_timeout(int msecs, int kernel_control)
 	return 0;
 }
 
-/* 
- * Tell PMCTrack's kernel module which PMC events 
+/*
+ * Tell PMCTrack's kernel module which PMC events
  * must be monitored.
  */
-int pmct_config_counters(const char* strcfg[], int syswide)
+int pmct_config_counters(const char* strcfg[], unsigned long flags)
 {
 	int len=0;
 	char buf[MAX_CONFIG_STRING_SIZE+1+9];
@@ -327,7 +333,7 @@ int pmct_config_counters(const char* strcfg[], int syswide)
 	/* Write */
 	while (strcfg[i]!=NULL) {
 
-		if (syswide)
+		if (flags & PMCT_CONFIG_SYSWIDE)
 			len=sprintf(buf,"%s\n",strcfg[i]);
 		else
 			len=sprintf(buf,"selfcfg %s\n",strcfg[i]);
@@ -345,13 +351,17 @@ int pmct_config_counters(const char* strcfg[], int syswide)
 		lseek(fd,0,SEEK_SET);
 	}
 
+	/* Enable self monitoring */
+	if (flags & PMCT_FLAG_SELF_MONITORING)
+		len=write(fd,"selfmon",7);
+
 	close(fd);
 	return 0;
 }
 
 /*
  * Tell PMCTrack's kernel module to start a monitoring session
- * in per-thread mode 
+ * in per-thread mode
  */
 int pmct_start_counting( void )
 {
@@ -372,7 +382,7 @@ int pmct_start_counting( void )
 
 /*
  * Tell PMCTrack's kernel module to start a monitoring session
- * in system-wide mode 
+ * in system-wide mode
  */
 int pmct_syswide_start_counting( void )
 {
@@ -392,8 +402,8 @@ int pmct_syswide_start_counting( void )
 }
 
 
-/* 
- * Print a header in the "normalized" format for a table of 
+/*
+ * Print a header in the "normalized" format for a table of
  * PMC and virtual-counter samples
  */
 void pmct_print_header (FILE* fo, unsigned int nr_experiments,
@@ -430,8 +440,8 @@ void pmct_print_header (FILE* fo, unsigned int nr_experiments,
 
 }
 
-/* 
- * Print a sample row in the "normalized" format for a table of 
+/*
+ * Print a sample row in the "normalized" format for a table of
  * PMC and virtual-counter samples
  */
 void pmct_print_sample (FILE* fo, unsigned int nr_experiments,
@@ -446,7 +456,7 @@ void pmct_print_sample (FILE* fo, unsigned int nr_experiments,
 	char* dst=line_out;
 	int j,cnt=0;
 	unsigned int remaining_pmcmask=pmcmask;
-	
+
 	/* Max supported counters... */
 	for(j=0; (j<MAX_PERFORMANCE_COUNTERS) && (remaining_pmcmask); j++) {
 		if(sample->pmc_mask & (0x1<<j)) {
@@ -486,10 +496,10 @@ void pmct_print_sample (FILE* fo, unsigned int nr_experiments,
 	}
 }
 
-/* 
- * Accumulate PMC and virtual-counter values from one sample into 
+/*
+ * Accumulate PMC and virtual-counter values from one sample into
  * another sample.
- * (This function is used to implement the "-A" option 
+ * (This function is used to implement the "-A" option
  * of the pmctrack command-line tool)
  */
 void pmct_accumulate_sample (unsigned int nr_experiments,
@@ -536,7 +546,7 @@ void pmct_accumulate_sample (unsigned int nr_experiments,
 
 /*
  * Obtain a file descriptor of the special file exported by
- * PMCTrack's kernel module file to retrieve performance samples 
+ * PMCTrack's kernel module file to retrieve performance samples
  */
 int pmct_open_monitor_entry(void)
 {
@@ -547,7 +557,7 @@ int pmct_open_monitor_entry(void)
 	return fd;
 }
 
-/* 
+/*
  * Become the monitor process of another process with PID=pid.
  * Upon invocation to this function the monitor process will
  * be able to retrieve PMC and/or virtual-counter samples
@@ -568,20 +578,21 @@ int pmct_attach_process (pid_t pid, int config_pmcs)
 	}
 	if (config_pmcs)
 		siz=sprintf(str, "pid_attach %d", pid);
- 	else
+	else
 		siz=sprintf(str, "pid_monitor %d", pid);
 
-	if(write(fd, str, siz+1) < 0) 
+	if(write(fd, str, siz+1) < 0)
 		return -1;
-	
+
 	close(fd);
 	return 0;
 }
 
 /*
- * Detach process from monitor 
+ * Detach process from monitor
  */
-int pmct_detach_process (pid_t pid){
+int pmct_detach_process (pid_t pid)
+{
 	char str[30];
 	int siz;
 
@@ -592,9 +603,9 @@ int pmct_detach_process (pid_t pid){
 	}
 	siz=sprintf(str, "pid_detach %d", pid);
 
-	if(write(fd, str, siz+1) < 0) 
+	if(write(fd, str, siz+1) < 0)
 		return -1;
-	
+
 	close(fd);
 	return 0;
 }
@@ -778,6 +789,7 @@ pmctrack_desc_t* pmctrack_clone_descriptor(pmctrack_desc_t* orig)
 
 static int __pmctrack_config_counters(pmctrack_desc_t* desc, const char* strcfg[], const char* virtcfg, int mux_timeout_ms)
 {
+	unsigned long flags=0;
 
 	if (mux_timeout_ms==0)
 		mux_timeout_ms=300000;
@@ -786,6 +798,11 @@ static int __pmctrack_config_counters(pmctrack_desc_t* desc, const char* strcfg[
 	if (mux_timeout_ms!=0 && pmct_config_timeout(mux_timeout_ms,desc->kern_pmcmask))
 		return -1;
 
+	if (!(desc->flags & PMCT_FLAG_SELF_MONITORING)) {
+		desc->flags&=PMCT_FLAG_SELF_MONITORING;
+		flags=PMCT_FLAG_SELF_MONITORING;
+	}
+
 	/* Configure counters if there is something to configure */
 	if (strcfg && strcfg[0]) {
 		/* Parse counter config */
@@ -793,15 +810,16 @@ static int __pmctrack_config_counters(pmctrack_desc_t* desc, const char* strcfg[
 		                          &desc->ebs_on,&desc->nr_experiments);
 
 		/* Tell the kernel what we want to count */
-		if (pmct_config_counters(strcfg,0))
+		if (pmct_config_counters(strcfg,flags))
 			return -1;
-
+		/* Avoid re-establishing the self-monitoring mode */
+		flags=0;
 	}
 
 	/* Configure virtual counters */
 	if (virtcfg) {
 		pmct_check_vcounter_config(virtcfg,&desc->nr_virtual_counters,&desc->virtual_mask);
-		if (pmct_config_virtual_counters(virtcfg,0))
+		if (pmct_config_virtual_counters(virtcfg,flags))
 			return -1;
 	}
 
@@ -1006,8 +1024,8 @@ pmc_sample_t* pmctrack_get_samples(pmctrack_desc_t* desc,int* nr_samples)
 }
 
 /*
- * Set up the size of the kernel buffer used to store PMC and virtual 
- * counter values 
+ * Set up the size of the kernel buffer used to store PMC and virtual
+ * counter values
  */
 int pmct_set_kernel_buffer_size(unsigned int nr_bytes)
 {
@@ -1034,7 +1052,7 @@ int pmct_set_kernel_buffer_size(unsigned int nr_bytes)
 
 /*
  * Request a memory region shared between kernel and user space to
- * enable efficient communication between the monitor process and 
+ * enable efficient communication between the monitor process and
  * PMCTrack's kernel module when retrieving performance samples.
  */
 pmc_sample_t* pmct_request_shared_memory_region(int monitor_fd, unsigned int* max_samples)

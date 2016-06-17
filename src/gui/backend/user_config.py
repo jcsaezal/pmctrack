@@ -61,8 +61,8 @@ class Experiment(object):
 
 class MachineConfig(object):
 	
-	def __init__(self, is_remote, remote_address=None, remote_port=22, remote_user=None, remote_password=None, path_key=None):
-		self.is_remote = is_remote
+	def __init__(self, type_machine, remote_address=None, remote_port=22, remote_user=None, remote_password=None, path_key=None):
+		self.type_machine = type_machine # "local", "ssh" or "adb"
 		self.remote_address = remote_address
 		self.remote_port = remote_port
 		self.remote_user = remote_user
@@ -82,6 +82,10 @@ class MachineConfig(object):
 		ssh_command += " -l " + self.remote_user
 		ssh_command += " " + self.remote_address
 		return ssh_command
+
+	def GetADBCommand(self):
+		return "adb -H " + self.remote_address + " -P " + self.remote_port + " shell"
+
 		
 class GraphStyleConfig(object):
 
@@ -102,6 +106,7 @@ class UserConfig(object):
 		self.machine = None # Information about monitoring machine
 		self.applications = []
 		self.cpu = None # CPU number where to run benchmark, or CPU mask
+		self.pmctrack_path = None # Path to pmctrack command
 		self.time = 0 # Time between samples (in miliseconds)
                 self.buffer_size = 0 # Samples buffer size (in bytes)
 		self.pid_app_running = None # Application's PID (if app to monitor is running)
@@ -113,7 +118,7 @@ class UserConfig(object):
 
 	def GetCopy(self):
 		copy = UserConfig()
-		copy.machine = MachineConfig(self.machine.is_remote, self.machine.remote_address, self.machine.remote_port, self.machine.remote_user, self.machine.remote_password, self.machine.path_key)
+		copy.machine = MachineConfig(self.machine.type_machine, self.machine.remote_address, self.machine.remote_port, self.machine.remote_user, self.machine.remote_password, self.machine.path_key)
 		num_exp = 0
 
 		for experiment in self.experiments:
@@ -135,6 +140,7 @@ class UserConfig(object):
                 for application in self.applications:
                     copy.applications.append(application)
 		copy.cpu = self.cpu
+		copy.pmctrack_path = self.pmctrack_path
 		copy.time = self.time
 		copy.buffer_size = self.buffer_size
 		copy.pid_app_running = self.pid_app_running

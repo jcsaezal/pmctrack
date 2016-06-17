@@ -136,7 +136,7 @@ static int parse_csv_file(pmu_info_t *pmu_info)
 		/* Discard empty lines */
 		if (strcmp(row,"\n")==0 || strcmp(row,"")==0)
 			continue;
-	
+
 		evt_name = strsep(&row, ",");
 		subevt_name = strsep(&row, ",");
 		evt_code = strsep(&row, ",");
@@ -230,7 +230,7 @@ static int build_default_pmu_info(pmu_info_t** pmu_info_vector, const char* proc
 	return 0;
 }
 
-/* Retrieve the information associated with a given PMU */ 
+/* Retrieve the information associated with a given PMU */
 pmu_info_t* pmct_get_pmu_info(unsigned int nr_coretype, const char* processor_model)
 {
 
@@ -302,9 +302,9 @@ int pmct_get_nr_pmus(void)
 	return pmct_get_nr_pmus_model(NULL);
 }
 
-/* 
- * Get the number of virtual counters available 
- * (Note: this value depends on the current active 
+/*
+ * Get the number of virtual counters available
+ * (Note: this value depends on the current active
  *   monitoring module)
  */
 int pmct_get_nr_virtual_counters_supported(void)
@@ -318,9 +318,9 @@ int pmct_get_nr_virtual_counters_supported(void)
 	else return 0;
 }
 
-/* 
- * Retrieve information on virtual counters  
- * (Note: this value depends on the current active 
+/*
+ * Retrieve information on virtual counters
+ * (Note: this value depends on the current active
  *   monitoring module)
  */
 virtual_counter_info_t* pmct_get_virtual_counter_info(void)
@@ -331,11 +331,11 @@ virtual_counter_info_t* pmct_get_virtual_counter_info(void)
 	return virtual_counter_info_gbl;
 }
 
-/* 
- * This function takes care of translating a mnemonic-based 
+/*
+ * This function takes care of translating a mnemonic-based
  * PMC configuration string into the raw format.
  * Note that we may run out of physical counters to monitor
- * the requested events. In that case, extra experiments may be 
+ * the requested events. In that case, extra experiments may be
  * allocated. As such, the function returns an array of
  * raw-formatted (feasible) configuration strings.
  */
@@ -358,6 +358,9 @@ int pmct_parse_counter_string(const char *strcfg, int nr_coretype,
 	int found, subfound, ind, subind, x;
 	pmu_info_t *pmu_info = pmct_get_pmu_info(nr_coretype,processor_model);
 	hw_subevent_t* cur_subevent;
+	int max_core_types=pmct_get_nr_pmus_model(processor_model);
+	int coretype=-1; /* In the event the coretype was forced in the high-level string */
+	char* orig_evt_row=NULL;
 
 	if(!pmu_info)
 		return -1; /* Error getting PMU information */
@@ -366,6 +369,7 @@ int pmct_parse_counter_string(const char *strcfg, int nr_coretype,
 	row_ptr = row_cfg;
 
 	while((evt_row = strsep(&row_ptr, ","))) {
+		orig_evt_row=evt_row;
 		field_evt = strsep(&evt_row, ":");
 		evt_cfg = (event_cfg_t *)malloc(sizeof(event_cfg_t));
 		evt_cfg->nr_counter = -1;
@@ -375,8 +379,16 @@ int pmct_parse_counter_string(const char *strcfg, int nr_coretype,
 		key_field_evt = strsep(&field_evt, ".");
 		value_field_evt = strsep(&field_evt, ".");
 
-		/* Differences depending on whether the user specifies a code or mnemonic. */
-		if(strncmp(key_field_evt, "0x", strlen("0x")) == 0) {
+		/* Differences depending on whether the user specifies the "coretype" flag, an event code or mnemonic. */
+		if (sscanf(orig_evt_row,"coretype=%d",&ind)==1) {
+			if (ind <0 || ind>=max_core_types) {
+				warnx("No such core type ID (%i)", ind);
+				return -2;
+			}
+
+			coretype=ind;
+			continue; /* Skip parsing flags */
+		} else if(strncmp(key_field_evt, "0x", strlen("0x")) == 0) {
 			strncpy(evt_cfg->code, key_field_evt, CODE_HW_EVENT_SIZE);
 		} else {
 			ind = subind = found = 0;
@@ -416,8 +428,8 @@ int pmct_parse_counter_string(const char *strcfg, int nr_coretype,
 				(evt_cfg->nr_properties)++;
 			}
 
-			if(pmu_info->events[ind]->pmcn > -1) {	
-				/* 
+			if(pmu_info->events[ind]->pmcn > -1) {
+				/*
 				 * It is possible that in the experiment 0 is already used this fixed counter, should seek
 				 * appropriate experiment.
 				 */
@@ -444,7 +456,7 @@ int pmct_parse_counter_string(const char *strcfg, int nr_coretype,
 					return -3;
 				}
 
-				/* 
+				/*
 				 * It is possible that in the experiment 0 is already used this gp counter, should seek
 				 * appropriate experiment.
 				 */
@@ -564,6 +576,13 @@ int pmct_parse_counter_string(const char *strcfg, int nr_coretype,
 		}
 	}
 
+	/* Append coretype flag if necessary */
+	if (coretype!=-1)
+		for(ind = 0; ind < nr_exps; ind++) {
+			sprintf(row_cfg,",coretype=%i",coretype);
+			strcat(raw_cfgs[ind],row_cfg);
+		}
+
 	/* Free the reserved memory on the execution of this function. */
 	for(ind = 0; ind < nr_events_cfg; ind++) {
 		for(subind = 0; subind < events_cfg[ind]->nr_properties; subind++)
@@ -616,10 +635,10 @@ void pmct_print_pmu_info(pmu_info_t *pmu_info, int verbose)
 	printf("nr_gp_pmcs=%u\n", pmu_info->nr_gp_pmcs);
 }
 
-/* 
+/*
  * This function generates a summary indicating which physical
- * performance counter is used to hold the counts for the various 
- * events on each multiplexing experiment. 
+ * performance counter is used to hold the counts for the various
+ * events on each multiplexing experiment.
  */
 void pmct_print_counter_mappings(FILE* fout,
                                  counter_mapping_t* mappings,
@@ -656,7 +675,7 @@ void pmct_print_counter_mappings(FILE* fout,
 	}//for_i
 }
 
-/* 
+/*
  * This function combines two mapping obtained by two calls to the
  * function pmct_parse_counter_string.
  */
@@ -702,18 +721,18 @@ static int merge_counter_mappings(counter_mapping_t* mapping_dst,
 	return 0;
 }
 
-/* 
+/*
  * This is a wrapper function for pmct_parse_counter_string(). It accepts
- * an array of PMC configuration strings in the RAW format or in the format 
- * used by pmctrack command-line tool (mnemonic based). 
- * 
+ * an array of PMC configuration strings in the RAW format or in the format
+ * used by pmctrack command-line tool (mnemonic based).
+ *
  * If the RAW format is used (non-zero "raw" parameter) this function
  * will create a copy of user_cfg_str in the output
  * parameter (raw_cfgs) and returns the number of experiments detected as well
  * as a bitmask with the number of PMCs used.
- * 
+ *
  * If the input PMC configuration is specified in the pmctrack default format
- * (raw=0), this function will invoke pmct_parse_counter_string() as many times 
+ * (raw=0), this function will invoke pmct_parse_counter_string() as many times
  * as the number of strings in user_cfg_str. In this scenario, the return values
  * have the same meaning than those of pmct_parse_counter_string().
  */
@@ -923,10 +942,10 @@ int __pmct_parse_vcounter_config(const char* virtcfg,
 }
 
 
-/* 
+/*
  * Print a listing of the virtual counters specified
  * in the "virtual_mask" bitmask
- * (Note: The behavior of this function depends on the current active 
+ * (Note: The behavior of this function depends on the current active
  *   monitoring module)
  */
 void pmct_print_selected_virtual_counters(FILE* fout, unsigned int virtual_mask)
@@ -947,9 +966,9 @@ void pmct_print_selected_virtual_counters(FILE* fout, unsigned int virtual_mask)
 }
 
 
-/* 
+/*
  * This function takes care of translating
- * a mnemonic-based virtual-counter configuration string 
+ * a mnemonic-based virtual-counter configuration string
  * into a raw-formatted configuration string (kernel format).
  */
 int pmct_parse_vcounter_config(const char* virtcfg,

@@ -6,6 +6,7 @@ if [ "$PMCTRACK_ROOT" == "" ]; then
         export PMCTRACK_ROOT
         export PATH=$PMCTRACK_ROOT/bin:$PATH
 	export PYTHONPATH=$PMCTRACK_ROOT/bin:$PYTHONPATH
+	export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$PMCTRACK_ROOT/src/lib/libpmctrack
 fi
 
 

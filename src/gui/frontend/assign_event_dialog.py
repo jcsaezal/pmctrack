@@ -65,9 +65,9 @@ class AssignEventDialog(wx.Dialog):
 
     def __set_properties(self):
         self.SetTitle(_("Assign event to counter"))
-        self.SetSize((700, 495))
+        self.SetSize((700, 530))
         self.list_event.SetSelection(0)
-        self.button_assign_event.SetMinSize((200, 37))
+        self.button_assign_event.SetMinSize((230, 37))
 
     def __do_layout(self):
         separator = wx.BoxSizer(wx.VERTICAL)

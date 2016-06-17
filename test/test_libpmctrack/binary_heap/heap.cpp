@@ -1,6 +1,6 @@
 /*
  * heap.cpp
- * 
+ *
  * This is the implementation file with the c++ code for the operations for this ADT.
  * The heap is implemented with an array, following this:
  * 	For a node i, an array P:
@@ -12,8 +12,8 @@
  * 		for every node i:
  * 			P[i] <= P[2i]
  * 			P[i] <= P[2i+1]
- * 
- * Version 1.1 : 
+ *
+ * Version 1.1 :
  * 		->Made class template to contain any data type.
  * Version 1.2 :
  * Some possible improvements from the Classes & Data structures in c++ book:
@@ -63,23 +63,21 @@ void heap<T>::heapify_down(int subHeapIndex)
 	T temp = cont[subHeapIndex];
 	bool heap_property = false;
 	unsigned int i = subHeapIndex;
-	
-	while (i<=last/2 && !heap_property)	//heapifying if we are not in the leaves and heap property is not accomplished
-	{
+
+	while (i<=last/2 && !heap_property) {	//heapifying if we are not in the leaves and heap property is not accomplished
 		int min; //index of the min between left and right children
 		if (!(cont[2*i]>cont[2*i+1]) || (2*i == last))	//if left is lower or equal than right or there is no right child
 			min =  2*i;									//min is the left child
 		else
 			min = 2*i+1;								//else, min is the right child.
-			
+
 		heap_property = !(temp > cont[min]);	//heap property := temp is lower or equal than min of its children
-		if (!heap_property)
-		{
+		if (!heap_property) {
 			cont[i] = cont[min];			//min. child go up one level
 			i = min;						//to move on the index to the min. child.
 		}
 	}
-	
+
 	cont[i] = temp;	//Either i is a leave or we got the heap property with cont[i] and we place here the previous last.
 }
 
@@ -97,19 +95,17 @@ void heap<T>::heapify_up(int subHeapIndex)
 	int i = subHeapIndex;
 	bool heap_property = false;
 
-	
-	while (i>root && !heap_property)	//heapifying if we are not on the top and heap property is not accomplished
-	{
+
+	while (i>root && !heap_property) {	//heapifying if we are not on the top and heap property is not accomplished
 		//heap_property = cont[i/2] < temp;
-    heap_property = temp > cont[i/2];
-    
-		if (!heap_property)
-		{
+		heap_property = temp > cont[i/2];
+
+		if (!heap_property) {
 			cont[i] = cont[i/2]; //swap parent with its children
 			i = i / 2;			//move index up
 		}
 	}
-	
+
 	cont[i] = temp;				//Found where temp is greater than its parent or has reached the top, place here.
 }
 
@@ -121,22 +117,21 @@ heap<T>::heap(const T array[], const int n)
 	last=n;
 	for (int i = 0, j = root; i<n; i++, j++ )
 		cont[j] = array[i];
-	
+
 	/* Variables definition */
 	int parentIndex;
-	
+
 	//(We start assuming leafs (cont[last/2 +1]...cont[last]) are subheaps with just one node.
 	//From there we keep making subheaps upwards, merging like this all the suheaps until we reach the top.
 	//Finally we obtain a heap we all the elements of the array. This is O(n/2)
-	for ( parentIndex = last / 2; parentIndex >= root; --parentIndex)
-	{
+	for ( parentIndex = last / 2; parentIndex >= root; --parentIndex) {
 		heapify_down(parentIndex);
 	}
 }
 
 /*
  * Not needed anymore since we got the function argument in insert and a temp local variable in deleteMin
- * where we can compare the element we want to place until we find the right place for it. Avoiding to 
+ * where we can compare the element we want to place until we find the right place for it. Avoiding to
  * do swaps in the process, and therefore, improving in efficiency.
  * It's one assignment instruction the difference, but, be aware that now we are storing any data type,
  * since simple integers until long data structures, as long as they have implemented the > operator.*/
@@ -153,11 +148,10 @@ T heap<T>::getMin()
 {
 	if (last>0)
 		return cont[root];
-	else
-		{
-			cerr << "Error: Trying to get the min. from an empty heap" << endl;
-			return cont[root]; // Just to avoid warning, but this will throw a runtime error. Can be removed if necessary.
-		}
+	else {
+		cerr << "Error: Trying to get the min. from an empty heap" << endl;
+		return cont[root]; // Just to avoid warning, but this will throw a runtime error. Can be removed if necessary.
+	}
 }
 
 
@@ -172,19 +166,16 @@ void heap<T>::insert(const T& x)
 template <class T>
 T heap<T>::deleteMin()
 {
-	if (last>0)
-	{
+	if (last>0) {
 		T min = cont[root];
-		
+
 		cont[root] = cont[last];
 		last--;
-		
+
 		heapify_down(root);
-	
+
 		return min;
-	}
-	else
-	{
+	} else {
 		throw("Error: Trying to delete the min. from an empty heap");
 	}
 }
@@ -198,40 +189,36 @@ bool heap<T>::isEmpty() const
 template <class T>
 bool heap<T>::operator==(const heap<T>& h2) const
 {
-	if (this->last == h2.last)
-	{
+	if (this->last == h2.last) {
 		heap<T> h1_copy (*this), h2_copy(h2);
 		bool equal = true;
 		while (!h1_copy.isEmpty() && equal)
 			equal = h1_copy.deleteMin() == h2_copy.deleteMin();
 		return equal;
-	}
-	else
+	} else
 		return false;
 }
 
 template <class T>
 void heap<T>::changeKey(const unsigned int i, const T new_key)
 {
-	if (i < 0 || i >= last) //index out of range
-	{
+	if (i < 0 || i >= last) { //index out of range
 		cerr << "Error: Trying to change the key of an out-of-range elem" << endl;
 		return;
 	}
-	
+
 	T old_key = this->cont[i];
-	
+
 	if (old_key == new_key)	//nothing to change
 		return;
-		
-	else
-	{
+
+	else {
 		cont[i] = new_key;
 		if (new_key > old_key)
 			heapify_down(i);
 		else
 			heapify_up(i);
-	}	
+	}
 }
 
 template <class T>
@@ -239,17 +226,15 @@ std::ostream& operator<<(std::ostream& strm, const heap<T>& h)
 {
 	heap<T> h_local(h);
 	int lvlcount = 1, nextlvl = 1;  //For printing one line per level.
-	
-	while (!h_local.isEmpty())
-	{
+
+	while (!h_local.isEmpty()) {
 		strm << h_local.deleteMin() << "   ";
 		--lvlcount;
-		if (lvlcount == 0)
-		{
+		if (lvlcount == 0) {
 			strm << endl;
 			lvlcount = nextlvl *= 2;
 		}
-		
+
 	}
 	strm << std::endl << "The number of elements in the heap is: " << h.size() << std::endl;
 	return strm;

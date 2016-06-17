@@ -535,7 +535,7 @@ void monitoring_counters_syswide(struct options* opts,int optind,char** argv)
 		pmctrack_exit(1);
 
 	/* Configure counters if there is something to configure */
-	if (opts->strcfg[0] && pmct_config_counters((const char**)opts->strcfg,1))
+	if (opts->strcfg[0] && pmct_config_counters((const char**)opts->strcfg,PMCT_CONFIG_SYSWIDE))
 		pmctrack_exit(1);
 
 	/* Set up sampling period
@@ -544,7 +544,7 @@ void monitoring_counters_syswide(struct options* opts,int optind,char** argv)
 	if (pmct_config_timeout(opts->msecs,(!(opts->strcfg)[0] && npmcs!=0)))
 		pmctrack_exit(1);
 
-	if (opts->virtcfg && pmct_config_virtual_counters(opts->virtcfg,1))
+	if (opts->virtcfg && pmct_config_virtual_counters(opts->virtcfg,PMCT_CONFIG_SYSWIDE))
 		pmctrack_exit(1);
 
 #ifndef USE_VFORK
@@ -908,7 +908,7 @@ static void process_pmc_counts(struct options* opts, int nr_experiments,unsigned
 
 			/* Make sure not to exceed the maximum number of samples requested */
 			if (opts->max_samples!=-1 && (cont+nr_samples>opts->max_samples))
-					nr_samples=opts->max_samples-(cont-1);
+				nr_samples=opts->max_samples-(cont-1);
 
 			for (i=0; i<nr_samples; i++) {
 				pmc_sample_t* cur=&samples[i];

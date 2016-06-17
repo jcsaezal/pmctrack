@@ -191,6 +191,7 @@ typedef struct {
 #define PMC_SELF_MONITORING	0x2
 #define PMCTRACK_SF_NOTIFICATIONS 0x4
 #define PMC_PREPARE_MULTIPLEXING	0x8
+#define PMC_READ_SELF_MONITORING 0x10
 
 /** Operations on core_experiment_t **/
 /* Initialize core_experiment_t structure */

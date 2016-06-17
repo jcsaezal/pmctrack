@@ -89,10 +89,10 @@ class GraphStyleDialog(wx.Dialog):
 
     def __set_properties(self):
         self.SetTitle(_("Graph style configuration"))
-        self.SetSize((700, 540))
+        self.SetSize((700, 530))
 	self.list_modes.SetSelection(0)
         self.combo_line_style.SetSelection(0)
-	self.button_apply_style.SetMinSize((225, 37))
+	self.button_apply_style.SetMinSize((230, 37))
 	self.__set_colors('#FFFFFF', '#666666', '#0000FF', 0, 1)
 
     def __do_layout(self):

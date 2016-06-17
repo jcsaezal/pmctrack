@@ -363,6 +363,8 @@ static int mod_alloc_per_thread_data(unsigned long clone_flags, struct task_stru
 			prof->pmc_jiffies_interval=par_prof->pmc_jiffies_interval;
 			prof->nticks_sampling_period=par_prof->nticks_sampling_period;
 			prof->pmc_jiffies_timeout=jiffies+prof->pmc_jiffies_interval;
+			/* Inherit monitor from the "parent thread" as well */
+			prof->pid_monitor=par_prof->pid_monitor;
 			p->prof_enabled=1;
 #ifdef TBS_TIMER
 			if (prof->profiling_mode==TBS_USER_MODE)
@@ -427,7 +429,7 @@ static inline void sample_counters_user_tbs(pmon_prof_t* prof, core_experiment_t
 		/* Prepare next timeout */
 		prof->pmc_jiffies_timeout=jiffies+prof->pmc_jiffies_interval;
 #ifdef TBS_TIMER
-		if (prof->profiling_mode==TBS_USER_MODE)
+		if (prof->profiling_mode==TBS_USER_MODE && prof->this_tsk->prof_enabled)
 			mod_timer( &prof->timer, prof->pmc_jiffies_timeout);
 #endif
 		/* Initialize sample*/
@@ -955,7 +957,7 @@ static void mod_exit_thread(struct task_struct* tsk)
 
 #ifdef TBS_TIMER
 	/* Cancel per-thread timer if in TBS mode */
-	if (prof->profiling_mode==TBS_USER_MODE && tsk->prof_enabled)
+	if (prof->profiling_mode==TBS_USER_MODE)
 		del_timer_sync(&prof->timer);
 #endif
 	spin_lock_irqsave(&prof->lock,flags);
@@ -1125,6 +1127,18 @@ static ssize_t proc_pmc_config_write(struct file *filp, const char __user *buff,
 		val=configure_virtual_counters_thread(kbuf+8,current,0);
 		if (val!=0)
 			ret=val;
+	} else if (strncmp(kbuf,"selfmon",7)==0) {
+		pmon_prof_t* prof=(pmon_prof_t*)current->pmc;
+		if (!prof)
+			ret=-EINVAL;
+		else
+			prof->flags|=PMC_SELF_MONITORING;
+	} else if (strncmp(kbuf,"selfmoff",8)==0) {
+		pmon_prof_t* prof=(pmon_prof_t*)current->pmc;
+		if (!prof)
+			ret=-EINVAL;
+		else
+			prof->flags&=~PMC_SELF_MONITORING;
 
 	} else if (strncmp(kbuf, "pmc",3)==0) {
 		/* For now configure for all cpus*/
@@ -1280,6 +1294,8 @@ static int set_up_monitoring_task(void *data)
 	return 0;
 }
 
+static noinline int pmctrack_task_detach_force(struct task_struct* target, pid_t monitor_pid);
+
 static int pmctrack_pid_attach(pid_t pid)
 {
 	struct task_struct* cur=current;
@@ -1289,6 +1305,7 @@ static int pmctrack_pid_attach(pid_t pid)
 	struct attach_arg arg;
 	unsigned long flags;
 	int attachable=1;
+	int try_force_detach=0;
 	core_experiment_set_t set[AMP_MAX_CORETYPES];
 	int retval=0;
 	int i,j=0;
@@ -1315,11 +1332,20 @@ static int pmctrack_pid_attach(pid_t pid)
 
 	/* Phase one: set up monitor */
 	spin_lock_irqsave(&monitored->lock,flags);
-	if (!target->pmc || target->prof_enabled || monitored->pid_monitor!=-1 || monitored->pmc_samples_buffer)
+	if (!target->pmc || target->prof_enabled || monitored->pid_monitor!=-1 || monitored->pmc_samples_buffer) {
 		attachable=0;
-	else
+		try_force_detach=(target->pmc && target->prof_enabled && monitored->pid_monitor!=-1 &&  monitored->pmc_samples_buffer);
+	} else
 		attachable=1;
 	spin_unlock_irqrestore(&monitored->lock,flags);
+
+	/* Try to detach first */
+	if (try_force_detach) {
+		if ((retval=pmctrack_task_detach_force(target,monitored->pid_monitor)))
+			goto out_err;
+		else
+			attachable=1;
+	}
 
 	if (!attachable) {
 		retval=-EINVAL;
@@ -1382,6 +1408,7 @@ static int disable_monitoring_task(void *data)
 	pmon_prof_t* target=arg->monitored;
 	unsigned long flags;
 	struct task_struct* p=target->this_tsk;
+	int i=0;
 
 	spin_lock_irqsave(&target->lock,flags);
 	if (current==p)
@@ -1396,6 +1423,16 @@ static int disable_monitoring_task(void *data)
 	/* Disable monitor field */
 	target->pid_monitor=-1;
 	p->prof_enabled=0;
+
+	/* Deallocate memory from thread-specific PMC data if any */
+	if (target->pmcs_config) {
+		for (i=0; i<AMP_MAX_CORETYPES; i++) {
+			free_experiment_set(&target->pmcs_multiplex_cfg[i]);
+			init_core_experiment_set_t(&target->pmcs_multiplex_cfg[i]);
+		}
+		target->pmcs_config=NULL;
+	}
+
 	spin_unlock_irqrestore(&target->lock,flags);
 	return 0;
 }
@@ -1468,14 +1505,78 @@ static noinline int pmctrack_pid_detach(pid_t pid)
 			nr_tries++;
 		}
 		if (ret!=0)
-			trace_printk("Couldn't detach processs successfuly after %d tries\n",nr_tries);
+			trace_printk("Couldn't detach process successfuly after %d tries\n",nr_tries);
 		retval=ret;
 	}
 
+#ifdef TBS_TIMER
+	/* Disable timer if detach process was successful */
+	if (ret==0 && monitored->profiling_mode==TBS_USER_MODE)
+		del_timer_sync(&monitored->timer);
+#endif
 out_err:
 	put_task_struct(target);
 	return retval;
 }
+
+/* Function invoked with the reference counter of the monitored task !=0 */
+static noinline int pmctrack_task_detach_force(struct task_struct* target, pid_t monitor_pid)
+{
+	struct task_struct* monitor_task=NULL;
+	pmon_prof_t* monitored;
+	struct attach_arg arg;
+	int retval=0;
+	int cpu_task;
+	const int max_nr_tries=3;
+	int nr_tries=0;
+	int ret=-EAGAIN;
+
+	if (monitor_pid<0)
+		return 0; //Then there is nothing to do here
+
+	rcu_read_lock();
+	monitor_task = find_process_by_pid(monitor_pid);
+	/* Monitor process exists-> cannot detach*/
+	if( monitor_task) {
+		rcu_read_unlock();
+		return -EPERM;
+	}
+	rcu_read_unlock();
+
+	monitored = (pmon_prof_t*)target->pmc;
+
+	/* Let's assume it is detachable */
+	/* Prepare xcall */
+	arg.monitor=NULL;
+	arg.monitored=monitored;
+
+	cpu_task=task_cpu_safe(target);
+
+	/*
+	 * Obtain CPU safely. Invoke the function to read HW counters
+	 * on the CPU where the task runs.
+	 */
+	if (cpu_task==-1 || target->state!=TASK_RUNNING) {
+		disable_monitoring_task(&arg);
+	} else {
+		/*
+		 * Note that the task may go to sleep or be migrated in the meantime. That is not a big deal
+		 * since the save callback is invoked in that case. That callback already updates
+		 * auxiliary values for PMC counts.
+		 */
+		while (nr_tries<max_nr_tries && ret==-EAGAIN) {
+			ret=pmct_cpu_function_call(target, cpu_task, disable_monitoring_task,&arg);
+			nr_tries++;
+		}
+		if (ret!=0)
+			trace_printk("Couldn't detach process successfuly after %d tries\n",nr_tries);
+		retval=ret;
+	}
+
+	return retval;
+}
+
+
 
 /* Write callback for /proc/pmc/monitor */
 static ssize_t proc_monitor_pmcs_write(struct file *filp, const char __user *buf, size_t len, loff_t *off)
@@ -1547,7 +1648,7 @@ static ssize_t proc_monitor_pmcs_write(struct file *filp, const char __user *buf
 		if (!prof->pmc_samples_buffer)
 			prof->pmc_samples_buffer=pmc_buf;
 
-		prof->flags|=PMC_SELF_MONITORING;
+		prof->flags|=PMC_READ_SELF_MONITORING;
 
 		/* Set up jiffies interval if it wasn't set previously */
 		if (prof->pmc_jiffies_interval<0)
@@ -1569,9 +1670,18 @@ static ssize_t proc_monitor_pmcs_write(struct file *filp, const char __user *buf
 
 		if (!prof)
 			return -EINVAL;
+#ifdef TBS_TIMER
+		/* Cancel per-thread timer if in TBS mode */
+		if (prof->profiling_mode==TBS_USER_MODE && current->prof_enabled)
+			del_timer_sync(&prof->timer);
+#endif
 		spin_lock_irqsave(&prof->lock,flags);
-		sample_counters_user_tbs(prof,prof->pmcs_config,PMC_SELF_EVT,raw_smp_processor_id());
+		/* Clear the prof_enabled flag prior to invoking
+		 * sample_counters_user_tbs() so that the
+		 * timer does not get reloaded()
+		 * */
 		current->prof_enabled=0;
+		sample_counters_user_tbs(prof,prof->pmcs_config,PMC_SELF_EVT,raw_smp_processor_id());
 		spin_unlock_irqrestore(&prof->lock,flags);
 	}
 	/* Syswide monitoring can be started/stopped using this /proc entry as well
@@ -1633,8 +1743,8 @@ static ssize_t proc_monitor_pmcs_read (struct file *filp, char __user *buf, size
 	/* Prevent the perf interrupt to kick in when trying to do this */
 	spin_lock_irqsave(&pmcbuf->lock,flags);
 
-	if (prof_mon->flags & PMC_SELF_MONITORING) {
-		prof_mon->flags&=~PMC_SELF_MONITORING;
+	if (prof_mon->flags & PMC_READ_SELF_MONITORING) {
+		prof_mon->flags&=~PMC_READ_SELF_MONITORING;
 		goto read_buffer_now;
 	}
 
@@ -1813,6 +1923,13 @@ static ssize_t proc_pmc_enable_write(struct file *filp, const char __user *buff,
 
 		spin_unlock_irqrestore(&prof->lock,flags);
 	} else if (strcmp(kbuf,"OFF")==0 && prof!=NULL) {
+		if (!prof)
+			return -EINVAL;
+#ifdef TBS_TIMER
+		/* Cancel per-thread timer if in TBS mode */
+		if (prof->profiling_mode==TBS_USER_MODE && current->prof_enabled)
+			del_timer_sync(&prof->timer);
+#endif
 		/* Prevent the perf interrupt to kick in when trying to do this */
 		spin_lock_irqsave(&prof->lock,flags);
 

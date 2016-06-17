@@ -55,7 +55,7 @@ int main(int argc, char *argv[])
 		exit(1);
 
 	/* Configure counters */
-	if (pmctrack_config_counters(desc,strcfg,virtual_cfg,250))
+	if (pmctrack_config_counters(desc,strcfg,virtual_cfg,0))
 		exit(1);
 
 	/* Start counting */

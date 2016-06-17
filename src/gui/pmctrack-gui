@@ -40,7 +40,7 @@ class ConfigFrame(wx.Frame):
         kwds = {"style": wx.DEFAULT_FRAME_STYLE}
         wx.Frame.__init__(self, *args, **kwds)
 
-        self.version = "1.4.0"
+        self.version = "1.6.1"
         self.user_config = UserConfig()
         self.facade_xml = None
         self.pmc_connect = None
@@ -48,7 +48,7 @@ class ConfigFrame(wx.Frame):
         self.actual_panel = 0
         self.sizer_panel = wx.BoxSizer(wx.VERTICAL)
         
-        self.SetSize((717, 630))
+        self.SetSize((717, 570))
         self.SetSizer(self.sizer_panel)
         self.GoToPanel(0)
 

@@ -31,7 +31,7 @@
 
 #include "heap.h" // William's (or binary) heap
 
-extern "C"{
+extern "C" {
 #include <pmctrack.h> // profiling using libpmctrack
 }
 
@@ -72,79 +72,77 @@ using namespace std;
 
 int main(int argc, char **argv)
 {
-  cout << "Profiling, through libpmctrack, cache behaviour when using a William's heap." << endl;
+	cout << "Profiling, through libpmctrack, cache behaviour when using a William's heap." << endl;
 
-  /* libpmctrack: init */
-  if ((desc=pmctrack_init(MAX_SAMPLES))==NULL)
-    exit(1);
+	/* libpmctrack: init */
+	if ((desc=pmctrack_init(MAX_SAMPLES))==NULL)
+		exit(1);
 
-  /* libpmctrack: configure counters */
-  if (pmctrack_config_counters(desc,strcfg,virtcfg,TIMEOUT))
-    exit(1);
+	/* libpmctrack: configure counters */
+	if (pmctrack_config_counters(desc,strcfg,virtcfg,TIMEOUT))
+		exit(1);
 
-  const unsigned input_n = 1000000; //inserting 1000000 numbers
+	const unsigned input_n = 1000000; //inserting 1000000 numbers
 	const unsigned range = 10000; // in the range from -5000 to 5000
 
 	/* Timer declarations */
 	struct timeval start, end;
-  long seconds, useconds;
-  long unsigned int mtime;
-  /* Timer init */
-  gettimeofday(&start, NULL);
-    /* initialize random seed with start time: */
+	long seconds, useconds;
+	long unsigned int mtime;
+	/* Timer init */
+	gettimeofday(&start, NULL);
+	/* initialize random seed with start time: */
 	srand (start.tv_sec);
 
-  /* libpmctrack: Start counting init heap*/
-  if (pmctrack_start_counters(desc))
-      exit(1);
+	/* libpmctrack: Start counting init heap*/
+	if (pmctrack_start_counters(desc))
+		exit(1);
 
 	/* Benchmark starts here */
 	heap<int> h;
 
-  /* libpmctrack: Stop counting init heap */
-  if (pmctrack_stop_counters(desc))
-    exit(1);
-  cout << "Profiling data for initializing the heap:" << endl;
-  pmctrack_print_counts(desc, stdout, 0);
+	/* libpmctrack: Stop counting init heap */
+	if (pmctrack_stop_counters(desc))
+		exit(1);
+	cout << "Profiling data for initializing the heap:" << endl;
+	pmctrack_print_counts(desc, stdout, 0);
 
 
-  /* libpmctrack: Start counting inserts */
-  if (pmctrack_start_counters(desc))
-      exit(1);
+	/* libpmctrack: Start counting inserts */
+	if (pmctrack_start_counters(desc))
+		exit(1);
 
-	for (unsigned int i = 0; i<input_n; i++)
-	{
+	for (unsigned int i = 0; i<input_n; i++) {
 		int randn = (rand() % range + 1) - range/2;
 		h.insert(randn);
 	}
 
-  /* libpmctrack: Stop counting inserts */
-  if (pmctrack_stop_counters(desc))
-    exit(1);
-  cout << "Profiling data for inserting into the heap:" << endl;
-  pmctrack_print_counts(desc, stdout, 0);
+	/* libpmctrack: Stop counting inserts */
+	if (pmctrack_stop_counters(desc))
+		exit(1);
+	cout << "Profiling data for inserting into the heap:" << endl;
+	pmctrack_print_counts(desc, stdout, 0);
 
-  /* libpmctrack: Start counting inserts */
-  if (pmctrack_start_counters(desc))
-      exit(1);
+	/* libpmctrack: Start counting inserts */
+	if (pmctrack_start_counters(desc))
+		exit(1);
 
-	for (unsigned int i = 0; i<input_n; ++i)
-	{
+	for (unsigned int i = 0; i<input_n; ++i) {
 		int aux_min = h.deleteMin();
 
 		V(
-    cout << "Data after "<< i <<"th deletion:" << endl;
-    cout << "Min extracted: " << aux_min << endl;
-    cout << "Printing heap:" << endl;
-		cout << fh << endl;
-		cout << "**************************************" << endl);
+		    cout << "Data after "<< i <<"th deletion:" << endl;
+		    cout << "Min extracted: " << aux_min << endl;
+		    cout << "Printing heap:" << endl;
+		    cout << fh << endl;
+		    cout << "**************************************" << endl);
 	}
 
-  /* libpmctrack: Stop counting deletes */
-  if (pmctrack_stop_counters(desc))
-    exit(1);
-  cout << "Profiling data for deleting from the heap:" << endl;
-  pmctrack_print_counts(desc, stdout, 0);
+	/* libpmctrack: Stop counting deletes */
+	if (pmctrack_stop_counters(desc))
+		exit(1);
+	cout << "Profiling data for deleting from the heap:" << endl;
+	pmctrack_print_counts(desc, stdout, 0);
 
 	/* Benchmark ends here */
 
@@ -152,14 +150,14 @@ int main(int argc, char **argv)
 	gettimeofday(&end, NULL);
 
 	useconds = end.tv_usec - start.tv_usec;
-  seconds  = end.tv_sec  - start.tv_sec;
+	seconds  = end.tv_sec  - start.tv_sec;
 
-  mtime = ((seconds) * 1000000 + useconds) + 0.5;
+	mtime = ((seconds) * 1000000 + useconds) + 0.5;
 
-  cout << "Elapsed time: " << mtime << " microseconds" << endl;
+	cout << "Elapsed time: " << mtime << " microseconds" << endl;
 
-  /* libpmctrack: Free up memory */
-  pmctrack_destroy(desc);
+	/* libpmctrack: Free up memory */
+	pmctrack_destroy(desc);
 
 	return 0;
 }

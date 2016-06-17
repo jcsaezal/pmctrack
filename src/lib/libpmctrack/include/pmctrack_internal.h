@@ -43,10 +43,15 @@
 #define PMCT_FLAG_SYSWIDE 0x2
 #define PMCT_FLAG_RAW_PMC_CONFIG 0x4
 #define PMCT_FLAG_VIRT_COUNTER_MNEMONICS 0x8
+#define PMCT_FLAG_SELF_MONITORING 0x10
 
-/* 
- * Structure to manage a performance 
- * monitoring session with PMCTrack's kernel driver 
+/* Flags for counter configuration */
+#define PMCT_CONFIG_SYSWIDE 0x1
+#define PMCT_CONFIG_SELF 0x2
+
+/*
+ * Structure to manage a performance
+ * monitoring session with PMCTrack's kernel driver
  */
 struct pmctrack_desc {
 	int fd_monitor;                    /* Descriptor for the special file enabling to read performance samples from the kernel */
@@ -61,13 +66,13 @@ struct pmctrack_desc {
 	unsigned int nr_samples;           /* Number of items temporarily stored in the "samples" array */
 	unsigned int max_nr_samples;       /* Max capacity (# of samples) of the "samples" array */
 	counter_mapping_t event_mapping[MAX_PERFORMANCE_COUNTERS]; /* Structure storing the event-to-PMC mapping */
-	unsigned int global_pmcmask;       /* Overall PMC mask used (when using event mnemonics only) */    
+	unsigned int global_pmcmask;       /* Overall PMC mask used (when using event mnemonics only) */
 	unsigned long flags;               /* Bitmask field (libpmctrack-specific flags) */
 };
 
 /*
- * The function parses a null-terminated array of strings 
- * with PMC configurations in the raw format (userpmccfg), and 
+ * The function parses a null-terminated array of strings
+ * with PMC configurations in the raw format (userpmccfg), and
  * returns the following information: (1) Number of PMCs in use
  * across experiments in the specified configuration, (2) bitmask that indicates
  * which PMCs are used across experiments, (3) flag (ebs) that indicates
@@ -83,38 +88,38 @@ int pmct_check_counter_config(const char* userpmccfg[],unsigned int* nr_counters
 
 /*
  * Parse a string that specifies the virtual-counter configuration
- * in the raw format and return the following information: 
- * (1) Number of virtual counters specified in the string and 
+ * in the raw format and return the following information:
+ * (1) Number of virtual counters specified in the string and
  * (2) bitmask that indicates which virtual counters are used
  *
  * The function returns 0 on success, and a non-zero value upon failure.
  */
 int pmct_check_vcounter_config(const char* virtcfg,unsigned int* nr_virtual_counters,unsigned int* virtual_mask);
 
-/* 
+/*
  * Tell PMCTrack's kernel module which PMC events must be monitored.
  *
  * ==Parameters==
  * strcfg: NULL-terminated array of string with counter configurations in the raw format
  *      (e.g., {"pmc0,pmc1","pmc2=0xc0,pmc3=0x2e","NULL"})
- * syswide: 1 -> enable syswide mode, 0 -> enable per-thread mode.
+ * flags: 1 -> enable syswide mode, 0 -> enable per-thread mode, ...
  *
  * The function returns 0 on success, and a non-zero value upon failure.
  */
-int pmct_config_counters(const char* strcfg[], int syswide);
+int pmct_config_counters(const char* strcfg[], unsigned long flags);
 
-/* 
+/*
  * Tell PMCTrack's kernel module which virtual counters must be monitored.
  *
  * ==Parameters==
  * virtcfg: virtual counter configuration string in the raw format (e.g., virt0,virt1)
- * syswide: 1 -> enable syswide mode, 0 -> enable per-thread mode.
+ * flags: 1 -> enable syswide mode, 0 -> enable per-thread mode, ...
  *
  * The function returns 0 on success, and a non-zero value upon failure.
  */
-int pmct_config_virtual_counters(const char* virtcfg, int syswide);
+int pmct_config_virtual_counters(const char* virtcfg, unsigned long flags);
 
-/* 
+/*
  * Setup timeout for TBS or scheduler-driven monitoring mode (specified in ms).
  * If the kernel forced the PMC configuration a non-zero value should be specified
  * as the "kernel_control" parameter
@@ -125,14 +130,14 @@ int pmct_config_virtual_counters(const char* virtcfg, int syswide);
 int pmct_config_timeout(int msecs, int kernel_control);
 
 /*
- * Tell PMCTrack's kernel module to start a monitoring session in per-thread mode 
+ * Tell PMCTrack's kernel module to start a monitoring session in per-thread mode
  *
  * The function returns 0 on success, and a non-zero value upon failure.
  */
 int pmct_start_counting( void );
 
-/* 
- * Print a header in the "normalized" format for a table of 
+/*
+ * Print a header in the "normalized" format for a table of
  * PMC and virtual-counter samples
  *
  * ==Parameters==
@@ -140,7 +145,7 @@ int pmct_start_counting( void );
  * pmcmask: bitmask indicating which PMCs are in use
  * virtual_mask: bitmask indicating which virtual counters are in use
  * extended_output: Use a non-zero value if nr_experiments>1 or different
- *                  events sets are monitored in the various cores of 
+ *                  events sets are monitored in the various cores of
  *                  an asymmetric multicore system
  * syswide: Use a non-zero value if the system-wide mode is enabled.
  *
@@ -151,8 +156,8 @@ void pmct_print_header (FILE* fo, unsigned int nr_experiments,
                         int extended_output,
                         int syswide);
 
-/* 
- * Print a sample row in the "normalized" format for a table of 
+/*
+ * Print a sample row in the "normalized" format for a table of
  * PMC and virtual-counter samples
  *
  * ==Parameters==
@@ -160,7 +165,7 @@ void pmct_print_header (FILE* fo, unsigned int nr_experiments,
  * pmcmask: bitmask indicating which PMCs are in use
  * virtual_mask: bitmask indicating which virtual counters are in use
  * extended_output: Use a non-zero value if nr_experiments>1 or different
- *                  events sets are monitored in the various cores of 
+ *                  events sets are monitored in the various cores of
  *                  an asymmetric multicore system
  * nsample: Number of sample to be included in the row
  * sample: Actual sample with PMC and virtual-counter data
@@ -173,17 +178,17 @@ void pmct_print_sample (FILE* fo, unsigned int nr_experiments,
                         int nsample,
                         pmc_sample_t* sample);
 
-/* 
- * Accumulate PMC and virtual-counter values from one sample into 
+/*
+ * Accumulate PMC and virtual-counter values from one sample into
  * another sample.
- * (This function is used to implement the "-A" option 
+ * (This function is used to implement the "-A" option
  * of the pmctrack command-line tool)
  *
  * ==Parameters==
  * nr_experiments: Number of event-multiplexing experiments in use
  * pmcmask: bitmask indicating which PMCs are in use
  * virtual_mask: bitmask indicating which virtual counters are in use
- * copy_metainfo: Use a non-zero value to copy metainfo from "sample" 
+ * copy_metainfo: Use a non-zero value to copy metainfo from "sample"
  *                 into "accum"
  * sample: Actual sample with PMC and virtual-counter data
  * sample: Sample with accumulate data
@@ -195,7 +200,7 @@ void pmct_accumulate_sample (unsigned int nr_experiments,
                              pmc_sample_t* sample,
                              pmc_sample_t* accum);
 
-/* 
+/*
  * Become the monitor process of another process with PID=pid.
  * Upon invocation to this function the monitor process will
  * be able to retrieve PMC and/or virtual-counter samples
@@ -205,21 +210,21 @@ void pmct_accumulate_sample (unsigned int nr_experiments,
  * virtual counter configuration from the parent process
  *
  * The function returns 0 on success, and a non-zero value upon failure.
- * 
+ *
  */
 int pmct_attach_process (pid_t pid, int config_pmcs);
 
 /*
- * Detach process from monitor 
+ * Detach process from monitor
  */
 int pmct_detach_process (pid_t pid);
 
 
 /*
  * Obtain a file descriptor of the special file exported by
- * PMCTrack's kernel module file to retrieve performance samples 
+ * PMCTrack's kernel module file to retrieve performance samples
  *
- * The function returns a number greater or equal than zero upon success, 
+ * The function returns a number greater or equal than zero upon success,
  * and a negative value upon failure.
  *
  */
@@ -241,27 +246,27 @@ int pmct_read_samples (int fd, pmc_sample_t* samples, int max_samples);
 
 /*
  * Request a memory region shared between kernel and user space to
- * enable efficient communication between the monitor process and 
+ * enable efficient communication between the monitor process and
  * PMCTrack's kernel module when retrieving performance samples.
  *
  * ==Parameters==
  * monitor_fd: File descriptor obtained with pmct_open_monitor_entry()
  * max_samples (output): Maximum capacity (in # of samples) of the shared memory region
  *
- * The function returns a non-NULL pointer on success, and NULL upon failure. 
+ * The function returns a non-NULL pointer on success, and NULL upon failure.
  */
 pmc_sample_t* pmct_request_shared_memory_region(int monitor_fd, unsigned int* max_samples);
 
 /*
- * Set up the size of the kernel buffer used to store PMC and virtual 
- * counter values 
+ * Set up the size of the kernel buffer used to store PMC and virtual
+ * counter values
  *
  * The function returns 0 on success, and a non-zero value upon failure.
  */
 int pmct_set_kernel_buffer_size(unsigned int nr_bytes);
 
 /*
- * Tell PMCTrack's kernel module to start a monitoring session in system-wide mode 
+ * Tell PMCTrack's kernel module to start a monitoring session in system-wide mode
  *
  * The function returns 0 on success, and a non-zero value upon failure.
  */
@@ -299,13 +304,13 @@ typedef struct {
 /* Structure that represents a HW event */
 typedef struct hw_event {
 	int pmcn;                      /* PMC number (if any) */
-	char name[NAME_HW_EVENT_SIZE]; /* Event's name */          
-	char code[CODE_HW_EVENT_SIZE]; /* Event's code (hex string) */    
-	hw_subevent_t *subevents[MAX_NR_SUBEVENTS];  /* List of subevents */ 
-	unsigned int nr_subevents;      /* Number of subevents */ 
+	char name[NAME_HW_EVENT_SIZE]; /* Event's name */
+	char code[CODE_HW_EVENT_SIZE]; /* Event's code (hex string) */
+	hw_subevent_t *subevents[MAX_NR_SUBEVENTS];  /* List of subevents */
+	unsigned int nr_subevents;      /* Number of subevents */
 } hw_event_t;
 
-/* 
+/*
  * Structure that holds information about
  * a Performance Monitoring Unit (PMU)
  */
@@ -317,7 +322,7 @@ typedef struct {
 	unsigned int nr_events;      /* Number of HW events supported */
 } pmu_info_t;
 
-/* 
+/*
  * Structure that holds information about
  * available virtual counters
  */
@@ -328,7 +333,7 @@ typedef struct {
 
 /*
  * Retrieve the information associated with a given PMU
- * 
+ *
  * ==Parameters==
  * nr_coretype: PMU number. Asymmetric multicore platforms feature different PMUS, one per core type.
  *              On symmetric systems, use 0 for this parameter.
@@ -337,7 +342,7 @@ typedef struct {
  *                  provides information on the current platform (the model string is
  *                  obtained automatically).
  *
- * The function returns a non-NULL pointer on success, and NULL upon failure. 
+ * The function returns a non-NULL pointer on success, and NULL upon failure.
  */
 pmu_info_t* pmct_get_pmu_info(unsigned int nr_coretype, const char* processor_model);
 
@@ -357,26 +362,26 @@ void pmct_print_pmu_info(pmu_info_t *pmu_info, int verbose);
 /* Print a listing of the events supported by a given PMU */
 void pmct_print_event_list(pmu_info_t *pmu_info, int verbose);
 
-/* 
- * This function takes care of translating a mnemonic-based 
+/*
+ * This function takes care of translating a mnemonic-based
  * PMC configuration string into the raw format.
  * Note that we may run out of physical counters to monitor
- * the requested events. In that case, extra experiments may be 
+ * the requested events. In that case, extra experiments may be
  * allocated. As such, the function returns an array of
  * raw-formatted (feasible) configuration strings.
  *
  * ==Parameters==
  * strcfg (in):  mnemonic-based PMC configuration string.
- *               Event mnemonics or hex-codes may be used to specify events. 
+ *               Event mnemonics or hex-codes may be used to specify events.
  * nr_coretype (in): PMU id selected to perform the translation.
- * processor_model (in): Processor model string selected to perform the translation. If 
- *                  a NULL value is passed, the function will use the information 
+ * processor_model (in): Processor model string selected to perform the translation. If
+ *                  a NULL value is passed, the function will use the information
  *                  on the PMU id selected for the current machine.
- * raw_cfgs (out): NULL-terminated array of strings with counter configurations 
+ * raw_cfgs (out): NULL-terminated array of strings with counter configurations
  *               in the raw format (e.g., {"pmc0,pmc1","pmc2=0xc0,pmc3=0x2e","NULL"})
  * nr_experiments (out): Number of elements in raw_cfgs
  * used_counter_mask (out): Bitmask indicating PMCs used in raw_cfgs
- * mapping (out): Array with the resulting event-to-PMC mapping information. 
+ * mapping (out): Array with the resulting event-to-PMC mapping information.
  *                The array must have MAX_PERFORMANCE_COUNTERS elements and its memory must
  *                be allocated by the program that invokes the function.
  *
@@ -389,28 +394,28 @@ int pmct_parse_counter_string(const char *strcfg, int nr_coretype,
                               unsigned int *used_counter_mask,
                               counter_mapping_t *mapping);
 
-/* 
+/*
  * This function generates a summary indicating which physical
- * performance counter is used to hold the counts for the various 
- * events on each multiplexing experiment. 
+ * performance counter is used to hold the counts for the various
+ * events on each multiplexing experiment.
  */
 void pmct_print_counter_mappings(FILE* fout,
                                  counter_mapping_t* mappings,
                                  unsigned int pmcmask,
                                  unsigned int nr_experiments);
 
-/* 
+/*
  * This is a wrapper function for pmct_parse_counter_string(). It accepts
- * an array of PMC configuration strings in the RAW format or in the format 
- * used by pmctrack command-line tool (mnemonic based). 
- * 
+ * an array of PMC configuration strings in the RAW format or in the format
+ * used by pmctrack command-line tool (mnemonic based).
+ *
  * If the RAW format is used (non-zero "raw" parameter) this function
  * will create a copy of user_cfg_str in the output
  * parameter (raw_cfgs) and returns the number of experiments detected as well
  * as a bitmask with the number of PMCs used.
- * 
+ *
  * If the input PMC configuration is specified in the pmctrack default format
- * (raw=0), this function will invoke pmct_parse_counter_string() as many times 
+ * (raw=0), this function will invoke pmct_parse_counter_string() as many times
  * as the number of strings in user_cfg_str. In this scenario, the return values
  * have the same meaning than those of pmct_parse_counter_string().
  */
@@ -422,37 +427,37 @@ int pmct_parse_pmc_configuration(const char* user_cfg_str[],
                                  unsigned int *used_counter_mask,
                                  counter_mapping_t *mapping);
 
-/* 
- * Get the number of virtual counters available 
- * (Note: this value depends on the current active 
+/*
+ * Get the number of virtual counters available
+ * (Note: this value depends on the current active
  *   monitoring module)
  */
 int pmct_get_nr_virtual_counters_supported(void);
 
-/* 
- * Retrieve information on virtual counters  
- * (Note: this value depends on the current active 
+/*
+ * Retrieve information on virtual counters
+ * (Note: this value depends on the current active
  *   monitoring module)
  */
 virtual_counter_info_t* pmct_get_virtual_counter_info(void);
 
-/* 
+/*
  * Print a listing of the virtual counters supported by
  * the current active monitoring module
  */
 void pmct_print_virtual_counter_list(void);
 
-/* 
+/*
  * Print a listing of the virtual counters specified
  * in the "virtual_mask" bitmask
- * (Note: The behavior of this function depends on the current active 
+ * (Note: The behavior of this function depends on the current active
  *   monitoring module)
  */
 void pmct_print_selected_virtual_counters(FILE* fout, unsigned int virtual_mask);
 
-/* 
+/*
  * This function takes care of translating
- * a mnemonic-based virtual-counter configuration string 
+ * a mnemonic-based virtual-counter configuration string
  * into a raw-formatted configuration string (kernel format).
  *
  * ==Parameters==
@@ -461,7 +466,7 @@ void pmct_print_selected_virtual_counters(FILE* fout, unsigned int virtual_mask)
  * nr_virtual_counters (out): Number of virtual counters used by the configuration
  * mnemonics_used (out): If mnemonics were used in virtcfg a non-zero value
  *                       will be returned in this parameter
- * raw_virtcfg (out): Resulting virtual-counter configuration string  
+ * raw_virtcfg (out): Resulting virtual-counter configuration string
  *                    in the raw format (e.g., virt0,virt1). The function
  *                    takes care of allocating memory for this string.
  */
