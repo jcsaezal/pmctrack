@@ -799,7 +799,7 @@ static int __pmctrack_config_counters(pmctrack_desc_t* desc, const char* strcfg[
 		return -1;
 
 	if (!(desc->flags & PMCT_FLAG_SELF_MONITORING)) {
-		desc->flags&=PMCT_FLAG_SELF_MONITORING;
+		desc->flags|=PMCT_FLAG_SELF_MONITORING;
 		flags=PMCT_FLAG_SELF_MONITORING;
 	}
 
