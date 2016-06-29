@@ -3,7 +3,7 @@
  *
  * Advanced driver for the Odroid Smart Power USB device
  *
- * Copyright (C) 2016 Juan Carlos Saez (jcsaezal@ucm.es)
+ * Copyright (C) 2016 Adrian Garcia, Alvaro Sanz and Juan Carlos Saez
  *
  *	This program is free software; you can redistribute it and/or
  *	modify it under the terms of the GNU General Public License as
