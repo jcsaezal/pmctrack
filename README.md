@@ -19,7 +19,7 @@ Despite being an OS-oriented tool, PMCTrack still allows gathering PMC values fr
 
 ## Publications
 
-
+* Juan Carlos Saez, Adrian Pousa, Roberto Rodríguez-Rodríguez, Fernando Castro, Manuel Prieto-Matias. (2016) "PMCTrack: Delivering performance monitoring counter support to the OS scheduler", *The Computer Journal*, _(To appear)_. 
 * Juan Carlos Saez, Jorge Casas, Abel Serrano, Roberto Rodríguez-Rodríguez, Fernando Castro, Daniel Chaver, Manuel Prieto-Matias. (2015) "An OS-Oriented Performance Monitoring Tool for Multicore Systems," _Euro-Par 2015 International Workshops: Revised Selected Papers_, pp. 697-709. 
 
 ## System requirements
