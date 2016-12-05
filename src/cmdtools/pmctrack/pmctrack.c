@@ -139,7 +139,7 @@ struct pid_ctrl {
 	unsigned int nr_samples_accum[MAX_COUNTER_CONFIGS];
 };
 
-inline void sigalarm_handler(int signo) {};
+void sigalarm_handler(int signo) {};
 void sigchld_handler(int signo);
 void sigint_handler(int signo);
 static void usage(const char* program_name,int status);
