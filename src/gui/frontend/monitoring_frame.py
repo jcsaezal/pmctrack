@@ -45,12 +45,12 @@ class MonitoringFrame(wx.Frame):
         wx.Frame.__init__(self, *args, **kwds)
 
 	self.app_name = kwargs.get("app_name")
-	self.version = kwargs.get("version")
         self.final_panel = kwargs.get("final_panel")
 	self.user_config = kwargs.get("user_config")
 	self.pack = kwargs.get("pack", "")
 	self.num_exp = kwargs.get("num_exp", 0)
 	self.num_metric = kwargs.get("num_metric", 0)
+	self.single_app_name = self.app_name.split()[0]
 
         # Indicates whether the graph is shown fully or only partly present.
         self.show_complete = False
@@ -121,18 +121,19 @@ class MonitoringFrame(wx.Frame):
         self.fig.canvas.mpl_connect('button_press_event', self.on_click_graph)
 
     def __set_properties(self):
-        self.SetTitle("PMCTrack-GUI v" + self.version + " - " + _("Monitoring application '{0}'").format(self.app_name.split()[0]))
         self.SetSize((750, 640))
         if self.combo_pack.GetCount() > 0:
-	    if self.pack != "":
-		self.combo_pack.SetStringSelection(self.pack)
-            else:
-                self.combo_pack.SetSelection(0)
-                self.pack = self.combo_pack.GetStringSelection()
-	    metric = self.user_config.experiments[self.num_exp].metrics[self.num_metric].name.encode("utf-8")
-	    self.sizer_graph_staticbox.SetLabel(_("Showing graph with {0} {1}, experiment {2} and metric '{3}'").format(self.name_pack, self.pack, (self.num_exp + 1), metric))
+        	self.SetTitle(_("Monitoring application '{0}'").format(self.single_app_name) + "  —  PMCTrack-GUI")
+		if self.pack != "":
+		    self.combo_pack.SetStringSelection(self.pack)
+        	else:
+        	    self.combo_pack.SetSelection(0)
+        	    self.pack = self.combo_pack.GetStringSelection()
+		metric = self.user_config.experiments[self.num_exp].metrics[self.num_metric].name.encode("utf-8")
+		self.sizer_graph_staticbox.SetLabel(_("Showing graph with {0} {1}, experiment {2} and metric '{3}'").format(self.name_pack, self.pack, (self.num_exp + 1), metric))
         else:
-	    	self.SetTitle(self.GetTitle() + " " + _("(waiting)"))
+        	self.SetTitle(_("Monitoring application '{0}'").format(self.single_app_name) + " "  + _("(waiting)") + "  —  PMCTrack-GUI")
+	    	self.SetTitle(self.GetTitle())
 		self.button_this_window.Disable()
 		self.button_other_window.Disable()
                 self.button_change_vis_graph.Disable()
@@ -193,8 +194,7 @@ class MonitoringFrame(wx.Frame):
 
     def __init_plot(self):
         self.dpi = 100
-        self.fig = Figure((3.0, 3.0), dpi=self.dpi)
-        self.fig.subplots_adjust(left=0.07, right=0.93, top=0.92, bottom=0.13) # Adjust the chart to occupy as much space the canvas.
+        self.fig = Figure((3.0, 3.0), dpi=self.dpi, tight_layout=True)
 
         self.axes = self.fig.add_subplot(111)
         self.axes.set_axis_bgcolor(self.user_config.graph_style.bg_color)
@@ -263,7 +263,7 @@ class MonitoringFrame(wx.Frame):
 	    		self.combo_pack.SetSelection(0)
 	    		self.pack = self.combo_pack.GetStringSelection()
 	            	metric = self.user_config.experiments[self.num_exp].metrics[self.num_metric].name.encode("utf-8")
-                        self.SetTitle("PMCTrack-GUI v" + self.version + " - " + _("Monitoring application '{0}'").format(self.app_name.split()[0]))
+        		self.SetTitle(_("Monitoring application '{0}'").format(self.single_app_name) + "  —  PMCTrack-GUI")
 	    	        self.sizer_graph_staticbox.SetLabel(_("Showing graph with {0} {1}, experiment {2} and metric '{3}'").format(self.name_pack, self.pack, (self.num_exp + 1), metric))
 	    		self.button_this_window.Enable()
 	    		self.button_other_window.Enable()
@@ -282,7 +282,7 @@ class MonitoringFrame(wx.Frame):
 
 	    	if self.final_panel.pmc_extract.state[self.app_name] == 'F':
 	    		self.timer_update_data.Stop()
-	    		self.SetTitle(self.GetTitle() + " " + _("(finished)"))
+        		self.SetTitle(_("Monitoring application '{0}'").format(self.single_app_name) + " " + _("(finished)") + "  —  PMCTrack-GUI")
 	    		self.button_stop_monitoring.Disable()
 	    		if len(self.final_panel.mon_frames) > 0 and len(self.user_config.applications) == 1 and self.final_panel.mon_frames[0] == self:
 	    			self.final_panel.button_monitoring.SetLabel(_("Close monitoring windows"))
@@ -292,7 +292,7 @@ class MonitoringFrame(wx.Frame):
        	    			dlg.Destroy()
 	    	elif self.final_panel.pmc_extract.state[self.app_name] == 'S':
 	    		self.timer_update_data.Stop()
-	    		self.SetTitle(self.GetTitle() + " " + _("(stopped)"))
+        		self.SetTitle(_("Monitoring application '{0}'").format(self.single_app_name) + " " + _("(stopped)") + "  —  PMCTrack-GUI")
             	    	self.button_stop_monitoring.SetLabel(_("Resume application"))
 
     def on_click_this_window(self, event):
@@ -315,7 +315,7 @@ class MonitoringFrame(wx.Frame):
 	sel_pack = self.combo_pack.GetStringSelection()
 	sel_exp = self.combo_exp.GetSelection()
 	sel_met = self.combo_metric.GetSelection()
-	mon_frame = MonitoringFrame(None, -1, "", app_name=self.app_name, version=self.version, final_panel=self.final_panel, user_config=self.user_config, pack=sel_pack, num_exp=sel_exp, num_metric=sel_met)
+	mon_frame = MonitoringFrame(None, -1, "", app_name=self.app_name, final_panel=self.final_panel, user_config=self.user_config, pack=sel_pack, num_exp=sel_exp, num_metric=sel_met)
     	mon_frame.Show()
 
     def on_change_experiment(self, event):
@@ -353,7 +353,7 @@ class MonitoringFrame(wx.Frame):
                     if mon_frame.app_name == self.app_name:
         		mon_frame.timer_update_data.Start(100)
             		mon_frame.button_stop_monitoring.SetLabel(_("Stop application"))
-        		mon_frame.SetTitle("PMCTrack-GUI v" + self.version + " - " + _("Monitoring application '{0}'").format(self.app_name.split()[0]))
+        		mon_frame.SetTitle(_("Monitoring application '{0}'").format(self.single_app_name) + "  —  PMCTrack-GUI")
 
     def on_click_screenshot(self, event):
 	metric = self.user_config.experiments[self.num_exp].metrics[self.num_metric].name

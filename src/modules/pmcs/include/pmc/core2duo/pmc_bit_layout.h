@@ -26,7 +26,7 @@ typedef struct {
 	bit_field_64 m_e;   	/* Edge detection */
 	bit_field_64 m_pc;  	/* Pin control */
 	bit_field_64 m_int; 	/* APIC interrupt enable */
-	bit_field_64 m_nu1; 	/* Reserved */
+	bit_field_64 m_any; 	/* ANY thread field (HT) */
 	bit_field_64 m_en;  	/* Enable counters */
 	bit_field_64 m_inv; 	/* Invert flag */
 	bit_field_64 m_cmask; 	/* CMASK */
@@ -46,7 +46,7 @@ static inline void init_evtsel_msr ( evtsel_msr* evtsel )
 	init_bit_field ( &evtsel->m_e,&evtsel->m_value,18,1 );
 	init_bit_field ( &evtsel->m_pc,&evtsel->m_value,19,1 );
 	init_bit_field ( &evtsel->m_int,&evtsel->m_value,20,1 );
-	init_bit_field ( &evtsel->m_nu1,&evtsel->m_value,21,1 );
+	init_bit_field ( &evtsel->m_any,&evtsel->m_value,21,1 );
 	init_bit_field ( &evtsel->m_en,&evtsel->m_value,22,1 );
 	init_bit_field ( &evtsel->m_inv,&evtsel->m_value,23,1 );
 	init_bit_field ( &evtsel->m_cmask,&evtsel->m_value,24,8 );

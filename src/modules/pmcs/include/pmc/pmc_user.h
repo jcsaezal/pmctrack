@@ -39,6 +39,7 @@ typedef struct pmc_sample {
 	int coretype;           /* Core type where this sample was registered */
 	int exp_idx;            /* Index of the experiment set related to this counter setup */
 	pid_t pid;              /* To store a process id (per-thread mode) or CPU (system-wide mode) */
+	uint64_t elapsed_time;	/* Reference (from the time the previous sample was gathered) */
 	unsigned int pmc_mask;  /* PMC mask for this sample */
 	unsigned int nr_counts; /* Number of performance counts associated with this sample */
 	uint64_t pmc_counts[MAX_PERFORMANCE_COUNTERS]; /* Raw PMC counts */

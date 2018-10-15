@@ -410,7 +410,9 @@ void pmct_print_header (FILE* fo, unsigned int nr_experiments,
                         unsigned int pmcmask,
                         unsigned int virtual_mask,
                         int extended_output,
-                        int syswide)
+                        int syswide,
+                        int show_elapsed_time
+                        )
 {
 	int i;
 	char* str[2]= {"pid","cpu"};
@@ -430,6 +432,9 @@ void pmct_print_header (FILE* fo, unsigned int nr_experiments,
 		}
 	}
 
+	if (show_elapsed_time)
+			fprintf(fo, " %12s","etime_us");
+
 	for(i=0; (virtual_mask) && (i<MAX_VIRTUAL_COUNTERS); i++) {
 		if(virtual_mask & (0x1<<i)) {
 			fprintf(fo, " %12s%i","virt",i);
@@ -448,6 +453,7 @@ void pmct_print_sample (FILE* fo, unsigned int nr_experiments,
                         unsigned int pmcmask,
                         unsigned int virtual_mask,
                         unsigned int extended_output,
+                        unsigned int show_elapsed_time,
                         int nsample,
                         pmc_sample_t* sample)
 {
@@ -471,6 +477,14 @@ void pmct_print_sample (FILE* fo, unsigned int nr_experiments,
 		else if (remaining_pmcmask & (0x1<<j)) {
 			dst+=sprintf(dst,"%13s ","-");
 		}
+	}
+
+	if (show_elapsed_time) {
+#if defined(__i386__) || defined(__arm__)
+			dst+=sprintf(dst,"%12llu ",sample->elapsed_time/1000);
+#else
+			dst+=sprintf(dst,"%12lu ",sample->elapsed_time/1000);
+#endif					
 	}
 
 	remaining_pmcmask=virtual_mask;
@@ -987,7 +1001,8 @@ void pmctrack_print_counts(pmctrack_desc_t* desc, FILE* fo, int extended_output)
 
 	int i=0;
 	pmc_sample_t* cur;
-	int syswide=desc->flags & PMCT_FLAG_SYSWIDE;
+	unsigned int syswide=desc->flags & PMCT_FLAG_SYSWIDE;
+	unsigned int show_elapsed_time=desc->flags & PMCT_FLAG_SHOW_ETIME;
 
 	// print event-to-counter mappings
 	if (!(desc->flags & PMCT_FLAG_RAW_PMC_CONFIG)) {
@@ -1003,13 +1018,13 @@ void pmctrack_print_counts(pmctrack_desc_t* desc, FILE* fo, int extended_output)
 	}
 
 	// printing header
-	pmct_print_header(fo,desc->nr_experiments,desc->pmcmask,desc->virtual_mask,extended_output,syswide);
+	pmct_print_header(fo,desc->nr_experiments,desc->pmcmask,desc->virtual_mask,extended_output,syswide,show_elapsed_time);
 
 	// printing samples
 	for (i=0; i<desc->nr_samples; i++) {
 		cur = &desc->samples[i];
 
-		pmct_print_sample (fo,desc->nr_experiments, desc->pmcmask, desc->virtual_mask, extended_output, i+1, cur);
+		pmct_print_sample (fo,desc->nr_experiments, desc->pmcmask, desc->virtual_mask, extended_output, show_elapsed_time, i+1, cur);
 	}
 }
 

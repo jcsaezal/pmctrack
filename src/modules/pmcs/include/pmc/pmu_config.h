@@ -60,6 +60,7 @@ typedef struct {
 	unsigned int cfg_umask;
 	unsigned char cfg_edge;
 	unsigned char cfg_inv;
+	unsigned char cfg_any;
 	unsigned int cfg_cmask;
 #endif
 } pmc_usrcfg_t;
@@ -67,7 +68,11 @@ typedef struct {
 #if defined(CONFIG_PMC_CORE_2_DUO) || defined(CONFIG_PMC_AMD) || defined(CONFIG_PMC_CORE_I7) || defined(CONFIG_PMC_PHI)
 
 /*** CPUID-related datatypes and macros ***/
-
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,14,0)
+#include <asm/processor.h>
+typedef struct cpuid_regs cpuid_regs_t;
+#define run_cpuid(r) __cpuid(&(r).eax,&(r).ebx,&(r).ecx,&(r).edx);
+#else
 typedef struct cpuid_regs {
 	uint32_t eax;
 	uint32_t ebx;
@@ -78,6 +83,7 @@ typedef struct cpuid_regs {
 #define run_cpuid(rv) asm ("cpuid" : "=a" (rv.eax), "=b" (rv.ebx), "=c" (rv.ecx), "=d" (rv.edx): "a"  (rv.eax), "c" (rv.ecx));
 #endif
 
+#endif
 
 /* (int,string) pair that identifies a given processor model */
 struct pmctrack_cpu_model {

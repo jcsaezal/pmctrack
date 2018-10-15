@@ -34,7 +34,6 @@ class MultiAppControlFrame(wx.Frame):
                 kwds = {"style": wx.DEFAULT_FRAME_STYLE}
                 wx.Frame.__init__(self, *args, **kwds)
 
-                self.version = kwargs.get("version")
                 self.final_panel = kwargs.get("final_panel")
                 self.user_config = kwargs.get("user_config")
                 
@@ -58,7 +57,7 @@ class MultiAppControlFrame(wx.Frame):
                 self.Bind(wx.EVT_CLOSE, self.on_close_frame)
 
 	def __set_properties(self):
-		self.SetTitle("PMCTrack-GUI v" + self.version + " - " + _("Monitoring applications"))
+		self.SetTitle(_("Monitoring applications") + "  —  PMCTrack-GUI")
 		self.SetSize((550, 350))
 		self.list_apps.SetSelection(0)
                 self.timer_update_data.Start(100)
@@ -105,7 +104,7 @@ class MultiAppControlFrame(wx.Frame):
 
         def on_dclick_app(self, event):
                 app = self.list_apps.GetClientData(self.list_apps.GetSelection())
-                mon_frame = MonitoringFrame(None, -1, "", app_name=app, version=self.version, final_panel=self.final_panel, user_config=self.user_config)
+                mon_frame = MonitoringFrame(None, -1, "", app_name=app, final_panel=self.final_panel, user_config=self.user_config)
                 mon_frame.Show()
 
         def on_close_frame(self, event):

@@ -1,0 +1,340 @@
+#!/usr/bin/env python
+import sys
+import re
+import getopt
+
+def skipUntiLine(file,content,curline=None,regex=False,echo=True,outfile=sys.stdout):
+	if curline!=None:
+		line=curline
+	else:
+		line=file.readline()
+	if regex:
+		while line != "" and re.match(content,line)==None:
+			if echo:
+				print >> outfile, line,
+			line=file.readline() 
+		return  (re.match(content,line)!=None,line)
+	else:
+		while line != "" and line !=content:
+			if echo:
+				print >> outfile, line,
+			line=file.readline() 
+		return  (line ==content,line)
+
+
+def parse_pmctrack_output(infile,outfile,metrics,bypass,verbose,acum_mode,csv_mode):
+	if infile==None:
+		inputfile=sys.stdin
+	else:	
+		inputfile=open(infile, "r")
+
+	if outfile==None:
+		outputfile=sys.stdout
+	else:	
+		outputfile=open(outfile, "w")
+
+	#Skip until header is found
+	(found,line)=skipUntiLine(inputfile,r'^nsample',None,True,verbose,outputfile)
+	if not found:
+		print "Can't find pmctrack header"
+		return 1
+## In verbose mode print information on high-level metrics
+	if verbose:
+		print >> outputfile, "[High-level metrics]"
+		for expid in metrics:
+			metric_descriptors=metrics[expid] 
+			for md in metric_descriptors:
+				(name,expr,text)=md
+				print >> outputfile,"%s(%d)=%s" % (name,expid,text)
+
+	sys.stdout.softspace=0
+		##remove trailing white spaces
+	line.strip()
+	cnm=re.split(r"\W+",line)
+	## remove rubbish
+	cnm=filter(lambda v: v != "",cnm)
+	column_names=cnm ## Shorter alias
+	nr_columns=len(column_names)
+	if "expid" in column_names:
+		extended_mode=True
+		offset=5 ## where the data begins
+		if csv_mode:
+			outtext="%s,%s,%s,%s,%s,%s" % (cnm[0],cnm[1],cnm[2],cnm[3],cnm[4])
+		else:
+			outtext="%7s %6s %8s %5s %10s" % (cnm[0],cnm[1],cnm[2],cnm[3],cnm[4])
+	else:
+		extended_mode=False
+		offset=3 ## where the data begins
+		if csv_mode:
+			outtext="%s,%s,%s" %  (cnm[0],cnm[1],cnm[2])
+		else:
+			outtext="%7s %6s %10s" % (cnm[0],cnm[1],cnm[2])
+	outputfile.write(outtext)
+	## Print PMC values if necessary
+	if bypass:
+		for i in range(offset,len(cnm)):
+			if csv_mode:
+				outtext= ",%s" % cnm[i]
+			else:
+				outtext=" %12s" % cnm[i]
+			outputfile.write(outtext)
+
+	##And finally print metric names (Watch issues ... )
+	if extended_mode:
+		max_len=len(metrics[0])
+		for key in metrics:
+			lens=len(metrics[key])
+			if (max_len<lens):
+				max_len=lens
+		
+		for i in range(max_len):
+			name="metric%d" % i
+			if csv_mode:
+				outtext=",%s" % name
+			else:
+				outtext=" %12s" % name
+			outputfile.write(outtext)
+	else:
+		metric_descriptors=metrics[0] ## Get name 	
+		for md in metric_descriptors:
+			(name,expr,text)=md
+			if csv_mode:
+				outtext=",%s" % name
+			else:
+				outtext=" %12s" % name
+			outputfile.write(outtext)
+
+	##Linebreak
+	print >> outputfile 
+	
+	## For accum mode
+	acum_samples={}
+	acum_counts={}
+	for expid in metrics:
+		acum_counts[expid]={}
+		acum_samples[expid]=0 
+		mydict=acum_counts[expid]
+		#Number of pmcs and virts 
+		for i in range(offset,len(cnm)):
+			mydict[cnm[i]]=0.0
+
+##READ UNTIL EOF
+		## Skip until real
+	line=inputfile.readline()
+	while line != "":
+		##remove trailing white spaces
+		line.strip()
+		raw_values=re.split(r"\W+",line)
+		## remove rubbish
+		raw_values=filter(lambda v: v != "", raw_values)
+		rvs=raw_values
+		
+		#Try to skip rubbish lines 	
+		if len(rvs)<len(cnm):
+			if verbose:
+				print line,
+			line=inputfile.readline()	
+			continue
+
+
+		##Generate beginning
+		if extended_mode:
+			if csv_mode:
+				outtext="%s,%s,%s,%s,%s" % (rvs[0],rvs[1],rvs[2],rvs[3],rvs[4])
+			else:
+				outtext="%7s %6s %8s %5s %10s " % (rvs[0],rvs[1],rvs[2],rvs[3],rvs[4])
+		else:
+			if csv_mode:
+				outtext="%s,%s,%s" % (rvs[0],rvs[1],rvs[2])
+			else:
+				outtext="%7s %6s %10s " % (rvs[0],rvs[1],rvs[2])
+		outputfile.write(outtext)
+
+		if bypass:
+			for i in range(offset,len(rvs)):
+				if csv_mode:
+					outtext=",%s" % rvs[i]
+				else:	
+					outtext="%12s " % rvs[i]
+				outputfile.write(outtext)
+				#Determine expid
+		if extended_mode:
+			expid=int(raw_values[offset-2])
+		else:
+			expid=0
+	
+		##Populate dict with FP "data columns"
+		values={}
+		accum_ctrs=acum_counts[expid]
+		if acum_mode:
+			acum_samples[expid]=acum_samples[expid]+1
+		for i in range(offset,len(raw_values)):
+			cname=column_names[i]	
+			if raw_values[i]=="-":
+				val=0.0
+			else:
+				val=float(raw_values[i])
+				values[cname]=val
+			if acum_mode:
+				accum_ctrs[cname]=accum_ctrs[cname]+val
+
+		metric_descriptors=metrics[expid]
+		for md in metric_descriptors:
+			(name,expr,text)=md
+			try:
+				metric_val=eval(expr,values)
+			except ZeroDivisionError:
+				metric_val=0.0
+			if csv_mode:
+				outtext=",%f" % metric_val
+			else:
+				outtext="%12f " % metric_val
+			outputfile.write(outtext)	
+			##to be able to define metrics based on others
+			values[name]=metric_val
+				
+		print >> outputfile  
+	
+		line=inputfile.readline()
+
+	##IF acum mode display metrics (STDERR)
+	if acum_mode:
+		avg_header="" 
+		avg_vals="" 
+		for expid in metrics:
+			metric_descriptors=metrics[expid]
+			counts=acum_counts[expid]
+			nr_samples=acum_samples[expid] 
+			idx=0
+			for md in metric_descriptors:
+				(name,expr,text)=md 
+				try:
+					metric_val=eval(expr,counts)
+					if len(expr.co_names)==1: ## Only one variable
+						metric_val=metric_val/nr_samples
+				except ZeroDivisionError:
+					metric_val=0.0
+				counts[name]=metric_val ## Evaluate recursive metrics
+				#Generate metrics
+				mname=name+"("+str(expid)+")"
+				if csv_mode:
+					if idx==0:
+						avg_header+=mname
+						avg_vals+="%f" % metric_val
+					else:
+						avg_header+=",%s" % mname
+						avg_vals+=",%f" % metric_val			
+				else:
+					avg_header+="%-15s " % mname
+					avg_vals+="%-15f " % metric_val
+				idx=idx+1
+
+		print >> sys.stderr, '%s\n%s' % (avg_header,avg_vals) 
+   
+	if infile!=None:
+		inputfile.close()
+
+	if outfile!=None:
+		outputfile.close()
+
+def retrieve_metrics_from_file(infile,metrics):
+	inputfile= open(infile, "r")
+	line=inputfile.readline()
+	while line != "":
+		##remove trailing white spaces
+		line.strip()
+		if line[0]=='#':
+			pass ## skip comments
+		else:
+			metrics.append(line)
+		line=inputfile.readline()
+
+	inputfile.close()	
+
+### MAIN PROGRAM
+def usage(help):
+	print "Usage: %s [ -m <metric> | -M <metric-file> | -o <outfile> | -i <infile> | -b | -v | -A | -c ]" % sys.argv[0]
+
+	if not help:
+		exit(1)
+	else:
+		exit(0)           
+
+
+##<metric_name>=<expr>[;expid]
+## Tabla de metricas por expid 
+## Por cada expid, tabla de pares (metrica,formula,texto-formula)
+def build_metric_vector(expressions):
+	metrics={}
+	metrics[0]=[] ##At least expid does exist
+	for expression in expressions:
+		tokens=re.split(r";",expression)
+		if len(tokens)>1:
+			expid=int(tokens[1])
+		else:
+			expid=0
+		formula=re.split(r"=",tokens[0])	
+		metric_name=formula[0]
+		pexp=formula[1]
+		eval_expr=compile(pexp,"expressions","eval") ## TO compile the expression for efficiency issues
+		if not expid in metrics:
+			metrics[expid]=[]
+
+		metrics[expid].append((metric_name,eval_expr,pexp))
+		
+	return 	metrics
+
+def main():
+	try:
+		opts, args = getopt.getopt(sys.argv[1:], "i:hm:M:bo:vAc", ["input","help","metric","metric-file","bypass","output","verbose","accum","csv"])
+	except getopt.GetoptError as err:
+		# print help information and exit:
+		print str(err) # will print something like "option -a not recognized"
+		usage(False)
+		sys.exit(2)
+
+	expressions=[]    
+	metricFile=None
+	outfile=None
+	infile=None
+	bypass=False
+	verbose=False
+	acum_mode=False 
+	csv_mode=False
+	for o, arg in opts:
+		if o in ("-h", "--help"):
+			usage(True)
+			sys.exit()
+		elif o in ("-m", "--metric"):
+			expressions.append(arg)
+		elif o in ("-M", "--metric-file"):
+			metricFile=arg
+		elif o in ("-o", "--output"):
+			outfile=arg   
+		elif o in ("-i", "--input"):
+			infile=arg 
+		elif o in ("-b", "--bypass"):
+			bypass=True        	
+		elif o in ("-v", "--verbose"):
+			verbose=True        	
+		elif o in ("-A", "--accum"):
+			acum_mode=True        	
+		elif o in ("-c", "--csv"):
+			csv_mode=True        	
+		else:
+			assert False, "unhandled option"
+
+	if metricFile!=None:
+		retrieve_metrics_from_file(metricFile,expressions)
+
+	if len(expressions)==0:
+		print "A set of metrics should be specified by using the -m or -M options"
+		exit(1)
+
+	metrics=build_metric_vector(expressions)
+
+	parse_pmctrack_output(infile,outfile,metrics,bypass,verbose,acum_mode,csv_mode)
+
+
+if __name__ == "__main__":
+	main()

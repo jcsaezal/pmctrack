@@ -48,6 +48,11 @@ class AssignEventDialog(wx.Dialog):
         self.sizer_advanced_staticbox = wx.StaticBox(self, -1, _("Advanced options"))
         self.button_assign_event = wx.Button(self, -1, _("Assign event to counter"))
 	self.selected_event = 0 # Used to prevent the user does not select any event
+
+	# Used to load configuration subevents correctly
+	self.selected_subevents = []
+	self.first_time = True
+	
 	self.selected_flags = {}
 
 	for event in self.facade_xml.getAvailableEvents():
@@ -55,7 +60,7 @@ class AssignEventDialog(wx.Dialog):
 	
         self.__set_properties()
         self.__do_layout()
-	self.__update_list_subevents()
+	self.UpdateListSubevents()
 
 	self.Bind(wx.EVT_BUTTON, self.on_assign_event, self.button_assign_event)
 	self.Bind(wx.EVT_LISTBOX_DCLICK, self.on_assign_event, self.list_event)
@@ -103,7 +108,7 @@ class AssignEventDialog(wx.Dialog):
         self.SetSizer(separator)
         self.Layout()
 
-    def __update_list_subevents(self):
+    def UpdateListSubevents(self):
 	event_obj = self.list_event.GetClientData(self.list_event.GetSelection())
 	self.selected_flags.clear()
 	for key in event_obj.flags.keys():
@@ -122,7 +127,12 @@ class AssignEventDialog(wx.Dialog):
 		self.list_event.SetSelection(self.selected_event) 
 	else:
 		self.selected_event = self.list_event.GetSelection()
-		self.__update_list_subevents()
+		self.UpdateListSubevents()
+
+    	if self.first_time:
+		self.first_time = False
+		for index_event in self.selected_subevents:
+			self.list_subevents.SetSelection(index_event)
 
     def on_assign_event(self, event):
 	self.EndModal(0)

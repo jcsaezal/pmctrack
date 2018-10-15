@@ -21,7 +21,7 @@
 
 
 /* Different configuration modes supported by the backend of the monitoring tool*/
-typedef enum {_SIMPLE=0, _TAGGING,_FIXED ,_NUM_EVENT_TYPES} ll_event_type;
+typedef enum {_SIMPLE=0, _TAGGING,_FIXED,_NUM_EVENT_TYPES} ll_event_type;
 
 
 /******************************************************************************/

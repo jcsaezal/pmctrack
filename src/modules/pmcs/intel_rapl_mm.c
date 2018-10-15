@@ -47,7 +47,9 @@ static struct pmctrack_cpu_model supported_models[]= {
 	{42,"sandybridge"},{45,"sandybridge_ep"},
 	{58,"ivybridge"},{62,"ivybridge-ep"},
 	{60,"haswell"},{63,"haswell-ep"},
+	{79,"broadwell-ep"},
 	{86,"broadwell"},
+	{85,"skylake"},
 	{0,NULL} /* Marker */
 };
 

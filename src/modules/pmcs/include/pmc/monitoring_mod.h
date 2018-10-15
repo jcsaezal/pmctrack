@@ -105,6 +105,7 @@ typedef struct monitoring_module {
 	 * The function returns 0 on success (the desired metric is available), and a non-zero value upon failure.
 	 */
 	int		(*get_current_metric_value)(pmon_prof_t* prof, int key, uint64_t* value);
+	void	(*on_tick)(pmon_prof_t* p, int cpu);	/*	Invoked upon scheduler_tick() */
 	/*
 	 *	This callback function must be implemented by those monitoring modules
 	 *	that either use PMCs for their own purpose or export virtual counters
@@ -142,6 +143,7 @@ int mm_on_write_config(const char *str, unsigned int len);
 int mm_on_fork(unsigned long clone_flags, pmon_prof_t* prof);
 void mm_on_exec(pmon_prof_t* prof);
 int mm_on_new_sample(pmon_prof_t* prof,int cpu,pmc_sample_t* sample,int flags,void* data);
+void mm_on_tick(pmon_prof_t* prof,int cpu);
 void mm_on_migrate(pmon_prof_t* prof, int prev_cpu, int new_cpu);
 void mm_on_exit(pmon_prof_t* prof);
 void mm_on_free_task(pmon_prof_t* prof);
@@ -158,5 +160,26 @@ void mm_on_syswide_dump_virtual_counters(int cpu, unsigned int virtual_mask,pmc_
 /* Safe and generic open/close operations for /proc entries */
 int proc_generic_open(struct inode *inode, struct file *filp);
 int proc_generic_close(struct inode *inode, struct file *filp);
+
+/* Extra IDs for high-level metrics (under SCHED_AMP) */
+typedef enum {
+#if defined(CONFIG_AMP_CONTENTION) || !defined(SCHED_AMP)
+	MC_EFFICIENCY_FACTOR=MC_LLC_REQUESTS_PER_KINSTR+1,
+	MC_RELATIVE_SLOWDOWN,
+#else
+	MC_RELATIVE_SLOWDOWN=MC_EFFICIENCY_FACTOR+1,
+#endif
+	MC_BTR_BIG,
+	MC_BTR_SMALL,
+	MC_BTR_HIGH,
+	MC_BTR_LOW,
+	MC_CACHE_SENSITIVE,
+	/* ==== Events to control core disabling actions ===== */
+	MC_RESET_MONITORING_INTERVAL,
+	MC_MIGHT_BE_SUFFERING,
+	MC_LIGHT_SHARING,
+	MC_PHASE_HIT_RATE,
+	MC_RESET_PHASE_STATISTICS,
+} mc_metric_extra_key_t;
 
 #endif

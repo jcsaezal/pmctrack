@@ -429,8 +429,11 @@ int vexpress_fixed_irqs[VEXPRESS_NR_IRQS]= {
 	192,193,194,195,266,312,390,410
 #elif LINUX_VERSION_CODE <= KERNEL_VERSION(4,2,0)
 	192,193,194,195,279,280,281,282
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(4,14,0)
+	192,193,194,195,279,280,281,282
+	/*	192,134,135,136,137,193,194,195 */
 #else
-	192,134,135,136,137,193,194,195
+	69,70,71,72,73,74,75,76
 #endif
 };
 #else
@@ -449,6 +452,13 @@ cpumask_t pmu_active_irqs;
 static int setup_overflow_irq(void)
 {
 	int i, err, irq, irqs;
+	unsigned long flags=0;
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,9,0)
+	flags=IRQF_NO_THREAD | IRQF_PERCPU | IRQF_NOBALANCING;
+#else
+	flags=IRQF_DISABLED | IRQF_NOBALANCING;
+#endif
 
 	cpumask_clear(&pmu_active_irqs);
 
@@ -469,7 +479,7 @@ static int setup_overflow_irq(void)
 			continue;
 		}
 		err = request_irq(irq, armv7pmu_handle_irq,
-		                  IRQF_DISABLED | IRQF_NOBALANCING, "pmctrack-arm",
+		                  flags, "pmctrack-arm-pmu",
 		                  &pmu_props_cpu[0]);
 		if (err) {
 			pr_err("unable to request IRQ%d for ARM PMU counters\n",irq);

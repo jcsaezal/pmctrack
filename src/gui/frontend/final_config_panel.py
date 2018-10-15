@@ -25,6 +25,7 @@
 ##############################################################################
 
 import wx
+import xml.etree.ElementTree as ET
 import re
 from backend.facade_xml import *
 from backend.user_config import *
@@ -188,7 +189,7 @@ class FinalConfigPanel():
         separator.Add(sizer_controls, 0, wx.ALIGN_RIGHT, 0)
 	self.panel.SetSizer(separator)
 
-    def __save_user_config(self):
+    def SaveUserConfig(self):
         del self.config_frame.user_config.applications[:]
 	self.config_frame.user_config.pid_app_running = None
         if self.tab_appmode.GetSelection() == 0:
@@ -240,10 +241,13 @@ class FinalConfigPanel():
 	self.config_frame.user_config.graph_style = GraphStyleConfig(bg_color, grid_color, line_color, line_style,
                 line_width, line_style_number, mode_number)
 
-    def on_change_type_app(self, event):
+    def __show_correct_sizer_singleapp(self):
 	self.sizer_singleapp.Show(self.grid_running_singleapp, self.radio_btn_app_running.GetValue(), True)
 	self.sizer_singleapp.Show(self.grid_sizer_singleapp, self.radio_btn_app_norunning.GetValue(), True)
 	self.singleapp_panel.Layout()
+
+    def on_change_type_app(self, event):
+    	self.__show_correct_sizer_singleapp()
 	
     def on_change_path_singleapp(self, event):
 	self.text_path_singleapp.SetValue(self.ctrl_path_singleapp.GetPath())
@@ -277,23 +281,28 @@ class FinalConfigPanel():
         self.config_frame.GoToPanel(1)
 
     def on_click_monitoring(self, event):
+    	if self.config_frame.panels[1].ValidateCountersAndMetricsConfig():
+    		self.StartStopMonitoring()
+
+    def StartStopMonitoring(self):
 	if self.multiapp_frame == None and len(self.mon_frames) == 0:
 		msg_error = ""
-		if (self.advanced_settings_dialog.GetPmctrackCommandPath().find("/") >= 0 and not self.config_frame.pmc_connect.CheckFileExists(self.advanced_settings_dialog.GetPmctrackCommandPath())) or (self.advanced_settings_dialog.GetPmctrackCommandPath().find("/") < 0 and not self.config_frame.pmc_connect.CheckPkgInstalled(self.advanced_settings_dialog.GetPmctrackCommandPath(), not self.config_frame.user_config.machine.type_machine == "local")):
+		if self.advanced_settings_dialog.GetPmctrackCommandPath() == "" or (self.advanced_settings_dialog.GetPmctrackCommandPath().find("/") >= 0 and not self.config_frame.pmc_connect.CheckFileExists(self.advanced_settings_dialog.GetPmctrackCommandPath())) or (self.advanced_settings_dialog.GetPmctrackCommandPath().find("/") < 0 and not self.config_frame.pmc_connect.CheckPkgInstalled(self.advanced_settings_dialog.GetPmctrackCommandPath(), not self.config_frame.user_config.machine.type_machine == "local")):
 	            msg_error = _("Pmctrack command path is invalid.")
 	        elif self.tab_appmode.GetSelection() == 0 and self.radio_btn_app_norunning.GetValue():
-		    if (self.text_path_singleapp.GetValue().find("/") >= 0 and not self.config_frame.pmc_connect.CheckFileExists(self.text_path_singleapp.GetValue())) or (self.text_path_singleapp.GetValue().find("/") < 0 and not self.config_frame.pmc_connect.CheckPkgInstalled(self.text_path_singleapp.GetValue(), not self.config_frame.user_config.machine.type_machine == "local")):
-	            	msg_error = _("Can not find the application to monitoring.")
+			if self.text_path_singleapp.GetValue() == "" or (self.text_path_singleapp.GetValue().find("/") >= 0 and not self.config_frame.pmc_connect.CheckFileExists(self.text_path_singleapp.GetValue())) or (self.text_path_singleapp.GetValue().find("/") < 0 and not self.config_frame.pmc_connect.CheckPkgInstalled(self.text_path_singleapp.GetValue(), not self.config_frame.user_config.machine.type_machine == "local")):
+				msg_error = _("Can not find the application to monitoring.")
 		elif self.tab_appmode.GetSelection() == 0 and self.radio_btn_app_running.GetValue() and not self.config_frame.pmc_connect.CheckFileExists("/proc/" + self.text_pid_singleapp.GetValue() + "/status"):
-	            msg_error = _("No application running with the PID indicated.")
-	        elif self.tab_appmode.GetSelection() == 1 and self.browse_multiapp_file.GetPath() == "":
-	            msg_error = _("You must select a valid multi-application file.")
-	        if msg_error != "":
-	            dlg = wx.MessageDialog(parent=None, message=msg_error, caption=_("Information"), style=wx.OK|wx.ICON_INFORMATION)
-	            dlg.ShowModal()
-	            dlg.Destroy()
-	        else:
-		    self.StartMonitoring()
+			msg_error = _("No application running with the PID indicated.")
+		elif self.tab_appmode.GetSelection() == 1 and self.browse_multiapp_file.GetPath() == "":
+			msg_error = _("You must select a valid multi-application file.")
+		
+		if msg_error != "":
+			dlg = wx.MessageDialog(parent=None, message=msg_error, caption=_("Information"), style=wx.OK|wx.ICON_INFORMATION)
+			dlg.ShowModal()
+			dlg.Destroy()
+		else:
+			self.StartMonitoring()
 	else:
 		self.StopMonitoring()
 
@@ -323,15 +332,15 @@ class FinalConfigPanel():
         self.combo_cpu_multiapp.SetSelection(0)
 
     def StartMonitoring(self):
-    	self.__save_user_config()
+    	self.config_frame.SaveMonitoringSessionConfig()
 	cp_usr_conf = self.config_frame.user_config.GetCopy()
         self.pmc_extract = PMCExtract(cp_usr_conf)
         if self.tab_appmode.GetSelection() == 0:
             app = self.pmc_extract.data.keys()[0]
-	    mon_frame = MonitoringFrame(None, -1, "", app_name=app, version=self.config_frame.version, final_panel=self, user_config=cp_usr_conf)
+	    mon_frame = MonitoringFrame(None, -1, "", app_name=app, final_panel=self, user_config=cp_usr_conf)
     	    mon_frame.Show()
         else: 
-            self.multiapp_frame = MultiAppControlFrame(None, -1, "", version=self.config_frame.version, final_panel=self, user_config=cp_usr_conf)
+            self.multiapp_frame = MultiAppControlFrame(None, -1, "", final_panel=self, user_config=cp_usr_conf)
     	    self.multiapp_frame.Show()
 	self.button_monitoring.SetLabel(_("Cancel monitoring"))
 
@@ -361,7 +370,106 @@ class FinalConfigPanel():
                     self.multiapp_frame = None
 		self.button_monitoring.SetLabel(_("Start monitoring"))
 
+    def ConfigToXML(self, xml_root):
+	if self.tab_appmode.GetSelection() == 0:
+    		ET.SubElement(xml_root, "appmode_index").text = "0"
+		if self.radio_btn_app_norunning.GetValue():
+    			ET.SubElement(xml_root, "singleapp_running").text = "False"
+    			ET.SubElement(xml_root, "singleapp_path").text = self.text_path_singleapp.GetValue()
+    			ET.SubElement(xml_root, "singleapp_args").text = self.text_args_singleapp.GetValue()
+			if self.combo_cpu_norunning_singleapp.FindString(self.combo_cpu_norunning_singleapp.GetValue()) == 0:
+    				ET.SubElement(xml_root, "cpu_bind").text = None
+			else:
+				ET.SubElement(xml_root, "cpu_bind").text = self.combo_cpu_norunning_singleapp.GetValue()
+		else:
+    			ET.SubElement(xml_root, "singleapp_running").text = "True"
+    			ET.SubElement(xml_root, "singleapp_pid").text = self.text_pid_singleapp.GetValue()
+			if self.combo_cpu_running_singleapp.FindString(self.combo_cpu_running_singleapp.GetValue()) == 0:
+    				ET.SubElement(xml_root, "cpu_bind").text = None
+			else:
+				ET.SubElement(xml_root, "cpu_bind").text = self.combo_cpu_running_singleapp.GetValue()
+	else:
+    		ET.SubElement(xml_root, "appmode_index").text = "1"
+    		ET.SubElement(xml_root, "multiapp_file_path").text = self.browse_multiapp_file.GetPath()
+		if self.combo_cpu_multiapp.FindString(self.combo_cpu_multiapp.GetValue()) == 0:
+    			ET.SubElement(xml_root, "cpu_bind").text = None
+		else:
+    			ET.SubElement(xml_root, "cpu_bind").text = self.combo_cpu_multiapp.GetValue()
+
+    	# Save advanced settings configuration
+	ET.SubElement(xml_root, "pmctrack_command_path").text = self.advanced_settings_dialog.GetPmctrackCommandPath()
+	ET.SubElement(xml_root, "time").text = str(self.advanced_settings_dialog.GetTimeBetweenSamples())
+	ET.SubElement(xml_root, "buffer_size").text = str(self.advanced_settings_dialog.GetSamplesBufferSize())
+	ET.SubElement(xml_root, "save_counters_log").text = str(self.advanced_settings_dialog.GetIfSaveCountersLog())
+	ET.SubElement(xml_root, "save_metrics_log").text = str(self.advanced_settings_dialog.GetIfSaveMetricsLog())
+	ET.SubElement(xml_root, "logfile_path").text = self.advanced_settings_dialog.GetLogfilePath()
+	ET.SubElement(xml_root, "system_wide").text = str(self.advanced_settings_dialog.GetIfSystemWideMode())
+
+	# Save graph style configuration
+	mode_number = -1
+	if self.graph_style_dialog.GetModeNumber() != wx.NOT_FOUND:
+		mode_number = self.graph_style_dialog.GetModeNumber()
+	ET.SubElement(xml_root, "mode_number").text = str(mode_number)
+	if mode_number < 0:
+		ET.SubElement(xml_root, "bg_color").text = self.graph_style_dialog.GetBgColor()
+		ET.SubElement(xml_root, "grid_color").text = self.graph_style_dialog.GetGridColor()
+		ET.SubElement(xml_root, "line_color").text = self.graph_style_dialog.GetLineColor()
+		ET.SubElement(xml_root, "line_style_index").text = str(self.graph_style_dialog.GetLineStyleNumber())
+		ET.SubElement(xml_root, "line_width").text = str(self.graph_style_dialog.GetLineWidth())
+
+    def ConfigFromXML(self, xml_root):
+    	appmode_index = int(xml_root.find("appmode_index").text)
+	cpu_bind = xml_root.find("cpu_bind").text
+	self.tab_appmode.SetSelection(appmode_index)
+	if appmode_index == 0: # Single app mode
+		if xml_root.find("singleapp_running").text == "False":
+			self.radio_btn_app_norunning.SetValue(True)
+			if xml_root.find("singleapp_path").text != None:
+				if self.browse_path_singleapp.IsShown():
+					self.browse_path_singleapp.SetPath(xml_root.find("singleapp_path").text)
+				self.text_path_singleapp.SetValue(xml_root.find("singleapp_path").text)
+			if xml_root.find("singleapp_args").text != None:
+				self.text_args_singleapp.SetValue(xml_root.find("singleapp_args").text)
+			if cpu_bind != None:
+				self.combo_cpu_norunning_singleapp.SetValue(cpu_bind)
+		else:
+			self.radio_btn_app_running.SetValue(True)
+			if xml_root.find("singleapp_pid").text != None:
+				self.text_pid_singleapp.SetValue(xml_root.find("singleapp_pid").text)
+			if cpu_bind != None:
+				self.combo_cpu_running_singleapp.SetValue(cpu_bind)
+    		self.__show_correct_sizer_singleapp()
+	else: # Multi app mode
+		if xml_root.find("multiapp_file_path").text != None:
+			self.browse_multiapp_file.SetPath(xml_root.find("multiapp_file_path").text)
+		if cpu_bind != None:
+			self.combo_cpu_multiapp.SetValue(cpu_bind)
+
+    	# Load advanced settings configuration
+	self.advanced_settings_dialog.SetPmctrackCommandPath(xml_root.find("pmctrack_command_path").text)
+	self.advanced_settings_dialog.SetTimeBetweenSamples(int(xml_root.find("time").text))
+	self.advanced_settings_dialog.SetSamplesBufferSize(int(xml_root.find("buffer_size").text))
+	self.advanced_settings_dialog.SetIfSaveCountersLog(xml_root.find("save_counters_log").text == "True")
+	self.advanced_settings_dialog.SetIfSaveMetricsLog(xml_root.find("save_metrics_log").text == "True")
+	self.advanced_settings_dialog.SetLogfilePath(xml_root.find("logfile_path").text)
+	self.advanced_settings_dialog.SetIfSystemWideMode(xml_root.find("system_wide").text == "True")
+	self.advanced_settings_dialog.UpdateEnabledPathSaveLogs()
+
+	# Load graph style configuration
+	mode_number = int(xml_root.find("mode_number").text)
+	if mode_number >= 0:
+		self.graph_style_dialog.SetModeNumber(mode_number)
+	else:
+		bg_color = xml_root.find("bg_color").text
+		grid_color = xml_root.find("grid_color").text
+		line_color = xml_root.find("line_color").text
+		line_style_index = int(xml_root.find("line_style_index").text)
+		line_width = int(xml_root.find("line_width").text)
+		self.graph_style_dialog.SetCustomizedMode(bg_color, grid_color, line_color, line_style_index, line_width)
+	self.button_graph_style.SetLabel(self.graph_style_dialog.GetModeName())
+
     def DestroyComponents(self):
 	self.StopMonitoring(False)
 	self.graph_style_dialog.Destroy()
 	self.advanced_settings_dialog.Destroy()
+	self.panel.Destroy()

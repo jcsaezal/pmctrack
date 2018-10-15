@@ -1,7 +1,7 @@
 MODULE_NAME=mchw_arm
 obj-m += $(MODULE_NAME).o 
-$(MODULE_NAME)-objs +=  mchw_core.o mc_experiments.o pmu_config_arm.o cbuffer.o monitoring_mod.o syswide.o \
-	      	     		ipc_sampling_sf_mm.o vexpress_sensors_core.o vexpress_sensors_mm.o 
+$(MODULE_NAME)-objs +=  mchw_core.o mc_experiments.o pmu_config_arm.o cbuffer.o monitoring_mod.o syswide.o ipc_sampling_sf_mm.o \
+				vexpress_sensors_core.o vexpress_sensors_mm.o
 SYMLINKS=$(patsubst %.o,%.c,$($(MODULE_NAME)-objs))
 SOURCES=$(patsubst %.o,../%.c,$($(MODULE_NAME)-objs))
 

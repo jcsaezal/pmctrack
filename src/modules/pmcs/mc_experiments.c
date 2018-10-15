@@ -10,6 +10,7 @@
 #include <pmc/hl_events.h>
 #include <linux/module.h>
 #include <pmc/pmu_config.h>
+#include <pmc/data_str/phase_table.h>
 
 #if defined(_DEBUG_USER_MODE)
 #include <printk.h>
@@ -199,8 +200,15 @@ void compute_value(pmc_metric_t* metric, uint64_t* hw_events, pmc_metric_t* metr
 		break;
 	case op_none:
 		get_operands(metric, hw_events, metric_vector, operands, 1);
-		/*Just gets the value from the first related argument's descriptor*/
-		metric->count = operands[0].value;
+
+		if(operands[1].value != 0) {
+			big_buffer = operands[0].value ;
+			big_buffer *= metric->scale_factor;
+			metric->count = big_buffer;
+		} else {
+			/*Division by zero*/
+			metric->count=0;
+		}
 		break;
 	default:
 		metric->count = 0;
@@ -330,3 +338,263 @@ pmc_samples_buffer_t* allocate_pmc_samples_buffer(unsigned int size_bytes)
 	return pmc_samples_buf;
 }
 
+
+int estimate_sf_additive(uint64_t* metrics,int* adregression_spec,int correction_factor)
+{
+	int sf=adregression_spec[0]+correction_factor;
+	int sfmin=adregression_spec[1];
+	int sfmax=adregression_spec[2];
+	int idx=4;
+	int metric_id;
+
+	while(adregression_spec[idx]!=-1) {
+		metric_id=adregression_spec[idx];
+		if (metrics[metric_id]<=adregression_spec[idx+1]) {
+			sf+=adregression_spec[idx+2];
+		} else {
+			sf+=adregression_spec[idx+3];
+		}
+		idx+=4;
+	}
+
+	if (sf<sfmin) {
+		sf=sfmin;
+	} else if (sf>sfmax) {
+		sf=sfmax;
+	}
+
+	return sf;
+}
+
+int estimate_sf_regression(uint64_t* metrics,int* regression_spec)
+{
+	int sf=regression_spec[0];
+	int sfmin=regression_spec[1];
+	int sfmax=regression_spec[2];
+	int idx=3;
+	int metric_id;
+	int factor;
+
+	while(regression_spec[idx]!=-1) {
+		metric_id=regression_spec[idx];
+		factor=(((int)metrics[metric_id])*regression_spec[idx+1])/regression_spec[idx+2];
+		sf+=factor;
+		idx+=3;
+#ifdef DEBUG
+		trace_printk("Factor=%i\n",factor);
+#endif
+	}
+
+#ifdef DEBUG
+	trace_printk("Estimated value=%i\n",sf);
+#endif
+
+	if (sf<sfmin) {
+		sf=sfmin;
+	} else if (sf>sfmax) {
+		sf=sfmax;
+	}
+
+	return sf;
+}
+
+
+void fill_in_sf_metric_vector(metric_experiment_set_t* metric_set, uint64_t* sf_metric_vector,unsigned int* size)
+{
+	int i,j;
+	unsigned int acum_ipc=0;
+	metric_experiment_t* mex;
+	int dst_idx=1; /* Ipc goes later */
+
+	for (i=0; i<metric_set->nr_exps; i++) {
+		mex=&metric_set->exps[i];
+		acum_ipc+=mex->metrics[0].count; //Acum ipc (it's always metric zero )
+		for (j=1; j<mex->size; j++)
+			sf_metric_vector[dst_idx++]=mex->metrics[j].count;
+	}
+
+	sf_metric_vector[0]=acum_ipc/metric_set->nr_exps;
+	(*size)=dst_idx;
+
+}
+
+/********* Implementation of operations on the phase table ************/
+#include <linux/list.h>
+#include <linux/vmalloc.h>
+
+/* Generic nodes for the doubly linked list used in the table  */
+typedef struct {
+	struct list_head links; 	/* for the linked list */
+	int idx;					/* Index for the allocator */
+	void* data; 				/* Phase object */
+} phase_node_t;
+
+struct phase_table {
+	struct list_head phases;	/* List of phases */
+	int nr_phases;				/* Current number of phases */
+	int max_phases;				/* Max phases to be stored on the list */
+	size_t phase_struct_size;	/* Size of the phase structure */
+	void* phase_pool;			/* Memory pool (pre-allocated table entries) */
+	phase_node_t* node_pool;	/* Memory pool (pre-allocated table entries) */
+	unsigned long bitmap;		/* bitmask to keep track of free and occupied entries (1 means free, 0 -> occupied) */
+	int (*compare)(void*,void*,void*); /* Comparison operation (returns 0 if equals or Manhatan distance) */
+};
+
+/* Create a phase table */
+phase_table_t* create_phase_table(unsigned int max_phases, size_t phase_struct_size, int (*compare)(void*,void*,void*))
+{
+	phase_table_t* table=NULL;
+	const unsigned int max_bits=sizeof(unsigned long)*8;
+	void* phase_pool=NULL;
+	void* node_pool=NULL;
+	int i=0;
+
+	/* Make sure we can keep track of everything on the bitmap */
+	if (max_phases>max_bits)
+		return NULL;
+
+	/* Allocate memory */
+	if ((phase_pool=vmalloc(phase_struct_size*max_phases))==NULL)
+		goto free_up_resources;
+
+	if ((node_pool=vmalloc(sizeof(phase_node_t)*max_phases))==NULL)
+		goto free_up_resources;
+
+	if ((table=vmalloc(sizeof(phase_table_t)))==NULL)
+		goto free_up_resources;
+
+	/* Initialize phase table */
+	INIT_LIST_HEAD(&table->phases);
+	table->nr_phases=0;
+	table->max_phases=max_phases;
+	table->phase_struct_size=phase_struct_size;
+	table->phase_pool=phase_pool;
+	table->node_pool=node_pool;
+	if (max_phases==max_bits)
+		table->bitmap=~(0); /* All 1s */
+	else
+		table->bitmap=(1<<max_phases)-1; /* 2^max_phases -1 */
+	table->compare=compare;
+
+	/* Prepare pointers (Dark pointer arithmetic operation */
+	for (i=0; i<max_phases; i++) {
+		table->node_pool[i].data=(((char*)phase_pool) + i*phase_struct_size);
+		table->node_pool[i].idx=i;
+	}
+
+	return table;
+free_up_resources:
+	if (node_pool)
+		vfree(node_pool);
+	if (phase_pool)
+		vfree(phase_pool);
+	if (table)
+		vfree(table);
+	return NULL;
+}
+
+/* Free up resources associated with a phase table */
+void destroy_phase_table(phase_table_t* table)
+{
+	if (table->node_pool)
+		vfree(table->node_pool);
+	if (table->phase_pool)
+		vfree(table->phase_pool);
+	vfree(table);
+}
+
+/* Retrieve the most similar phase in a phase table */
+void* get_phase_from_table(phase_table_t* table, void* key_phase, void* priv_data, int* similarity, int* index)
+{
+	phase_node_t* cur_phase;
+	phase_node_t* selected_phase=NULL;
+
+	struct list_head* p;
+	int sim_test=0;
+	int sim_min=INT_MAX;
+
+	list_for_each(p,&table->phases) {
+		cur_phase=list_entry(p,phase_node_t,links);
+
+		/* Invoke comparator function */
+		sim_test=table->compare(cur_phase->data,key_phase,priv_data);
+
+		if (sim_test<sim_min) {
+			sim_min=sim_test;
+			selected_phase=cur_phase;
+
+			/* Exact match found */
+			if (sim_test==0)
+				break;
+		}
+	}
+
+	if (!selected_phase)
+		return NULL;
+
+	(*similarity)=sim_min;
+	(*index)=selected_phase->idx;
+	return selected_phase->data;
+}
+
+/* Move table entry in the index position to the beginning of the linked list */
+int promote_table_entry(phase_table_t* table, int index)
+{
+
+	struct list_head* node;
+
+	/* Check if index is valid and corresponds to a valid entry */
+	if ((index<0) || (index>=table->max_phases) || ((1<<index) & table->bitmap))
+		return -ENOENT;
+
+	/* Point to the phase's node by accessing the node pool */
+	node=&table->node_pool[index].links;
+
+	/* If it is not the first one already, make this entry the first one */
+	if (table->phases.next!=node) {
+		list_del(node);
+		list_add(node,&table->phases);
+	}
+
+	return 0;
+}
+
+/* Find a free entry in the phase table */
+static phase_node_t* get_free_phase_loc(phase_table_t* table)
+{
+	int i=0;
+
+	if (table->bitmap==0)
+		return NULL;
+
+	/* Locate first 1 in here */
+	for (i=0; i<table->max_phases && !((1<<i) & table->bitmap); i++ ) {}
+
+	if (i==table->max_phases)
+		return NULL;
+	else
+		return &table->node_pool[i];
+}
+
+/* Insert a new phase into the phase table */
+void* insert_phase_in_table(phase_table_t* table, void* phase)
+{
+	phase_node_t* free_phase_loc;
+
+	/* Get free location */
+	free_phase_loc=get_free_phase_loc(table);
+
+	/* If it is full -> reuse tail (oldest phase is evicted) */
+	if (free_phase_loc==NULL) {
+		free_phase_loc=list_entry(table->phases.prev,phase_node_t,links);
+	} else {
+		table->bitmap&=~(1<<free_phase_loc->idx); /* Clear bit */
+		table->nr_phases++;
+		/* Newer phases inserted at the beginning */
+		list_add(&free_phase_loc->links,&table->phases);
+	}
+
+	/* Copy data */
+	memcpy(free_phase_loc->data,phase,table->phase_struct_size);
+	return free_phase_loc->data;
+}

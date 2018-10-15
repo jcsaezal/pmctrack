@@ -14,6 +14,8 @@
 #else
 #include <sys/types.h>
 #endif
+#include <linux/ktime.h>
+
 
 /* Divide in 32bit mode */
 #if defined(__i386__) || defined(__arm__)
@@ -38,6 +40,7 @@ CLONE_SIGHAND| CLONE_THREAD )
 #include <pmc/data_str/cbuffer.h>
 #include <linux/spinlock.h>
 #include <linux/timer.h>
+#include <linux/version.h>
 
 /**************** Monitoring experiments ********************************/
 
@@ -118,7 +121,8 @@ int get_any_cpu_coretype(int coretype);
 typedef enum {
 	TBS_SCHED_MODE,		/* Scheduler timed-based sampling */
 	TBS_USER_MODE,		/* User-requested timed-based sampling */
-	EBS_MODE			/* User-requested event-based sampling */
+	EBS_MODE,			/* User-requested event-based sampling */
+	EBS_SCHED_MODE		/* Scheduler-driven event-based sampling */
 } pmc_profiling_mode_t;
 
 /*
@@ -182,6 +186,7 @@ typedef struct {
 	pmc_samples_buffer_t* pmc_samples_buffer; /* Buffer shared between monitor process and threads being monitored */
 	uint_t nticks_sampling_period;			/* Scheduler-mode tick-based sampling period */
 	uint_t  kernel_buffer_size;				/* Max capacity (in bytes) of the ring buffer in "pmc_samples_buffer" */
+	ktime_t	ref_time;		 			/* To add timestamps to the various samples */
 	struct monitoring_module* task_mod;		/* Pointer to the monitoring module assigned to this task */
 	void* 	monitoring_mod_priv_data;		/* Per-thread private data for current monitoring module */
 } pmon_prof_t;
@@ -318,7 +323,6 @@ free_allocated_experiments:
 	return -ENOMEM;
 }
 
-/* Copy the configuration of a experiment set into another */
 static inline int clone_core_experiment_set_t_noalloc(core_experiment_set_t* dst,core_experiment_set_t* src)
 {
 	int i=0,j=0;
@@ -427,6 +431,48 @@ static inline void push_sample_cbuffer(pmon_prof_t* prof,pmc_sample_t* sample)
 	__push_sample_cbuffer(prof->pmc_samples_buffer,sample);
 	spin_unlock_irqrestore(&prof->pmc_samples_buffer->lock,flags);
 }
+
+
+/* Get the CPU where the task ran last */
+static inline int task_cpu_safe(struct task_struct *p)
+{
+
+#if !defined(CONFIG_PMC_ARM) && (LINUX_VERSION_CODE >= KERNEL_VERSION(4,9,0))
+	return p->cpu;
+#else
+	struct thread_info* ti=task_thread_info(p);
+
+	if (ti)
+		return ti->cpu;
+	else
+		return -1;
+#endif
+}
+
+/**
+ * pmctrack_cpu_function_call - call a function on a given CPU
+ * @p:		the task to evaluate
+ * @cpu:	the CPU where to invoke the function
+ * @func:	the function to be called
+ * @info:	the function call argument
+ *
+ * The function might be on the current CPU, which just calls
+ * the function directly
+ *
+ * returns: 0 when the process isn't running or it is sleeping
+ *	    	-EAGAIN - when the process moved to a different CPU
+ * 					while invoking this function
+ */
+int
+pmct_cpu_function_call(struct task_struct *p, int cpu, int (*func) (void *info), void *info);
+
+
+/* For compatibility with ktime_t representation */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,10,0)
+#define raw_ktime(kt) (kt).tv64
+#else
+#define raw_ktime(kt) (kt)
+#endif
 
 
 #endif

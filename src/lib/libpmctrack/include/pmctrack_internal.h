@@ -44,6 +44,7 @@
 #define PMCT_FLAG_RAW_PMC_CONFIG 0x4
 #define PMCT_FLAG_VIRT_COUNTER_MNEMONICS 0x8
 #define PMCT_FLAG_SELF_MONITORING 0x10
+#define PMCT_FLAG_SHOW_ETIME 0x20
 
 /* Flags for counter configuration */
 #define PMCT_CONFIG_SYSWIDE 0x1
@@ -148,13 +149,15 @@ int pmct_start_counting( void );
  *                  events sets are monitored in the various cores of
  *                  an asymmetric multicore system
  * syswide: Use a non-zero value if the system-wide mode is enabled.
- *
+ * show_elapsed_time: Use a non-zero value to print additional column with the elapsed time
+ * 					  relative to the previous sample
  */
 void pmct_print_header (FILE* fo, unsigned int nr_experiments,
                         unsigned int pmcmask,
                         unsigned int virtual_mask,
                         int extended_output,
-                        int syswide);
+                        int syswide,
+                        int show_elapsed_time);
 
 /*
  * Print a sample row in the "normalized" format for a table of
@@ -167,6 +170,8 @@ void pmct_print_header (FILE* fo, unsigned int nr_experiments,
  * extended_output: Use a non-zero value if nr_experiments>1 or different
  *                  events sets are monitored in the various cores of
  *                  an asymmetric multicore system
+ * show_elapsed_time: Use a non-zero value to print additional column with the elapsed time
+ * 					  relative to the previous sample 
  * nsample: Number of sample to be included in the row
  * sample: Actual sample with PMC and virtual-counter data
  *
@@ -175,6 +180,7 @@ void pmct_print_sample (FILE* fo, unsigned int nr_experiments,
                         unsigned int pmcmask,
                         unsigned int virtual_mask,
                         unsigned int extended_output,
+                        unsigned int show_elapsed_time,
                         int nsample,
                         pmc_sample_t* sample);
 

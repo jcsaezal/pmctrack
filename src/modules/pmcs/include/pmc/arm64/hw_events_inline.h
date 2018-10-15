@@ -339,7 +339,21 @@ static inline uint64_t __get_reset_value_hw_event ( struct hw_event* exp )
 	return 0;
 }
 
-
-
+/* This function returns PMC's reset value */
+static inline void __set_reset_value_hw_event ( struct hw_event* exp, uint64_t reset_val)
+{
+	simple_exp *s_exp=NULL;
+	switch ( exp->type ) {
+	case _SIMPLE:
+		s_exp=& ( exp->g_event.s_exp );
+		s_exp->pmc.reset_value=reset_val;
+		break;
+	case _FIXED:
+		exp->g_event.f_exp.pmc.reset_value=reset_val;
+		break;
+	default:
+		break;
+	}
+}
 
 #endif

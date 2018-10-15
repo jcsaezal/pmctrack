@@ -20,6 +20,10 @@
 #include <linux/printk.h>
 #include <linux/cpu.h>
 #include <linux/ftrace.h>
+#include <linux/version.h>
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 10, 0)
+#include <linux/cpuhotplug.h>
+#endif
 
 /** Variables taken from oprofile kernel module */
 static DEFINE_PER_CPU(unsigned long, saved_lvtpc);
@@ -48,7 +52,9 @@ static struct pmctrack_cpu_model cpu_models[]= {
 	{42,"sandybridge"},{45,"sandybridge_ep"},
 	{58,"ivybridge"},{62,"ivybridge-ep"},
 	{60,"haswell"},{63,"haswell-ep"},
+	{79,"broadwell-ep"},
 	{86,"broadwell"},
+	{85,"skylake"},
 	{0,NULL} /* Marker */
 };
 
@@ -161,6 +167,7 @@ void init_pmu_props(void)
 		{"cmask",8,0},
 		{"edge",1,0},
 		{"inv",1,0},
+		{"any",1,0},
 		{"ebs",32,0},
 		{"coretype",1,1},
 		{NULL,0,0}
@@ -310,6 +317,14 @@ void do_setup_pmcs(pmc_usrcfg_t* pmc_cfg, int used_pmcs_msk,core_experiment_t* e
 
 #ifndef	CONFIG_PMC_AMD
 				set_bit_field(&evtsel.m_evtsel, pmc_cfg[i].cfg_evtsel);
+				/*
+				 * In modern Intel CPUs with more than 4 GP-PMCs the 'os' flag must be
+				 * enable forcefully for GP-PMCs whose ID ranges between 4 and 7. Otherwise
+				 * these performance counters will always display a 0 count.
+				 * Note that this is necessary due to a hardware issue.
+				 */
+				if (gppmc_id>=4 && gppmc_id<=7)
+					pmc_cfg[i].cfg_os=1;
 #else
 				set_bit_field(&evtsel.m_evtsel, pmc_cfg[i].cfg_evtsel);
 				set_bit_field(&evtsel.m_evtsel2,(pmc_cfg[i].cfg_evtsel >>8));
@@ -323,6 +338,7 @@ void do_setup_pmcs(pmc_usrcfg_t* pmc_cfg, int used_pmcs_msk,core_experiment_t* e
 				set_bit_field(&evtsel.m_cmask, pmc_cfg[i].cfg_cmask);
 #ifndef	CONFIG_PMC_AMD
 				set_bit_field(&evtsel.m_int, 1);
+				set_bit_field(&evtsel.m_any, pmc_cfg[i].cfg_any);
 #endif
 				/* Set up int just in case */
 				if (pmc_cfg[i].cfg_ebs_mode) {
@@ -468,6 +484,17 @@ int parse_pmcs_strconfig(const char *buf,
 				}
 			} else {
 				pmc_cfg[idx].cfg_inv=1;
+			}
+		} else if ((read_tokens=sscanf(flag,"any%i=%d", &idx, &val))>0 && (idx>=0 && idx<MAX_LL_EXPS)) {
+			if (read_tokens==2) {
+				if (val!=0 && val!=1) {
+					error=1;
+					break;
+				} else {
+					pmc_cfg[idx].cfg_any=val;
+				}
+			} else {
+				pmc_cfg[idx].cfg_any=1;
 			}
 		} else if((read_tokens=sscanf(flag,"ebs%i=%d", &idx, &ebs_window))>0
 		          && ebs_allowed
@@ -665,7 +692,7 @@ static int pmc_do_nmi_counter_overflow(unsigned int cmd, struct pt_regs *regs)
 	return 1;
 }
 
-
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,10,0)
 /* TODO Not implemented for now (robust for online, offline cpus) */
 int pmctrack_cpu_notifier(struct notifier_block *b, unsigned long action,
                           void *data)
@@ -686,7 +713,19 @@ int pmctrack_cpu_notifier(struct notifier_block *b, unsigned long action,
 static struct notifier_block pmctrack_cpu_nb = {
 	.notifier_call = pmctrack_cpu_notifier,
 };
+#else
+static enum cpuhp_state pcap_pmctrack_online;
 
+static int pmctrack_cpu_online(unsigned int cpu)
+{
+	return 0;
+}
+
+static int pmctrack_cpu_down_prep(unsigned int cpu)
+{
+	return 0;
+}
+#endif
 
 /* Enable the PERF interrupt on this CPU */
 static void pmc_nmi_cpu_setup(void *dummy)
@@ -702,6 +741,10 @@ static int pmc_fill_in_addresses(void)
 	return 0;
 }
 
+
+
+
+
 /*
  * Prepare a CPU to handle interrupts on PMC overflow
  * (Function based on nmi_setup() code in the Linux kernel
@@ -710,7 +753,7 @@ static int pmc_fill_in_addresses(void)
 static int pmc_nmi_setup(void)
 {
 	int err=0;
-
+	int ret;
 	nmi_enabled = 0;
 	ctr_running = 0;
 	/* make variables visible to the nmi handler: */
@@ -731,7 +774,17 @@ static int pmc_nmi_setup(void)
 	register_nmi_handler(NMI_LOCAL, pmc_do_nmi_counter_overflow, 0, "PMI_PMCTRACK");
 #endif
 	get_online_cpus();
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0)
 	register_cpu_notifier(&pmctrack_cpu_nb);
+	ret=0;
+#else
+	ret = cpuhp_setup_state(CPUHP_AP_ONLINE_DYN, "pmctrack/cpu:online",
+	                        pmctrack_cpu_online, pmctrack_cpu_down_prep);
+	if (ret < 0)
+		goto out_pmcs_nmi_setup;
+	pcap_pmctrack_online = ret;
+#endif
 	nmi_enabled = 1;
 	/* make nmi_enabled visible to the nmi handler: */
 	smp_mb();
@@ -763,8 +816,8 @@ static void pmc_nmi_cpu_shutdown(void *dummy)
 	apic_write(APIC_LVTPC, per_cpu(saved_lvtpc, cpu));
 	apic_write(APIC_LVTERR, v);
 	/* nmi_cpu_restore_registers(msrs);
-	 if (model->cpu_down)
-	         model->cpu_down();
+	if (model->cpu_down)
+		model->cpu_down();
 	*/
 }
 
@@ -772,7 +825,11 @@ static void pmc_nmi_cpu_shutdown(void *dummy)
 int pmu_shutdown(void)
 {
 	get_online_cpus();
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0)
 	unregister_cpu_notifier(&pmctrack_cpu_nb);
+#else
+	cpuhp_remove_state(pcap_pmctrack_online);
+#endif
 	on_each_cpu(pmc_nmi_cpu_shutdown, NULL, 1);
 	nmi_enabled = 0;
 	ctr_running = 0;

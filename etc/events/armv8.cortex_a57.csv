@@ -9,6 +9,7 @@ l2_cache_writebacks,-,0x18,-,-
 l1_data_refills,-,0x03,-,-
 l1_data_accesses,-,0x04,-,-
 llc_accesses,-,0x16,-,-
+llc_references,-,0x16,-,-
 llc_misses,-,0x17,-,-
 data_read_retired,-,0x66,-,-
 data_write_retired,-,0x67,-,-

@@ -20,7 +20,7 @@
 #include <linux/proc_fs.h>
 #include <linux/cpumask.h>
 #include <linux/slab.h>
-#include <asm/uaccess.h>
+
 #include <linux/smp.h>
 #include <linux/cpu.h>
 #include <linux/kdebug.h>
@@ -34,6 +34,18 @@
 #include <pmc/monitoring_mod.h>
 #include <pmc/syswide.h>
 #include <linux/sched.h>
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,9,0)
+#include <linux/uaccess.h>
+#else
+#include <asm/uaccess.h>
+#endif
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,14,0)
+#include <linux/sched/task.h> /* for get_task_struct()/put_task_struct() */
+#endif
+
+
+
 
 #define BUF_LEN_PMC_SAMPLES_EBS_KERNEL (((PAGE_SIZE)/sizeof(pmc_sample_t))*sizeof(pmc_sample_t))
 
@@ -325,6 +337,8 @@ static int mod_alloc_per_thread_data(unsigned long clone_flags, struct task_stru
 
 	prof->pid_monitor=-1;
 
+	prof->ref_time=ktime_get();
+
 #ifdef TBS_TIMER
 	/* Timer initialization (but timer is not added!!) */
 	init_timer(&prof->timer);
@@ -386,7 +400,6 @@ static int mod_alloc_per_thread_data(unsigned long clone_flags, struct task_stru
 	return 0;
 }
 
-
 /*
  * This function is invoked from the tick processing
  * function and context-switch related callbacks
@@ -401,7 +414,11 @@ static inline void sample_counters_user_tbs(pmon_prof_t* prof, core_experiment_t
 	unsigned long flags;
 	pmc_sample_t sample;
 	core_experiment_t* next;
+	int ebs_idx=-1;
 	int cur_coretype=get_coretype_cpu(cpu);
+	pmu_props_t* props=get_pmu_props_cpu(cpu);
+	ktime_t now;
+
 #ifdef DEBUG
 	char strout[256];
 #endif
@@ -438,14 +455,18 @@ static inline void sample_counters_user_tbs(pmon_prof_t* prof, core_experiment_t
 		case PMC_TICK_EVT:
 		case PMC_SAVE_EVT:
 			sample.type=PMC_TICK_SAMPLE;
+
 			break;
 		case PMC_MIGRATION_EVT:
 			sample.type=PMC_MIGRATION_SAMPLE;
+			ebs_idx=core_exp->ebs_idx;
 			break;
 		default:
 			sample.type=PMC_SELF_SAMPLE;
 			break;
 		}
+
+		now=ktime_get();
 
 		sample.coretype=cur_coretype;
 		sample.exp_idx=core_exp->exp_idx;
@@ -454,6 +475,14 @@ static inline void sample_counters_user_tbs(pmon_prof_t* prof, core_experiment_t
 		sample.virt_mask=0;
 		sample.nr_virt_counts=0;
 		sample.pid=prof->this_tsk->pid;
+		sample.elapsed_time=raw_ktime(ktime_sub(now,prof->ref_time));
+		prof->ref_time=now;
+
+		/* This is to handle migration samples correctly !! */
+		if (ebs_idx!=-1) {
+			uint64_t reset_value=__get_reset_value(&(core_exp->array[ebs_idx]));
+			sample.pmc_counts[ebs_idx]+=( (-reset_value) & props->pmc_width_mask);
+		}
 
 		/* Copy and clear samples in prof */
 		for(i=0; i<MAX_LL_EXPS; i++) {
@@ -506,7 +535,10 @@ static inline void sample_counters_sched_tbs(pmon_prof_t* prof, core_experiment_
 {
 	int i=0;
 	pmc_sample_t sample;
+	int ebs_idx=-1;
 	int cur_coretype=get_coretype_cpu(cpu);
+	pmu_props_t* props=get_pmu_props_cpu(cpu);
+	ktime_t now;
 
 	switch (event) {
 	case PMC_TICK_EVT:
@@ -514,8 +546,9 @@ static inline void sample_counters_sched_tbs(pmon_prof_t* prof, core_experiment_
 			/* Read counters on the current cpu */
 			do_count_mc_experiment(prof,core_exp,1);
 			prof->samples_counter++;
-			/*Sampling interval counter is reseted*/
+			/*Sampling interval counter is reset */
 			prof->pmc_ticks_counter = 0;
+			now=ktime_get();
 
 			/* Initialize sample*/
 			sample.type=PMC_TICK_SAMPLE;
@@ -526,6 +559,8 @@ static inline void sample_counters_sched_tbs(pmon_prof_t* prof, core_experiment_
 			sample.virt_mask=0;
 			sample.nr_virt_counts=0;
 			sample.pid=prof->this_tsk->pid;
+			sample.elapsed_time=raw_ktime(ktime_sub(now,prof->ref_time));
+			prof->ref_time=now;
 
 			/* Copy and clear samples in prof */
 			for(i=0; i<MAX_LL_EXPS; i++) {
@@ -553,6 +588,13 @@ static inline void sample_counters_sched_tbs(pmon_prof_t* prof, core_experiment_
 		sample.virt_mask=0;
 		sample.nr_virt_counts=0;
 		sample.pid=prof->this_tsk->pid;
+		ebs_idx=core_exp->ebs_idx;
+
+		/* This is to handle migration samples correctly !! */
+		if (ebs_idx!=-1) {
+			uint64_t reset_value=__get_reset_value(&(core_exp->array[ebs_idx]));
+			sample.pmc_counts[ebs_idx]+=( (-reset_value) & props->pmc_width_mask);
+		}
 
 		/* Copy and clear samples in prof */
 		for(i=0; i<MAX_LL_EXPS; i++) {
@@ -597,6 +639,7 @@ static void mod_save_callback_gen(void* v_prof, int cpu, int lock)
 
 	switch(prof->profiling_mode) {
 	case EBS_MODE:
+	case EBS_SCHED_MODE:
 		/* Save counter values in task_struct */
 		if (!core_exp->need_setup)	/* If first time ==> do this to avoid storing a different reset value !! */
 			mc_save_all_counters(core_exp);
@@ -671,22 +714,53 @@ static inline void mod_restore_callback_gen(void* v_prof, int cpu, int lock)
 
 	switch(prof->profiling_mode) {
 	case EBS_MODE:
+	case EBS_SCHED_MODE:
 		/* Restore counters to pick up the count where we left off */
-		mc_restore_all_counters(core_exp);
+		if (migration && prof->pmcs_config && (prev_coretype!=this_coretype)) {
+			/* Dump sample if its' not the first time */
+			if (prof->last_cpu!=-1) {
+				if (prof->profiling_mode==EBS_MODE)
+					sample_counters_user_tbs(prof,core_exp,PMC_MIGRATION_EVT,prof->last_cpu);
+				else
+					sample_counters_sched_tbs(prof,core_exp,PMC_MIGRATION_EVT,prof->last_cpu);
+			}
+
+			/* Always engage multiplexation and clear counts (start from the beginning) */
+			next=rewind_experiments_in_set(&prof->pmcs_multiplex_cfg[this_coretype]);
+
+			/* If configuration is enabled */
+			if ((next && prof->pmcs_config!=next) ||
+			    (prev_coretype==-1) /* first time initialization */ ) {
+				/* Clear all counters in the platform */
+				mc_clear_all_platform_counters(get_pmu_props_coretype(this_coretype));
+				prof->pmcs_config=next;
+				/* reconfigure counters as if it were the first time*/
+				mc_restart_all_counters(prof->pmcs_config);
+			}
+		} else {
+			/* Restore counters to pick up the count where we left off */
+			mc_restore_all_counters(core_exp);
+		}
+
+		/* Notify the monitoring module (to make it possible to do hacks or whatever)
+					- Note that last CPU will be -1 the first time */
+		if (prof->profiling_mode==EBS_SCHED_MODE && migration)
+			mm_on_migrate(prof, prof->last_cpu, cpu);
+
 		break;
 	case TBS_SCHED_MODE:
 		/* notify migration (to do whatever magic necesary) */
 		if (migration && prof->pmcs_config && (prev_coretype!=this_coretype)) {
 			if (prof->last_cpu!=-1) {
 				sample_counters_sched_tbs(prof,core_exp,PMC_MIGRATION_EVT,prof->last_cpu);
-				/* This one may handle multiplexation as necessary */
 			}
 
 			/* Point to the right set of experiments for this core type */
 			next=rewind_experiments_in_set(&prof->pmcs_multiplex_cfg[this_coretype]);
 
 			/* If configuration is enabled and there are events on the new core type */
-			if (next && prof->pmcs_config!=next) {
+			if ((next && prof->pmcs_config!=next) ||
+			    (prev_coretype==-1) /* first time initialization */ ) {
 				/* Clear all counters in the platform */
 				mc_clear_all_platform_counters(get_pmu_props_coretype(this_coretype));
 				prof->pmcs_config=next;
@@ -716,7 +790,6 @@ static inline void mod_restore_callback_gen(void* v_prof, int cpu, int lock)
 		break;
 	case TBS_USER_MODE:
 		if (migration && prof->pmcs_config && (prev_coretype!=this_coretype)) {
-
 			/* Dump sample if its' not the first time */
 			if (prof->last_cpu!=-1)
 				sample_counters_user_tbs(prof,core_exp,PMC_MIGRATION_EVT,prof->last_cpu);
@@ -725,7 +798,8 @@ static inline void mod_restore_callback_gen(void* v_prof, int cpu, int lock)
 			next=rewind_experiments_in_set(&prof->pmcs_multiplex_cfg[this_coretype]);
 
 			/* If configuration is enabled */
-			if (next && prof->pmcs_config!=next) {
+			if ((next && prof->pmcs_config!=next) ||
+			    (prev_coretype==-1) /* first time initialization */ ) {
 				/* Clear all counters in the platform */
 				mc_clear_all_platform_counters(get_pmu_props_coretype(this_coretype));
 				prof->pmcs_config=next;
@@ -777,17 +851,6 @@ struct remote_function_args {
 	int		ret;
 };
 
-/* Get the CPU where the task ran last */
-static inline int task_cpu_safe(struct task_struct *p)
-{
-	struct thread_info* ti=task_thread_info(p);
-
-	if (ti)
-		return ti->cpu;
-	else
-		return -1;
-}
-
 /* Generic wrapper function for remote function invocation */
 static void pmct_remote_function(void *data)
 {
@@ -819,7 +882,7 @@ static void pmct_remote_function(void *data)
  *	    	-EAGAIN - when the process moved to a different CPU
  * 					while invoking this function
  */
-static int
+int
 pmct_cpu_function_call(struct task_struct *p, int cpu, int (*func) (void *info), void *info)
 {
 	struct remote_function_args data = {
@@ -907,8 +970,12 @@ static void mod_tbs_tick(void* v_prof, int cpu)
 	if (unlikely(!prof->this_tsk->prof_enabled))
 		goto unlock;
 
+	mm_on_tick(prof,cpu);
+
 	switch(prof->profiling_mode) {
-	case EBS_MODE: /* In EBS-mode there is nothing to be done on tick */
+	case EBS_MODE:
+	case EBS_SCHED_MODE:
+		/* In EBS-mode there is nothing to be done on tick */
 		break;
 	case TBS_SCHED_MODE:
 		sample_counters_sched_tbs(prof,core_exp,PMC_TICK_EVT,cpu);
@@ -1007,7 +1074,7 @@ static void mod_exit_thread(struct task_struct* tsk)
 		break;
 
 	case EBS_MODE:
-
+	case EBS_SCHED_MODE:
 		if (prof->pmc_samples_buffer) {
 			/* Just Notify termination */
 			spin_lock(&prof->pmc_samples_buffer->lock);
@@ -1656,6 +1723,8 @@ static ssize_t proc_monitor_pmcs_write(struct file *filp, const char __user *buf
 
 		prof->pmc_jiffies_timeout=jiffies+prof->pmc_jiffies_interval;
 
+		prof->ref_time=ktime_get();
+
 #ifdef TBS_TIMER
 		if (prof->profiling_mode==TBS_USER_MODE)
 			mod_timer( &prof->timer, prof->pmc_jiffies_timeout);
@@ -1814,8 +1883,14 @@ static void mmap_open(struct vm_area_struct *vma) { }
 
 static void mmap_close(struct vm_area_struct *vma) { }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,14,0)
+static int mmap_nopage( struct vm_fault *vmf)
+{
+	struct vm_area_struct *vma=vmf->vma;
+#else
 static int mmap_nopage(struct vm_area_struct *vma, struct vm_fault *vmf)
 {
+#endif
 	pgoff_t offset = vmf->pgoff;
 
 	if (offset > vma->vm_end) {
@@ -1836,6 +1911,7 @@ static int mmap_nopage(struct vm_area_struct *vma, struct vm_fault *vmf)
 
 	return 0;
 }
+
 
 /* Instantiation of the VMOPS interface */
 static struct vm_operations_struct mmap_vm_ops = {
@@ -1913,6 +1989,9 @@ static ssize_t proc_pmc_enable_write(struct file *filp, const char __user *buff,
 			prof->pmc_jiffies_interval=HZ; /* One second (for now) */
 
 		prof->pmc_jiffies_timeout=jiffies+prof->pmc_jiffies_interval;
+
+		prof->ref_time=ktime_get();
+
 #ifdef TBS_TIMER
 		if (prof->profiling_mode==TBS_USER_MODE)
 			mod_timer( &prof->timer, prof->pmc_jiffies_timeout);
@@ -2154,11 +2233,13 @@ static int configure_performance_counters_thread(const char *buf,struct task_str
 		return -EINVAL;
 	}
 
-	/* Make sure that multiplexation is only enabled when possible and EBS encompasses just one event set */
-	if ((prof->profiling_mode==EBS_MODE) ||
-	    (prof->profiling_mode==TBS_USER_MODE && ebs_index!=-1)
-	   ) {
-		printk(KERN_INFO "EBS is only supported with one event set\n");
+	if (prof->profiling_mode==EBS_MODE && ebs_index==-1) {
+		printk(KERN_INFO "The ebs field must be specified once in EBS mode\n");
+		return -EINVAL;
+	}
+
+	if (prof->profiling_mode==TBS_USER_MODE && ebs_index!=-1) {
+		printk(KERN_INFO "Attempting to activate ebs in the second event set but not in the first one\n");
 		return -EINVAL;
 	}
 
@@ -2276,6 +2357,7 @@ int configure_performance_counters_set(const char* strconfig[], core_experiment_
 		int coretype;
 	} aux_pmc_info[AMP_MAX_EXP_CORETYPE];
 	int error=0;
+	unsigned int nr_ebs=0;
 
 	/* Initialize everything just in case*/
 	for (i=0; i<nr_coretypes; i++)
@@ -2292,10 +2374,15 @@ int configure_performance_counters_set(const char* strconfig[], core_experiment_
 		if (error)
 			return error;
 
-		if (aux_pmc_info[i].ebs_index!=-1) /* Not supported here */
-			return -EINVAL;
+		if (aux_pmc_info[i].ebs_index!=-1)
+			nr_ebs++;
 
 		i++;
+	}
+
+	if (nr_ebs>0 && (nr_ebs!=i)) {
+		printk(KERN_ALERT "Can't use EBS mode in just a few configurations\n" );
+		return -EINVAL;
 	}
 
 	printk(KERN_ALERT "The string-based PMC configuration seems to be OK\n" );
@@ -2651,7 +2738,7 @@ void do_count_on_overflow(struct pt_regs *regs, unsigned int overflow_mask)
 {
 	int read_ok=0;
 	pmc_sample_t sample;
-	unsigned int ebs_idx=0;
+	int ebs_idx=0;
 	unsigned int this_cpu=smp_processor_id();
 	pmu_props_t* props=get_pmu_props_cpu(this_cpu);
 	unsigned int filtered_mask=0;
@@ -2659,6 +2746,9 @@ void do_count_on_overflow(struct pt_regs *regs, unsigned int overflow_mask)
 	pmon_prof_t* prof=p->pmc;
 	core_experiment_t* core_exp=NULL;
 	unsigned long flags=0;
+	int cur_coretype=get_coretype_cpu(this_cpu);
+	core_experiment_t* next;
+	ktime_t now;
 
 	if (!prof)
 		return;
@@ -2676,15 +2766,20 @@ void do_count_on_overflow(struct pt_regs *regs, unsigned int overflow_mask)
 		if (!filtered_mask)
 			goto exit_unlock;
 
+		prof->samples_counter++;
+		now=ktime_get();
+
 		/* Initialize sample*/
 		sample.type=PMC_EBS_SAMPLE;
-		sample.coretype=0;
-		sample.exp_idx=0;
+		sample.coretype=cur_coretype;
+		sample.exp_idx=core_exp->exp_idx;
 		sample.pmc_mask=core_exp->used_pmcs;
 		sample.nr_counts=core_exp->size;
 		sample.virt_mask=0;
 		sample.nr_virt_counts=0;
 		sample.pid=p->pid;
+		sample.elapsed_time=raw_ktime(ktime_sub(now,prof->ref_time));
+		prof->ref_time=now;
 
 		/* Read counters !! */
 		read_ok=!do_count_mc_experiment_buffer(core_exp,
@@ -2700,13 +2795,26 @@ void do_count_on_overflow(struct pt_regs *regs, unsigned int overflow_mask)
 				sample.pmc_counts[ebs_idx]+=( (-reset_value) & props->pmc_width_mask);
 			}
 
-			/* Call the monitoring module if the user requested virtual counters */
-			if (prof && prof->virt_counter_mask)
-				mm_on_new_sample(prof,this_cpu,&sample,MM_TICK,NULL);
+			/* Call the monitoring (This one controls multiplexation if necessary) !! */
+			if (prof)
+				mm_on_new_sample(prof,this_cpu,&sample,MM_TICK,regs);
 
 			spin_lock(&prof->pmc_samples_buffer->lock);
 			__push_sample_cbuffer(prof->pmc_samples_buffer,&sample);
 			spin_unlock(&prof->pmc_samples_buffer->lock);
+
+			if (prof->profiling_mode==EBS_MODE) {
+				/* Engage multiplexation */
+				next=get_next_experiment_in_set(&prof->pmcs_multiplex_cfg[cur_coretype]);
+
+				if (next && prof->pmcs_config!=next) {
+					prof->pmcs_config=next;
+					/* Clear all counters in the platform */
+					mc_clear_all_platform_counters(get_pmu_props_coretype(cur_coretype));
+					/* reconfigure counters as if it were the first time*/
+					mc_restart_all_counters(prof->pmcs_config);
+				}
+			}
 		}
 	}
 exit_unlock:

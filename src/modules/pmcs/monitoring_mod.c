@@ -15,6 +15,7 @@
 #include <linux/semaphore.h>
 #include <linux/module.h>
 #include <pmc/smart_power.h>
+#include <linux/uaccess.h>
 
 #ifdef DEBUG
 static const char* sample_type_to_str[PMC_NR_SAMPLE_TYPES]= {"tick","ebs","exit","migration"};
@@ -199,11 +200,6 @@ static int dummy_on_new_sample(pmon_prof_t* prof,int cpu,pmc_sample_t* sample,in
 	return 0;
 }
 
-static void dummy_on_migrate(pmon_prof_t* prof, int prev_cpu, int new_cpu)
-{
-	printk(KERN_ALERT "Thread has been migrated from cpu %d to cpu %d!!\n",prev_cpu,new_cpu);
-}
-
 
 #endif  //CONFIG_PMC_PHI
 
@@ -217,7 +213,6 @@ static monitoring_module_t dummy_mm= {
 	.on_fork=dummy_on_fork,
 	.on_exec=dummy_on_exec,
 	.on_new_sample=dummy_on_new_sample,
-	.on_migrate=dummy_on_migrate,
 	.module_counter_usage=dummy_module_counter_usage
 };
 
@@ -675,6 +670,12 @@ int mm_on_new_sample(pmon_prof_t* prof,int cpu,pmc_sample_t* sample,int flags,vo
 	return 0;
 }
 
+void mm_on_tick(pmon_prof_t* prof,int cpu)
+{
+	if ( mod_task_is_curr(prof) && mm_manager.cur_module->on_tick)
+		mm_manager.cur_module->on_tick(prof,cpu);
+}
+
 void mm_on_migrate(pmon_prof_t* prof, int prev_cpu, int new_cpu)
 {
 	if ( mod_task_is_curr(prof) && mm_manager.cur_module->on_migrate)
@@ -714,9 +715,15 @@ void mm_on_switch_out(pmon_prof_t* prof)
 
 int mm_get_current_metric_value(pmon_prof_t* prof, int key, uint64_t* value)
 {
-	if ( mod_task_is_curr(prof) && mm_manager.cur_module->get_current_metric_value)
-		return mm_manager.cur_module->get_current_metric_value(prof,key,value);
-	else
+	int ret=0;
+	if ( mod_task_is_curr(prof) && mm_manager.cur_module->get_current_metric_value) {
+		ret=mm_manager.cur_module->get_current_metric_value(prof,key,value);
+#ifdef DEBUG
+		if (key>7)
+			trace_printk("Requested key %d -> value=%llu ,status=%d\n",key,*value,ret);
+#endif
+		return ret;
+	} else
 		return -1;
 }
 

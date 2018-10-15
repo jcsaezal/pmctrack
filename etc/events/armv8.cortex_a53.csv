@@ -9,6 +9,7 @@ l2_cache_writebacks,-,0x18,-,-
 l1_data_refills,-,0x03,-,-
 l1_data_accesses,-,0x04,-,-
 llc_accesses,-,0x16,-,-
+llc_references,-,0x16,-,-
 llc_misses,-,0x17,-,-
 data_read_retired,-,0x66,-,-
 data_write_retired,-,0x67,-,-
@@ -33,3 +34,4 @@ ase_spec,-,0x74,Instruction speculatively executed. advanced SIMD extension,-
 vfp_spec,-,0x75,Instruction speculatively executed. floating point extension,-
 br_inmed_spec,-,0x78,Branch speculatively executed. immediate branch,-
 br_indirect_spec,-,0x79,Branch speculatively executed. indirect branch,-
+prefetch_linefill,-,0xc2,Linefill because of prefetch,-

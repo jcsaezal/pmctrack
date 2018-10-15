@@ -33,14 +33,15 @@ class ExperimentTabPanel():
     def __init__(self, num_exp, num_fixed_counters, num_general_counters, tab_exps, facade_xml):
 	self.facade_xml = facade_xml
 	self.num_exp = num_exp # Experiment number assigned to this experiment.
-	self.num_counters = num_fixed_counters + num_general_counters
+	self.num_fc = num_fixed_counters
+	self.num_gc = num_general_counters
 	self.panel = wx.Panel(tab_exps, -1)
         self.panel_counters = scrolled.ScrolledPanel(self.panel, -1)
         self.panel_metrics = scrolled.ScrolledPanel(self.panel, -1)
 	self.info_counters = [] # It contains graphic controls (Labels, checkbox...) counters so that they can later modify.
 	self.info_metrics = [] # It contains graphic controls (Labels, checkbox...) metrics so that they can later modify.
 	fixed_pmcs = self.facade_xml.getFixedPMCs()
-	for i in range(num_fixed_counters):
+	for i in range(self.num_fc):
 		self.info_counters.append([])
 		self.info_counters[i].append(CheckBoxNumber(self.panel_counters, -1, "pmc" + str(i), i))
         	self.info_counters[i].append(wx.StaticText(self.panel_counters, -1, _("Fixed-function counter")))
@@ -50,7 +51,7 @@ class ExperimentTabPanel():
         	self.info_counters[i][3].Enable(False)
 		self.info_counters[i][0].Bind(wx.EVT_CHECKBOX, self.on_click_checkbox_number)
 	
-	for i in range(num_fixed_counters, self.num_counters):
+	for i in range(self.num_fc, self.num_fc + self.num_gc):
 		self.info_counters.append([])
 		self.info_counters[i].append(CheckBoxNumber(self.panel_counters, -1, "pmc" + str(i), i))
         	self.info_counters[i].append(wx.StaticText(self.panel_counters, -1, _("General purpose counter")))
@@ -71,7 +72,7 @@ class ExperimentTabPanel():
         self.list_metrics.AddGrowableCol(1)
 	
 	#New metric form
-        self.label_name_new_metric = wx.StaticText(self.panel, -1, _("Name") + ": ")
+        self.label_name_new_metric = wx.StaticText(self.panel, -1, " " + _("Name") + ": ")
         self.text_name_new_metric = wx.TextCtrl(self.panel, -1, "", style=wx.TE_PROCESS_ENTER)
 	self.text_name_new_metric.Bind(wx.EVT_TEXT_ENTER, self.on_add_metric)
         self.label_formula_new_metric = wx.StaticText(self.panel, -1, _("Formula") + ": ")
@@ -95,9 +96,9 @@ class ExperimentTabPanel():
         sizer_new_metric = wx.BoxSizer(wx.HORIZONTAL)
         self.sizer_counters_staticbox.Lower()
         sizer_counters = wx.StaticBoxSizer(self.sizer_counters_staticbox, wx.HORIZONTAL)
-	table_counters = wx.FlexGridSizer(self.num_counters, 4, 0, 0)
+	table_counters = wx.FlexGridSizer(self.num_fc + self.num_gc, 4, 0, 0)
 	
-	for i in range(self.num_counters):
+	for i in range(self.num_fc + self.num_gc):
 		table_counters.Add(self.info_counters[i][0], 0, wx.RIGHT | wx.ALIGN_CENTER_VERTICAL, 20)
         	table_counters.Add(self.info_counters[i][1], 0, wx.ALIGN_CENTER_VERTICAL, 0)
         	table_counters.Add(self.info_counters[i][2], 0, wx.ALIGN_CENTER_VERTICAL, 0)
@@ -153,32 +154,7 @@ class ExperimentTabPanel():
        		dlg.Destroy()
 
     def on_add_metric(self, event):
-	num_metric = len(self.info_metrics)
-        # If no metric the is label information, we take it out and hide layout before adding metrics.
-	if num_metric == 0:
-		self.list_metrics.Detach(0)
-		self.label_no_metrics.Hide()
-	else:
-		self.list_metrics.SetRows(self.list_metrics.GetRows() + 1)
-	
-	self.info_metrics.append([])
-	if self.text_name_new_metric.GetValue() != "":
-		self.info_metrics[num_metric].append(wx.CheckBox(self.panel_metrics, -1, self.text_name_new_metric.GetValue()))
-	else:
-		self.info_metrics[num_metric].append(wx.CheckBox(self.panel_metrics, -1, _("Metric") + " " + str(num_metric + 1)))
-       	self.info_metrics[num_metric].append(wx.StaticText(self.panel_metrics, -1, self.text_formula_new_metric.GetValue()))
-       	self.info_metrics[num_metric].append(ButtonNumber(self.panel_metrics, -1, _("Remove metric"), num_metric))
-       	self.info_metrics[num_metric][0].SetValue(1)
-	self.info_metrics[num_metric][2].SetMinSize((115, 33))
-	self.info_metrics[num_metric][2].Bind(wx.EVT_BUTTON, self.on_rem_metric)
-	
-	self.list_metrics.Add(self.info_metrics[num_metric][0], 0, wx.ALIGN_CENTER_VERTICAL, 0)
-       	self.list_metrics.Add(self.info_metrics[num_metric][1], 0, wx.ALIGN_CENTER_VERTICAL, 0)
-       	self.list_metrics.Add(self.info_metrics[num_metric][2], 0, 0, 0)
-	self.list_metrics.Layout()
-        self.panel_metrics.Layout()
-        self.panel_metrics.SetupScrolling()
-	
+	self.AddMetric(self.text_name_new_metric.GetValue(), self.text_formula_new_metric.GetValue())	
 	self.text_name_new_metric.SetValue("")
 	self.text_formula_new_metric.SetValue("")
 
@@ -210,6 +186,40 @@ class ExperimentTabPanel():
 	dlg.ShowModal()
 	dlg.Destroy()
 
+    def AddMetric(self, name, formula):
+	num_metric = len(self.info_metrics)
+        # If no metric the is label information, we take it out and hide layout before adding metrics.
+	if num_metric == 0:
+		self.list_metrics.Detach(0)
+		self.label_no_metrics.Hide()
+	else:
+		self.list_metrics.SetRows(self.list_metrics.GetRows() + 1)
+	
+	self.info_metrics.append([])
+	if name != "":
+		self.info_metrics[num_metric].append(wx.CheckBox(self.panel_metrics, -1, name))
+	else:
+		self.info_metrics[num_metric].append(wx.CheckBox(self.panel_metrics, -1, _("Metric") + " " + str(num_metric + 1)))
+       	self.info_metrics[num_metric].append(wx.StaticText(self.panel_metrics, -1, formula))
+       	self.info_metrics[num_metric].append(ButtonNumber(self.panel_metrics, -1, _("Remove metric"), num_metric))
+       	self.info_metrics[num_metric][0].SetValue(1)
+	self.info_metrics[num_metric][2].SetMinSize((115, 33))
+	self.info_metrics[num_metric][2].Bind(wx.EVT_BUTTON, self.on_rem_metric)
+	
+	self.list_metrics.Add(self.info_metrics[num_metric][0], 0, wx.ALIGN_CENTER_VERTICAL, 0)
+       	self.list_metrics.Add(self.info_metrics[num_metric][1], 0, wx.ALIGN_CENTER_VERTICAL, 0)
+       	self.list_metrics.Add(self.info_metrics[num_metric][2], 0, 0, 0)
+	self.list_metrics.Layout()
+        self.panel_metrics.Layout()
+        self.panel_metrics.SetupScrolling()
+
+    def DestroyComponents(self):
+    	for i in range(self.num_fc, self.num_fc + self.num_gc):
+		if self.info_counters[i][4] != None:
+    			self.info_counters[i][4].Destroy()
+	#self.panel_counters.Destroy()
+	#self.panel_metrics.Destroy()
+	#self.panel.Destroy()
     
 # wx.Button standard class which has been added a numerical attribute (normally be used to store the counter number corresponding to the button)
 class ButtonNumber(wx.Button):

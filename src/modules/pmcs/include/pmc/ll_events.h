@@ -51,6 +51,8 @@ static inline void __restore_context_hw_event (struct hw_event* exp );
 /* This function returns PMCs reset value */
 static inline uint64_t __get_reset_value_hw_event (struct hw_event* exp );
 
+/* This function returns PMCs reset value */
+static inline void __set_reset_value_hw_event (struct hw_event* exp, uint64_t reset_val);
 
 /** This code loads architecture-specific definition and implementation of a hw_event **/
 
@@ -119,6 +121,7 @@ static inline void init_low_level_exp_id ( low_level_exp* exp,const char *name, 
 #define __save_context_event(p_exp)   	__save_context_hw_event(&((p_exp)->event))
 #define __restore_context_event(p_exp) 	__restore_context_hw_event(&((p_exp)->event))
 #define __get_reset_value(p_exp) 	__get_reset_value_hw_event(&((p_exp)->event))
+#define __set_reset_value(p_exp,reset_val) 	__set_reset_value_hw_event(&((p_exp)->event),(reset_val))
 
 
 #endif

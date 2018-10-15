@@ -70,6 +70,8 @@
 #define CMD_FLAG_VIRT_COUNTER_MNEMONICS (1<<5)
 #define CMD_FLAG_KERNEL_DRIVES_PMCS (1<<6)
 #define CMD_FLAG_SYSTEM_WIDE_MODE	(1<<7)
+#define CMD_FLAG_SHOW_TIME_SECS	(1<<8)
+#define CMD_FLAG_SHOW_ELAPSED_TIME	(1<<9)
 
 /* Monitoring modes supported */
 typedef enum {
@@ -282,6 +284,7 @@ static int check_timeout(int timeout_secs)
 
 /* Print a summary with the process times */
 static void print_process_statistics(FILE* fout,
+                                     struct options* opt,
                                      struct rusage* rusage,
                                      struct timeval* start,
                                      struct timeval* end)
@@ -296,16 +299,24 @@ static void print_process_statistics(FILE* fout,
 
 	fprintf(fout,"[Process times]\n");
 	/* Completion time */
-	if (end->tv_sec >= 3600)
-		fprintf (fout, "real\t%ld:%02ld:%02ld\n", /* Format: H:M:S  */
-		         end->tv_sec / 3600,
-		         (end->tv_sec % 3600) / 60,
-		         end->tv_sec % 60);
-	else
-		fprintf (fout, "real\t%ld:%02ld.%02ld\n",	/* Format: M:S.D  */
-		         end->tv_sec / 60,
-		         end->tv_sec % 60,
-		         end->tv_usec / 10000);
+
+	if (opt->flags & CMD_FLAG_SHOW_TIME_SECS) {
+		fprintf (fout, "real\t%ld.%02ld\n",
+		         end->tv_sec,
+		         end->tv_usec / 10000);		
+	} 
+	else {
+		if (end->tv_sec >= 3600)
+			fprintf (fout, "real\t%ld:%02ld:%02ld\n", /* Format: H:M:S  */
+			         end->tv_sec / 3600,
+			         (end->tv_sec % 3600) / 60,
+			         end->tv_sec % 60);
+		else
+			fprintf (fout, "real\t%ld:%02ld.%02ld\n",	/* Format: M:S.D  */
+			         end->tv_sec / 60,
+			         end->tv_sec % 60,
+			         end->tv_usec / 10000);
+	}	
 
 	/* User time.  */
 	fprintf (fout, "user\t%ld.%02ld\n",
@@ -354,6 +365,17 @@ static int install_signal_handlers(int install_sigchild)
 		return 1;
 	}
 
+	/* processing SIGPIPE signal */
+	sact.sa_handler = sigint_handler;
+	sact.sa_flags = 0;
+	sigemptyset(&sact.sa_mask);
+	sigaddset(&sact.sa_mask, SIGPIPE);
+	if(sigaction(SIGPIPE, &sact, NULL) < 0) {
+		perror("Can't assign signal handler for SIGPIPE");
+		return 1;
+	}
+
+
 	if (install_sigchild) {
 		/* processing SIGCHLD signal */
 		sact.sa_handler = sigchld_handler;
@@ -367,6 +389,52 @@ static int install_signal_handlers(int install_sigchild)
 	}
 	return 0;
 }
+
+/* Restore behavior of basic signal handlers for a safe execution */
+static int restore_signal_handlers(void)
+{
+	struct sigaction sact;
+
+	sact.sa_handler = SIG_DFL;
+	sact.sa_flags = SA_RESETHAND;
+	sigemptyset(&sact.sa_mask);
+	sigaddset(&sact.sa_mask, SIGALRM);
+	if(sigaction(SIGALRM, &sact, NULL) < 0) {
+		perror("Can't restore signal handler for SIGALRM");
+		return 1;
+	}
+
+	sact.sa_handler = SIG_DFL;
+	sact.sa_flags = SA_RESETHAND;
+	sigemptyset(&sact.sa_mask);
+	sigaddset(&sact.sa_mask, SIGINT);
+	if(sigaction(SIGINT, &sact, NULL) < 0) {
+		perror("Can't restore signal handler for SIGINT");
+		return 1;
+	}
+
+	sact.sa_handler = SIG_DFL;
+	sact.sa_flags = SA_RESETHAND;
+	sigemptyset(&sact.sa_mask);
+	sigaddset(&sact.sa_mask, SIGTERM);
+	if(sigaction(SIGTERM, &sact, NULL) < 0) {
+		perror("Can't restore signal handler for SIGTERM");
+		return 1;
+	}
+
+	sact.sa_handler = SIG_DFL;
+	sact.sa_flags = SA_RESETHAND;
+	sigemptyset(&sact.sa_mask);
+	sigaddset(&sact.sa_mask, SIGPIPE);
+	if(sigaction(SIGPIPE, &sact, NULL) < 0) {
+		perror("Can't restore signal handler for SIGPIPE");
+		return 1;
+	}
+
+	return 0;
+}
+
+
 
 /* Config & Monitoring function for per-thread monitoring mode */
 static void monitoring_counters(struct options* opts,int optind,char** argv)
@@ -430,7 +498,10 @@ static void monitoring_counters(struct options* opts,int optind,char** argv)
 	if(pid == -1) {
 		err(1,"Error forking process.");
 	} else if(pid == 0) {
-		// CHILD CODE:
+		// CHILD CODE:		
+		if (restore_signal_handlers())
+			exit(1);
+
 		/* Bind first */
 		bind_process_cpumask(getpid(),opts->cpumask);
 
@@ -572,6 +643,9 @@ void monitoring_counters_syswide(struct options* opts,int optind,char** argv)
 		err(1,"Error forking process.");
 	} else if(pid == 0) {
 		// CHILD CODE:
+		if (restore_signal_handlers())
+			exit(1);		
+
 		/* Bind first */
 		bind_process_cpumask(getpid(),opts->cpumask);
 
@@ -856,6 +930,7 @@ static void process_pmc_counts(struct options* opts, int nr_experiments,unsigned
 	int nr_samples;
 	unsigned int max_buffer_samples;
 	int detached=1;
+	unsigned int show_elapsed_time=(opts->flags & CMD_FLAG_SHOW_ELAPSED_TIME);
 
 	if (mode==PMCTRACK_MODE_ATTACH)
 		detached=0;
@@ -878,7 +953,7 @@ static void process_pmc_counts(struct options* opts, int nr_experiments,unsigned
 	/* Print header if necessary */
 	if (!(opts->flags & CMD_FLAG_ACUM_SAMPLES)) {
 		print_counter_mappings(fo,opts,nr_experiments);
-		pmct_print_header(fo,nr_experiments,pmcmask,virtual_mask,extended_output,mode==PMCTRACK_MODE_SYSWIDE);
+		pmct_print_header(fo,nr_experiments,pmcmask,virtual_mask,extended_output, mode==PMCTRACK_MODE_SYSWIDE, show_elapsed_time);
 	}
 	/* Print child counters */
 	while(!stop_profiling) {
@@ -945,7 +1020,7 @@ static void process_pmc_counts(struct options* opts, int nr_experiments,unsigned
 
 					pmct_accumulate_sample (nr_experiments,pmcmask,virtual_mask,copy_metadata,cur,&acum_samples[j][cur->exp_idx]);
 				} else {
-					pmct_print_sample (fo,nr_experiments, pmcmask, virtual_mask, extended_output, cont, cur);
+					pmct_print_sample (fo,nr_experiments, pmcmask, virtual_mask, extended_output, show_elapsed_time, cont, cur);
 				}
 
 				cont++;
@@ -973,7 +1048,7 @@ static void process_pmc_counts(struct options* opts, int nr_experiments,unsigned
 	if (opts->flags & CMD_FLAG_ACUM_SAMPLES) {
 
 		print_counter_mappings(fo,opts,nr_experiments);
-		pmct_print_header(fo,nr_experiments,pmcmask,virtual_mask,extended_output,mode==PMCTRACK_MODE_SYSWIDE);
+		pmct_print_header(fo,nr_experiments,pmcmask,virtual_mask,extended_output, mode==PMCTRACK_MODE_SYSWIDE, show_elapsed_time);
 
 		/* Generate samples for the various threads */
 		for (i=0; i<nr_pids; i++) {
@@ -981,7 +1056,7 @@ static void process_pmc_counts(struct options* opts, int nr_experiments,unsigned
 			for (j=0; j<nr_experiments; j++) {
 				if ( pid_ctrl_vector[i].exp_mask & (1<<j))
 					pmct_print_sample (fo,nr_experiments, pmcmask, virtual_mask,
-					                   extended_output, pid_ctrl_vector[i].nr_samples_accum[j], &acum_samples[i][j]);
+					                   extended_output, show_elapsed_time, pid_ctrl_vector[i].nr_samples_accum[j], &acum_samples[i][j]);
 			}
 		}
 	}
@@ -995,7 +1070,7 @@ error_path:
 		gettimeofday(&end_time, NULL);
 	}
 	if (opts->flags & CMD_FLAG_SHOW_CHILD_TIMES)
-		print_process_statistics(fo,&child_rusage,&start_time,&end_time);
+		print_process_statistics(fo,opts,&child_rusage,&start_time,&end_time);
 	if (fd>0)
 		close(fd);
 	if (set)
@@ -1017,10 +1092,16 @@ void sigchld_handler(int signo)
 
 void sigint_handler(int signo)
 {
-	kill(SIGTERM, pid);
-	/* Finish inmediately */
+	if (kill(pid,SIGTERM))
+		fprintf(stderr,"Could not send signal %d to PID %d\n",signo,pid);
+
+	/* Finish immediately */
 	stop_profiling=1;
-	printf("Received signal %d\n", signo);
+	fprintf(stderr,"Received signal %d\n", signo);
+	if (signo==SIGPIPE) {
+		sigchld_handler(signo);
+		exit(1);
+	}
 }
 
 
@@ -1157,6 +1238,7 @@ static void usage(const char* program_name,int status)
 		printf ("\n\t-n\t<max-samples>\n\t\tRun command until a given number of samples are collected");
 		printf ("\n\t-N\t<secs>\n\t\tRun command for secs seconds only");
 		printf ("\n\t-e\n\t\tEnable extended output");
+		printf ("\n\t-E\n\t\tShow additional column with elapsed time between samples");	
 		printf ("\n\t-A\n\t\tEnable aggregate count mode");
 		printf ("\n\t-k\t<kernel_buffer_size>\n\t\tSpecify the size of the kernel buffer used for the PMC samples");
 		printf ("\n\t-b\t<cpu or mask>\n\t\tbind monitor program to the specified cpu o cpumask.");
@@ -1165,6 +1247,7 @@ static void usage(const char* program_name,int status)
 		printf ("\n\t-P\t<pmu>\n\t\tSpecify the PMU id to use for the event configuration");
 		printf ("\n\t-L\n\t\tLegacy-mode: do not show counter-to-event mapping");
 		printf ("\n\t-t\n\t\tShow real, user and sys time of child process");
+		printf ("\n\t-st\n\t\tDisplay real time in seconds (when -t option is enabled)");		
 		printf ("\n\t-p\t<pid>\n\t\tAttach to existing process with given pid");
 		printf ("\nPROG + ARGS:\n\t\tCommand line for the program to be monitored.\n");
 		break;
@@ -1195,7 +1278,7 @@ int main(int argc, char *argv[])
 		usage(argv[0],0);
 
 	/* Process command-line options ... */
-	while ((optc = getopt(argc, argv, "+hc:T:o:b:n:V:B:eAk:SrP:LtN:p:")) != (char)-1) {
+	while ((optc = getopt(argc, argv, "+hc:T:o:b:n:V:B:eAk:SrP:LtN:p:sE")) != (char)-1) {
 		switch (optc) {
 		case 'o':
 			if((fo = fopen(optarg, "w")) == NULL)
@@ -1255,6 +1338,12 @@ int main(int argc, char *argv[])
 		case 'p':
 			opts.target_pid=atoi(optarg);
 			break;
+		case 's':
+			opts.flags|=CMD_FLAG_SHOW_TIME_SECS;
+			break;
+		case 'E':
+			opts.flags|=CMD_FLAG_SHOW_ELAPSED_TIME;
+			break;			
 		default:
 			fprintf(stderr, "Wrong option: %c\n", optc);
 			exit(1);

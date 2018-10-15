@@ -1,6 +1,6 @@
 #!/bin/bash
 action=$1
-available_actions=(build version clean build-phi build-user-tools build-android-odroid)
+available_actions=(build version clean build-phi build-user-tools build-android-odroid load-module remove-module)
 
 if [ "$action" == "" ]; then
 	action_str=$( echo ${available_actions[*]} | tr ' ' '|' )
@@ -103,6 +103,32 @@ function figure_out_kernel_HZ_setting(){
 }
 
 
+function update_compatible_modules(){
+	local vendor_str=$1
+	local bitw=$2
+	if [ "$vendor_str" == "Intel" ]; then
+		compatible_modules=(intel-core core2)
+		module_names=(mchw_intel_core mchw_core2)
+	elif [ "$vendor_str" == "AMD" ]; then
+		compatible_modules=(amd)
+		module_names=(mchw_amd.ko)
+	else # ARM
+		if [ $bitw -eq 32 ]; then
+			if [ "$ODROID" == "yes" ]; then
+				compatible_modules=(odroid-xu)		
+				module_names=(mchw_odroid_xu)
+			else
+				compatible_modules=(arm odroid-xu)
+				module_names=(mchw_arm mchw_odroid_xu)			
+			fi	
+		else
+			compatible_modules=(arm64)	
+			module_names=(mchw_arm64)
+		fi
+	fi	
+}
+
+
 function do_build(){
 	arch_bitwidth
 	local bitw=$?
@@ -135,38 +161,16 @@ function do_build(){
 		echo "*************************************************"
 		echo "*** Building supported PMCTrack kernel modules **"
 		echo "*************************************************"
-		if [ "$vendor_str" == "Intel" ]; then
-			compatible_modules=(intel-core core2)
-		elif [ "$vendor_str" == "AMD" ]; then
-			compatible_modules=(amd)
-		else # ARM
-			if [ $bitw -eq 32 ]; then
-				if [ "$ODROID" == "yes" ]; then
-					compatible_modules=(odroid-xu)		
-				else
-					compatible_modules=(arm odroid-xu)		
-				
-				fi	
-			else
-				compatible_modules=(arm64)	
-			fi
-		fi
+		update_compatible_modules $vendor_str $bitw
 
 		## Go to module directories
 		oldp=$PWD
 		
 		## Build the various supported modules
+		i=0
 		for module in ${compatible_modules[*]}
 		do
-			## Build the .ko name
-			if [ "$module" == "intel-core" ]; then
-				modname="mchw_intel_core.ko"
-			elif [ "$module" == "odroid-xu" ]; then
-				modname="mchw_odroid_xu.ko"
-			else
-				modname="mchw_${module}.ko"
-			fi
-
+			modname="${module_names[$i]}.ko"
 			dir_module="${PMCTRACK_ROOT}/src/modules/pmcs/${module}"
 
 			if [ ! -d ${dir_module} ]; then
@@ -193,6 +197,7 @@ function do_build(){
 			fi
 			echo "Done!!"
 			echo "$separator"
+			i=$(( $i + 1 ))
 		done
 
 		cd $oldp
@@ -286,31 +291,16 @@ function do_clean(){
 
 	## Clean compatible kernel modules first
 	echo "*************************************************"
-	if [ "$vendor_str" == "Intel" ]; then
-		compatible_modules=(intel-core core2)
-	elif [ "$vendor_str" == "AMD" ]; then
-		compatible_modules=(amd)
-	else # ARM
-		if [ $bitw -eq 32 ]; then
-			compatible_modules=(arm)		
-		else
-			compatible_modules=(arm64)	
-		fi
-	fi
+	update_compatible_modules $vendor_str $bitw
 
 	## Go to module directories
 	oldp=$PWD
 	
 	## Build the various supported modules
+	i=0
 	for module in ${compatible_modules[*]}
 	do
-		## Build the .ko name
-		if [ "$module" == "intel-core" ]; then
-			modname="mchw_intel_core.ko"
-		else
-			modname="mchw_${module}.ko"
-		fi
-
+		modname=${module_names[$i]}
 		dir_module="${PMCTRACK_ROOT}/src/modules/pmcs/${module}"
 
 		if [ ! -d ${dir_module} ]; then
@@ -327,6 +317,7 @@ function do_clean(){
 			make clean
 		echo "Done!!"
 		echo "$separator"
+		i=$(( $i + 1 ))
 		fi
 	done
 
@@ -652,6 +643,130 @@ function do_build_android_odroid(){
 }
 
 
+function do_load_module(){
+	hint=${1:-""}
+	arch_bitwidth
+	local bitw=$?
+	figure_out_vendor
+	local vendor_id=$?
+	vendor_str=`print_vendor_string ${vendor_id}`
+	local separator="============================================"
+
+	if [ "$vendor_str" == "Unknown" ]; then
+		echo "Unsupported system"
+		exit 1
+	fi
+
+	## Retrieve list of compatible modules
+	update_compatible_modules $vendor_str $bitw
+
+	nr_compatible_modules=${#compatible_modules[*]}
+
+	if [ ${nr_compatible_modules} -eq 0 ]; then
+		echo "No compatible modules found for this platform"
+		exit 1
+	elif [ ${nr_compatible_modules} -gt 1 ]; then
+
+		if [ "$hint" != "" ] && [ "$hint" -le "${nr_compatible_modules}" ]; then
+			selected_module=$(( $hint -1 ))
+		else
+			## Menu to choose module
+			good_choice=0
+			while  [ ${good_choice} -ne 1 ]; do
+				echo "Several compatible modules found."
+				i=0
+				idx=1
+				for module in ${compatible_modules[*]}
+				do
+					echo "${idx}) ${compatible_modules[$i]}"
+					i=$(( $i + 1 ))
+					idx=$(( $idx + 1 ))
+				done
+				echo "Please pick one [1-${nr_compatible_modules}]"
+
+				read choice
+
+				if [ $choice -ge 1 ] || [ $choice -le ${nr_compatible_modules} ]; then
+					good_choice=1
+					selected_module=$(( $choice -1 ))
+				fi
+			done
+		fi
+	else
+		selected_module=0
+	fi
+
+	modname=${module_names[${selected_module}]}
+	moddir=${compatible_modules[${selected_module}]}
+	ko_name="${modname}.ko"
+	
+	is_loaded=`lsmod | grep ${modname} | wc -l`
+
+	if [ ${is_loaded} -ge 1 ]; then
+		good_choice=0
+		while [ ${good_choice} -ne 1 ]; do
+			echo "Module $modname is loaded. Do you wish to reload the module?[y/n]"
+			read choice
+			case $choice in
+				y|Y) sudo rmmod $modname
+					 good_choice=1
+					 ;; 
+				n|N) good_choice=1
+					 exit 0
+					;;
+			esac
+		done
+	fi
+
+	## Load module 
+
+	dir_module="${PMCTRACK_ROOT}/src/modules/pmcs/${moddir}"
+	cd ${dir_module}
+
+	if [ ! -d ${dir_module} ]; then
+		echo "Module directory not found in the source tree: ${dir_module}"
+		exit 1
+	fi
+	
+	## If the ko already exists (clean it)
+	if [ ! -f ${ko_name} ]; then
+		echo "Module file ${dir_module}/${ko_name} not found"
+		echo "You must build PMCTrack first"
+	fi
+
+	echo "Loading kernel module ${modname} ..."
+	sudo insmod ${ko_name}
+	echo "$separator"		
+}
+
+
+function do_unload_module(){
+	str=`lsmod | grep mchw_`
+	is_loaded=`echo "$str" | wc -l`
+	modname=`echo $str | cut -f 1 -d ' '`
+
+	#Load
+	if [ "$str" == "" ] || [ ${is_loaded} -ne 1 ]; then
+		echo "No PMCTrack module found" 
+		exit 1
+	else
+		good_choice=0
+		while [ ${good_choice} -ne 1 ]; do
+			echo "Module $modname is loaded. Do you really wish to unload the module?[y/n]"
+			read choice
+			case $choice in
+				y|Y) sudo rmmod $modname
+					 good_choice=1
+					 ;; 
+				n|N) good_choice=1
+					 exit 0
+					;;
+			esac
+		done
+	fi
+
+}
+
 
 case $action in 
 	version) do_version
@@ -672,7 +787,13 @@ case $action in
 	build-android-odroid*) do_build_android_odroid $2 $3
 			exit 0	
 			;;
-			*)	echo "Unrecognized action :: $action" >&2
+	load-module) do_load_module $2
+			exit 0
+			;;
+	remove-module) do_unload_module
+			exit 0
+			;;
+	*)	echo "Unrecognized action :: $action" >&2
 		exit 1
 		;;		 
 esac 

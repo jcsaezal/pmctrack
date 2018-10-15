@@ -120,28 +120,53 @@ class AdvancedSettingsDialog(wx.Dialog):
         self.Layout()
 
     def on_change_log_checkboxs(self, event):
-        self.path_save.Enable(self.checkbox_save_counters.GetValue() or self.checkbox_save_metrics.GetValue())
+    	self.UpdateEnabledPathSaveLogs()
 
     def on_accept(self, event):
         self.EndModal(0)
 
+    def UpdateEnabledPathSaveLogs(self):
+        self.path_save.Enable(self.checkbox_save_counters.GetValue() or self.checkbox_save_metrics.GetValue())
+
     def GetPmctrackCommandPath(self):
-	    return self.text_path_pmctrack.GetValue()
+	return self.text_path_pmctrack.GetValue()
+
+    def SetPmctrackCommandPath(self, pmctrack_cmd_path):
+	self.text_path_pmctrack.SetValue(pmctrack_cmd_path)
 
     def GetTimeBetweenSamples(self):
-	    return self.spin_ctrl_time_samples.GetValue()
+	return self.spin_ctrl_time_samples.GetValue()
+
+    def SetTimeBetweenSamples(self, time):
+	self.spin_ctrl_time_samples.SetValue(time)
 
     def GetSamplesBufferSize(self):
-	    return self.spin_ctrl_buffer_size.GetValue()
+	return self.spin_ctrl_buffer_size.GetValue()
+
+    def SetSamplesBufferSize(self, size):
+	self.spin_ctrl_buffer_size.SetValue(size)
 
     def GetIfSaveCountersLog(self):
-	    return self.checkbox_save_counters.GetValue()
+	return self.checkbox_save_counters.GetValue()
+
+    def SetIfSaveCountersLog(self, save):
+	self.checkbox_save_counters.SetValue(save)
 
     def GetIfSaveMetricsLog(self):
-	    return self.checkbox_save_metrics.GetValue()
+	return self.checkbox_save_metrics.GetValue()
+
+    def SetIfSaveMetricsLog(self, save):
+	self.checkbox_save_metrics.SetValue(save)
 
     def GetLogfilePath(self):
-	    return self.path_save.GetPath()
+	return self.path_save.GetPath()
+
+    def SetLogfilePath(self, path):
+	self.path_save.SetPath(path)
 
     def GetIfSystemWideMode(self):
-	    return self.radio_btn_system_wide.GetValue()
+    	return self.radio_btn_system_wide.GetValue()
+
+    def SetIfSystemWideMode(self, wide_mode):
+    	if wide_mode:
+	    self.radio_btn_system_wide.SetValue(True)

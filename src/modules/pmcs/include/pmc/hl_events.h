@@ -99,7 +99,7 @@ static inline void init_pmc_metric ( pmc_metric_t* metric,
 	metric->scale_factor=scale_factor;
 }
 
-#define MAX_METRICS_PER_SET 5
+#define MAX_METRICS_PER_SET 8
 #define MAX_MULTIPLEX_EXP_PER_CORETYPE 4
 
 /* Set of metrics associated with a experiment set */
@@ -171,6 +171,18 @@ static inline int normalize_speedup_factor (int sf)
 	}
 	return sf;
 }
+
+static inline int denormalize_speedup_factor (int sf)
+{
+	if (sf>0) {
+		sf=sf*10;
+		sf+=1000;
+	} else {
+		sf=1000;
+	}
+	return sf;
+}
+
 
 /*** Common functions for monitoring modules ***/
 
@@ -306,5 +318,11 @@ static inline unsigned long get_cur_average_mst(metric_smoother_t* mt)
 {
 	return mt->average;
 }
+
+/* Helper functions for monitoring modules */
+int estimate_sf_additive(uint64_t* metrics,int* adregression_spec,int correction_factor);
+int estimate_sf_regression(uint64_t* metrics,int* regression_spec);
+void fill_in_sf_metric_vector(metric_experiment_set_t* metric_set,
+                              uint64_t* sf_metric_vector,unsigned int* size);
 
 #endif

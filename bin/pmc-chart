@@ -1,0 +1,101 @@
+#!/usr/bin/env python
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import os.path
+import sys
+import re
+import getopt
+import os.path
+
+### MAIN PROGRAM
+def usage(help):
+	print "Usage: %s [ -m <metric_name> | -l <label_y_axis> | -o <outfile> | -i <infile> | -s <style> | -M <key>=<val> | -d <width>,<height>]" % sys.argv[0]
+
+	if not help:
+		exit(1)
+	else:
+		exit(0)    
+
+def main():
+	try:
+		opts, args = getopt.getopt(sys.argv[1:], "i:hm:l:o:-s:-M:d:", ["input","help","metric","label","output","style","metadata","dimenstions"])
+	except getopt.GetoptError as err:
+		# print help information and exit:
+		print str(err) # will print something like "option -a not recognized"
+		usage(False)
+		sys.exit(2)
+    
+	metric_id=None
+	outfile=None
+	infile=None
+	label=None
+	figSize=[6.0,5.0]
+	properties={}
+
+	for o, arg in opts:
+		if o in ("-h", "--help"):
+			usage(True)
+			sys.exit()
+		elif o in ("-m", "--metric"):
+			metric_id=arg
+		elif o in ("-M", "--metadata"):
+			metricFile=arg
+		elif o in ("-o", "--output"):
+			outfile=arg   
+		elif o in ("-i", "--input"):
+			infile=arg 
+		elif o in ("-l", "--label"):
+			label=arg 
+		elif o in ("-d", "--dimensions"):
+			figSize = [float(d) for d in arg.split(',')]
+			assert len(figSize)==2, "The dimmension has to be expressed in the following format: -d 7.75,6.75"
+		elif o in ("-s","--style"):
+			style=arg.split(",")
+			plt.style.use(style) 
+		elif o in ["-M","--metadata"]:
+			keyval=arg.split("=")
+			properties[keyval[0]]=keyval[1]			
+		else:
+			assert False, "unhandled option"
+
+	##Check basic stuff
+	assert infile, "No input file specified"
+	assert metric_id, "No metric specified. Please use -m <metric_name>"
+
+	if not outfile:
+		basename, file_extension = os.path.splitext(infile)
+		outfile = "%s_%s.pdf" % (basename,metric_id)
+
+	if not label:
+		label=metric_id
+
+	for key, value in properties.iteritems():
+		plt.rcParams[key]=value
+
+	## Read table from file
+	try:
+		t=pd.read_csv(infile)
+	except:
+		print "Cannot open input file", infile
+		exit(1)
+
+	assert metric_id in t.columns, "Metric not found in table" 
+
+	t.plot(x='nsample',y=metric_id,style='b',figsize=figSize)
+
+	#Remove legend
+	axes = plt.gca()
+	axes.legend().set_visible(False)
+
+	#Set labels
+	plt.xlabel("Samples")
+	plt.ylabel(label)
+
+	#Draw and save
+	plt.draw()
+	plt.savefig(outfile)
+
+
+if __name__ == "__main__":
+	main()
