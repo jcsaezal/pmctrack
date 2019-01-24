@@ -1,3 +1,9 @@
+ <p align="center">
+  <span>Language:</span> 
+  <a href="https://github.com/jcsaezal/pmctrack/spanish.md">Español</a> |
+  <a href="https://github.com/jcsaezal/pmctrack">English</a> 
+</p>
+
 PMCTrack es una herramienta de monitoreo de rendimiento open-source(código abierto) orientada al sistema operativo GNU / Linux.
 Esta herramienta de rendimiento ha sido diseñada específicamente para ayudar a los desarrolladores de kernel a implementar algoritmos 
 de planificación en Linux que aprovechan los datos de los contadores de monitoreo de rendimiento (PMC) para realizar optimizaciones en el 
