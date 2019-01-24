@@ -1,3 +1,10 @@
+ <p align="center">
+  <span>Language:</span> 
+  <a href="https://github.com/jcsaezal/pmctrack/spanish.md">Español</a> |
+  <a href="https://github.com/jcsaezal/pmctrack">English</a> 
+</p>
+
+
 PMCTrack is an open-source OS-oriented performance monitoring tool for GNU/Linux. This performance tool has been specifically designed to aid kernel developers in implementing scheduling algorithms in Linux that leverage data from performance monitoring counters (PMCs) to perform optimizations at run time. Unlike other monitoring tools, PMCTrack features and in-kernel API enabling the OS scheduler to access per-thread PMC data in an architecture-independent fashion. 
 
 Despite being an OS-oriented tool, PMCTrack still allows gathering PMC values from user space, enabling kernel developers to carry out the necessary offline analysis and debugging to assist them during the scheduler design process. In addition, the tool provides both the scheduler and the userspace PMCTrack components with other insightful metrics available in modern processors that are not directly exposed as PMCs, such as cache occupancy or energy consumption. 
