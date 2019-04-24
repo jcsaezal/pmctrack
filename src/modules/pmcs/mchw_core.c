@@ -902,11 +902,11 @@ static int sample_counters_user_tbs_task(void *vprof)
 {
 	pmon_prof_t* prof=(pmon_prof_t*) vprof;
 	core_experiment_t* core_exp;
-	unsigned long flags;
+	unsigned long flags; 
 
 	spin_lock_irqsave(&prof->lock,flags);
 	core_exp = prof->pmcs_config;
-	if (prof->this_tsk->prof_enabled && prof->pmcs_config && prof->pmc_jiffies_timeout==jiffies)
+	if (prof->this_tsk->prof_enabled && prof->pmcs_config && prof->pmc_jiffies_timeout<=jiffies)
 		sample_counters_user_tbs(prof,core_exp,PMC_TIMER_TICK_EVT,smp_processor_id());
 	spin_unlock_irqrestore(&prof->lock,flags);
 	return 0;
