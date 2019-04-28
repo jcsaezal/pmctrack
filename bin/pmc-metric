@@ -22,6 +22,14 @@ def skipUntiLine(file,content,curline=None,regex=False,echo=True,outfile=sys.std
 		return  (line ==content,line)
 
 
+def eval_undef(expr,values):
+	for var in expr.co_names:
+		if (var in values) and values[var]=="-":
+			return "-" ## NaN
+	
+	return eval(expr,values)
+
+
 def parse_pmctrack_output(infile,outfile,metrics,bypass,verbose,acum_mode,csv_mode):
 	if infile==None:
 		inputfile=sys.stdin
@@ -124,7 +132,7 @@ def parse_pmctrack_output(infile,outfile,metrics,bypass,verbose,acum_mode,csv_mo
 	while line != "":
 		##remove trailing white spaces
 		line.strip()
-		raw_values=re.split(r"\W+",line)
+		raw_values=re.split(r"[^a-zA-Z0-9_\-]",line)
 		## remove rubbish
 		raw_values=filter(lambda v: v != "", raw_values)
 		rvs=raw_values
@@ -172,6 +180,7 @@ def parse_pmctrack_output(infile,outfile,metrics,bypass,verbose,acum_mode,csv_mo
 			cname=column_names[i]	
 			if raw_values[i]=="-":
 				val=0.0
+				values[cname]="-"
 			else:
 				val=float(raw_values[i])
 				values[cname]=val
@@ -182,13 +191,19 @@ def parse_pmctrack_output(infile,outfile,metrics,bypass,verbose,acum_mode,csv_mo
 		for md in metric_descriptors:
 			(name,expr,text)=md
 			try:
-				metric_val=eval(expr,values)
+				metric_val=eval_undef(expr,values)
 			except ZeroDivisionError:
 				metric_val=0.0
-			if csv_mode:
-				outtext=",%f" % metric_val
-			else:
-				outtext="%12f " % metric_val
+			if metric_val=="-":
+				if csv_mode:
+					outtext=",-" 
+				else:
+					outtext="%12s " % metric_val	
+			else:			
+				if csv_mode:
+					outtext=",%f" % metric_val
+				else:
+					outtext="%12f " % metric_val
 			outputfile.write(outtext)	
 			##to be able to define metrics based on others
 			values[name]=metric_val
