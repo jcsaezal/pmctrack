@@ -277,6 +277,10 @@ extern monitoring_module_t vexpress_sensors_mm;
 #ifdef CONFIG_SMART_POWER
 extern monitoring_module_t spower_mm;
 #endif
+#ifdef CONFIG_SMART_POWER_2
+extern monitoring_module_t spower2_mm;
+#endif
+
 
 /* Init monitoring module manager */
 int init_mm_manager(struct proc_dir_entry* pmc_dir)
@@ -314,6 +318,7 @@ int init_mm_manager(struct proc_dir_entry* pmc_dir)
 	}
 #endif
 
+
 	/*
 	 * This is the place where the various
 	 * monitoring modules available in PMCTrack
@@ -335,6 +340,9 @@ int init_mm_manager(struct proc_dir_entry* pmc_dir)
 #endif
 #ifdef CONFIG_SMART_POWER
 	load_monitoring_module(&spower_mm);
+#endif
+#ifdef CONFIG_SMART_POWER_2
+	load_monitoring_module(&spower2_mm);
 #endif
 
 	return 0;
