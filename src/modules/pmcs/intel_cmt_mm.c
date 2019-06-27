@@ -2,10 +2,13 @@
  *  intel_cmt_mm.c
  *
  *  PMCTrack monitoring module that provides support for
- * 	Intel Cache Monitoring Technology (CMT) and Intel Memory Bandwidth
- *  Monitoring (MBM)
+ * - Intel Cache Monitoring Technology (CMT)
+ * - Intel Memory Bandwidth Monitoring (MBM) 
+ * - Intel Cache Allocation Technology (CAT) 
+ * - Intel Memory Bandwidth Allocation (MBA) 
  *
  *  Copyright (c) 2015 Juan Carlos Saez <jcsaezal@ucm.es>
+ * 	      and Jorge Casas <jorcasas@ucm.es>
  *
  *  This code is licensed under the GNU GPL v2.
  */

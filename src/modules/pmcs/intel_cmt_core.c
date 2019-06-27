@@ -1,3 +1,15 @@
+/*
+ *  intel_cmt_mm.c
+ *
+ *   Implementation of the API for using various 
+ *   Intel RDT technologies within PMCTrack kernel module
+ *
+ *  Copyright (c) 2015 Juan Carlos Saez <jcsaezal@ucm.es>
+ * 	      and Jorge Casas <jorcasas@ucm.es>
+ *
+ *  This code is licensed under the GNU GPL v2.
+ */
+
 #include <pmc/intel_cmt.h>
 #include <linux/random.h>
 #include <linux/spinlock.h>
