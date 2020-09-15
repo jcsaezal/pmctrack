@@ -152,7 +152,7 @@ static inline void  __start_count_hw_event ( struct hw_event* exp )
 
 	u32 state;
 	state = armv8pmu_pmcr_read();
-	if( ! (state & ARMV8_PMCR_E) ) {
+	if( ! (state & ARMV8_PMCR_E)  ) {
 		printk(KERN_INFO "    * Setting ARMV8_PMCR_E bit (start) \n");
 		armv8pmu_pmcr_write(state | ARMV8_PMCR_E);
 	}
@@ -181,8 +181,8 @@ static inline void  __restart_count_hw_event ( struct hw_event* exp )
 	u32 state;
 	state = armv8pmu_pmcr_read();
 	if( ! (state & ARMV8_PMCR_E) ) {
-		printk(KERN_INFO "    * Setting ARMV8_PMCR_E bit (restart) \n");
-		armv8pmu_pmcr_write(state | ARMV8_PMCR_E);
+		printk(KERN_INFO "    * Setting ARMV8_PMCR_E bit (start) \n");
+		armv8pmu_pmcr_write(state | ARMV8_PMCR_E );
 	}
 
 	switch ( exp->type ) {

@@ -1,16 +1,4 @@
-/*
- *  intel_cmt_mm.c
- *
- *   Implementation of the API for using various 
- *   Intel RDT technologies within PMCTrack kernel module
- *
- *  Copyright (c) 2015 Juan Carlos Saez <jcsaezal@ucm.es>
- * 	      and Jorge Casas <jorcasas@ucm.es>
- *
- *  This code is licensed under the GNU GPL v2.
- */
-
-#include <pmc/intel_cmt.h>
+#include <pmc/intel_rdt.h>
 #include <linux/random.h>
 #include <linux/spinlock.h>
 
@@ -19,6 +7,8 @@ typedef struct {
 	uint_t rmid;				/* RMID */
 	atomic_t ref_counter;		/* Reference counter for this RMID */
 	unsigned char free_rmid;	/* Is this RMID free? */
+	uint64_t raw_bandwidth_value[RMID_MAX_LLCS];	/* For syswide MBM monitoring */
+	uint64_t bandwidth_value[RMID_MAX_LLCS];
 	struct list_head links;		/* prev and next pointers */
 } rmid_node_t;
 
@@ -27,8 +17,48 @@ static LIST_HEAD(available_rmids);			/* RMID free pool (doubly linked list) */
 static DEFINE_SPINLOCK(rmid_pool_lock);	/* Lock for the RMID pool */
 static int nr_available_rmids;
 static rmid_allocation_policy_t rmid_allocation_policy=RMID_FIFO;
+static uint_t* assigned_rmids;	/* For syswide MBM monitoring */
+static int nr_assigned_rmids;
+static intel_rdt_event_t* local_bandwidth_counts;
 
 const char* rmid_allocation_policy_str[NR_RMID_ALLOC_POLICIES]= {"FIFO","LIFO","RANDOM"};
+static intel_cmt_support_t* private_cmt_support=NULL;
+
+#ifdef DEBUG
+static void print_assigned_rmids(void)
+{
+	int i=0;
+	char buf[256];
+	char* dest=buf;
+
+	dest+=sprintf(dest,"RMIDs,#%d",nr_assigned_rmids);
+	for (i=0; i<nr_assigned_rmids; i++)
+		dest+=sprintf(dest,",%u",assigned_rmids[i]);
+
+	trace_printk("%s\n",buf);
+}
+#endif
+
+static void update_local_bandwidth(rmid_node_t* node, unsigned int llc_id /* Use zero */)
+{
+	u64 val=__rmid_read(node->rmid,L3_LOCAL_BW_EVENT_ID);
+
+	if (val & (RMID_VAL_ERROR | RMID_VAL_UNAVAIL)) {
+		trace_printk(KERN_INFO "Error when reading bandwidth value");
+		return;
+	}
+
+	val&=MAX_CMT_COUNT;
+
+	if(node->raw_bandwidth_value[llc_id]>val)
+		node->bandwidth_value[llc_id]=(MAX_CMT_COUNT - node->raw_bandwidth_value[llc_id])+val+1;
+	else
+		node->bandwidth_value[llc_id]=val-node->raw_bandwidth_value[llc_id];
+
+	node->bandwidth_value[llc_id]*=private_cmt_support->upscaling_factor;
+	node->raw_bandwidth_value[llc_id]=val;
+}
+
 
 /*
  * Initialize a pool with the RMID values
@@ -43,6 +73,24 @@ int initialize_rmid_pool(void)
 
 	if (node_pool == NULL) {
 		printk(KERN_INFO "Monitoring module was not able to successfully allocate memory for RMID node pool");
+		return -ENOMEM;
+	}
+
+	assigned_rmids= kmalloc(sizeof (uint_t)*(nr_available_rmids-1), GFP_KERNEL);
+	nr_assigned_rmids=0;
+
+	if (assigned_rmids == NULL) {
+		printk(KERN_INFO "Monitoring module was not able to successfully allocate memory for RMID array");
+		kfree(node_pool);
+		return -ENOMEM;
+	}
+
+	local_bandwidth_counts=kmalloc(sizeof (intel_rdt_event_t)*(nr_available_rmids-1), GFP_KERNEL);
+
+	if (local_bandwidth_counts == NULL) {
+		printk(KERN_INFO "Monitoring module was not able to successfully allocate memory for local bandwidth counts");
+		kfree(assigned_rmids);
+		kfree(node_pool);
 		return -ENOMEM;
 	}
 
@@ -74,6 +122,7 @@ int initialize_rmid_pool(void)
 void free_rmid_pool(void)
 {
 	kfree(node_pool);
+	kfree(assigned_rmids);
 }
 
 /* Remove a unused RMID from the free pool and return it. */
@@ -116,6 +165,11 @@ uint_t get_rmid(void)
 		nr_available_rmids--;
 		selected_rmid=rmid_node->rmid;
 		atomic_inc(&rmid_node->ref_counter);
+		assigned_rmids[nr_assigned_rmids++]=selected_rmid;
+		update_local_bandwidth(rmid_node,0);
+#ifdef DEBUG
+		print_assigned_rmids();
+#endif
 	}
 
 	spin_unlock_irqrestore(&rmid_pool_lock,flags);
@@ -154,10 +208,28 @@ void put_rmid(uint_t rmid)
 		return;
 
 	if (atomic_dec_and_test(&rmid_node->ref_counter)) {
+		int i=0;
+		uint_t rmid=0;
 		spin_lock_irqsave(&rmid_pool_lock,flags);
 		rmid_node->free_rmid=1;
+		rmid=rmid_node->rmid;
 		list_add_tail(&(rmid_node->links),&available_rmids);
 		nr_available_rmids++;
+
+		/* Delete item and compact array */
+		/* Find */
+		while (i<nr_assigned_rmids && assigned_rmids[i]!=rmid) {
+			i++;
+		}
+
+		/* Compact and delete */
+		for (; i<nr_assigned_rmids-1; i++)
+			assigned_rmids[i]=assigned_rmids[i+1];
+
+		nr_assigned_rmids--;
+#ifdef DEBUG
+		print_assigned_rmids();
+#endif
 		spin_unlock_irqrestore(&rmid_pool_lock,flags);
 	}
 }
@@ -176,6 +248,44 @@ void use_rmid(uint_t rmid)
 		return;
 
 	atomic_inc(&rmid_node->ref_counter);
+}
+
+
+/*
+ * Return array with per RMID event counts
+ * the length of the array and the aggregate
+ * system-wide count
+ */
+intel_rdt_event_t* intel_rdt_syswide_read_localbw(intel_cmt_support_t* cmt_support, unsigned int llc_id, unsigned int* count, uint64_t* aggregate_count)
+{
+	unsigned long flags;
+	int i=0;
+	uint64_t aggregate=0;
+	rmid_node_t* node;
+	intel_rdt_event_t* event_rmid;
+
+	spin_lock_irqsave(&rmid_pool_lock,flags);
+
+	/* Traverse assigned RMIDs */
+	for (i=0; i<nr_assigned_rmids; i++) {
+		node=&node_pool[assigned_rmids[i]-1];
+		event_rmid=&local_bandwidth_counts[assigned_rmids[i]-1];
+		update_local_bandwidth(node,llc_id);
+		event_rmid->rmid=node->rmid;
+		event_rmid->value=node->bandwidth_value[llc_id];
+		aggregate+=event_rmid->value;
+#ifdef DEBUG
+		trace_printk("RMID=%u,BW=%llu\n",event_rmid->rmid,event_rmid->value);
+#endif
+	}
+
+	/* Return values */
+	*count=nr_assigned_rmids;
+	*aggregate_count=aggregate;
+
+	spin_unlock_irqrestore(&rmid_pool_lock,flags);
+
+	return local_bandwidth_counts;
 }
 
 int intel_cmt_probe(void)
@@ -256,6 +366,9 @@ int intel_cmt_initialize(intel_cmt_support_t* cmt_support)
 
 	if (initialize_rmid_pool())
 		return -ENOMEM;
+
+	/* For MBM system-wide monitoring */
+	private_cmt_support=cmt_support;
 	return 0;
 }
 
@@ -295,6 +408,7 @@ int intel_cat_initialize(intel_cat_support_t* cat_support)
 int intel_cmt_release(intel_cmt_support_t* cmt_support)
 {
 	free_rmid_pool();
+	private_cmt_support=NULL;
 	return 0;
 }
 
@@ -352,6 +466,34 @@ int intel_mba_release(intel_mba_support_t* mba_support)
 	return 0;
 }
 
+int get_cat_cbm(unsigned long* mask, intel_cat_support_t* cat_support, unsigned int clos, int cpu)
+{
+	uint64_t val;
+
+	if (clos >= cat_support->cat_nr_cos_available)
+		return 1;
+
+	rdmsrl(IA32_LLC_MASK_0+clos, val);
+	(*mask)=val & cat_support->cat_cbm_mask;
+
+	return 0;
+}
+
+int get_mba_setting(unsigned long* val, intel_mba_support_t* mba_support, unsigned int clos, int cpu)
+{
+	uint64_t value;
+
+	if (!mba_support->mba_is_supported)
+		return 1;
+
+	if (clos >= mba_support->mba_nr_cos_available)
+		return 1;
+
+	rdmsrl(IA32_L2_QOS_EXT_BW_THRTL_0+clos, value);
+	(*val)=value;
+
+	return 0;
+}
 
 int intel_cat_print_capacity_bitmasks(char* str, intel_cat_support_t* cat_support)
 {

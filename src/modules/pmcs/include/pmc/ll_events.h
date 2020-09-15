@@ -82,6 +82,9 @@ static inline void __set_reset_value_hw_event (struct hw_event* exp, uint64_t re
 #include <pmc/phi/hw_events.h>
 #include <pmc/phi/pmc_bit_layout.h>
 #include <pmc/phi/pmc_const.h>
+#elif defined(CONFIG_PMC_PERF)
+#include <pmc/perf/hw_events.h>
+/*	#include <pmc/perf/pmc_const.h>		NOT NEEDED */
 #else
 "There is no monitoring support for current architecture"
 #endif

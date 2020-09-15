@@ -1,18 +1,19 @@
+
 /*
- *  pmu_config_x86.c
+ *  pmu_config_perf.c
  *
- *  Configuration code for Performance Monitoring Units (PMUs) on
- * 	general-purpose x86 processors
+ *  Configuration code for Performance Monitoring Units (PMUs)
+ *  using Perf Event's kernel API
  *
- *  Copyright (c) 2015 Juan Carlos Saez <jcsaezal@ucm.es>
+ *  Copyright (c) 2020 Jaime Saez de Buruaga <jsaezdeb@ucm.es>
  *
  *  This code is licensed under the GNU GPL v2.
  */
 /*
- * Part of this code is based on oprofile's kernel module.
+ * Part of this code is based on pmu_config_x86.c
  */
 
-
+#include <linux/perf_event.h>
 #include <pmc/pmu_config.h>
 #include <asm/nmi.h>
 #include <asm/apic.h>
@@ -25,10 +26,10 @@
 #include <linux/cpuhotplug.h>
 #endif
 
-/** Variables taken from oprofile kernel module */
-static DEFINE_PER_CPU(unsigned long, saved_lvtpc);
-static int nmi_enabled;  /* Interrupts enabled */
-static int ctr_running;  /* Counters configured */
+
+/* Default per-CPU set of PMC events */
+static DEFINE_PER_CPU(core_experiment_t, cpu_exp);
+
 
 /* Variables to aid in detecting the various PMUs in the system */
 int coretype_cpu_static[NR_CPUS];
@@ -44,7 +45,7 @@ pmu_props_t pmu_props_cpu[NR_CPUS];
  * Code to list and detect supported
  * Intel processors
  */
-#if defined(CONFIG_PMC_CORE_2_DUO) || defined(CONFIG_PMC_CORE_I7)
+#if defined(CONFIG_PMC_CORE_2_DUO) || defined(CONFIG_PMC_CORE_I7) || defined (CONFIG_PMC_PERF )
 
 /* Supported Intel Processors */
 static struct pmctrack_cpu_model cpu_models[]= {
@@ -77,7 +78,8 @@ static void init_pmu_props_cpu(void* dummy)
 	int i=0;
 	pmu_props_t* props=&pmu_props_cpu[this_cpu];
 
-#if defined(CONFIG_PMC_CORE_2_DUO) || defined(CONFIG_PMC_CORE_I7)
+//We'll asume intel for now
+#if defined(CONFIG_PMC_PERF) || defined(CONFIG_PMC_CORE_2_DUO) || defined(CONFIG_PMC_CORE_I7)
 	cpuid_regs_t rv;
 	int nr_gp_pmcs;
 	unsigned int model=0;
@@ -128,8 +130,6 @@ static void init_pmu_props_cpu(void* dummy)
 
 	coretype_cpu_static[this_cpu]=0;
 	props->coretype=0; /* For now we do nothing fancy here*/
-	/* Reset this core's counters and msrs ... */
-	mc_clear_all_platform_counters(props);
 }
 
 
@@ -226,7 +226,7 @@ void init_pmu_props(void)
 
 	for (coretype=0; coretype<nr_core_types; coretype++) {
 		cpu=get_any_cpu_coretype(coretype);
-#ifdef SCHED_AMP //HACK	    
+#ifdef SCHED_AMP //HACK
 		if (cpu==-1)
 			cpu=get_any_cpu_coretype(AMP_SLOW_CORE); /* Clone slow core information */
 #endif
@@ -249,141 +249,185 @@ void init_pmu_props(void)
 }
 
 /*
+ * Budget used is Up. PMU genrate an interrupt
+ * this run in hardirq, nmi context with irq disabled
+ */
+void event_overflow_callback(struct perf_event *event,
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3, 2, 0)
+                             int nmi,
+#endif
+                             struct perf_sample_data *data, struct pt_regs *regs)
+{
+	uint64_t overflow_mask;
+	/* Retrieve task_struct from current macro */
+	struct task_struct *p=current;
+	pmon_prof_t* prof=p->pmc;
+	core_experiment_t* core_exp=NULL;
+
+	if (!prof || !prof->this_tsk->prof_enabled || !prof->pmcs_config )
+		return;
+
+	/* Retrieve core_experiment from pmon_prof_t */
+	core_exp=prof->pmcs_config;
+
+	overflow_mask=(0x1 << core_exp->log_to_phys[core_exp->ebs_idx]);
+
+	do_count_on_overflow(regs, overflow_mask);
+}
+
+/*
+ * Initialization of perf event counter using a PMCTrack's
+ * configuration structrure
+ */
+struct perf_event *init_counter(struct task_struct* task,int cpu,
+                                pmc_usrcfg_t* pmc_cfg, uint64_t config_mask)
+{
+	struct perf_event *event = NULL;
+	struct perf_event_attr sched_perf_hw_attr = {
+		.type           = PERF_TYPE_RAW, /* For consistency we always use RAW events */
+		.size           = sizeof(struct perf_event_attr),
+		.disabled       = 1, /* Critical: alwas disabled on creation */
+		.exclude_kernel = (pmc_cfg->cfg_os==0 && pmc_cfg->cfg_usr==1),
+	};
+
+	sched_perf_hw_attr.config = config_mask;
+
+	if (pmc_cfg->cfg_ebs_mode)
+		sched_perf_hw_attr.sample_period = pmc_cfg->cfg_reset_value;
+
+	event = perf_event_create_kernel_counter(
+	            &sched_perf_hw_attr,
+	            cpu, task,
+	            pmc_cfg->cfg_ebs_mode?event_overflow_callback:NULL
+#if LINUX_VERSION_CODE > KERNEL_VERSION(3, 2, 0)
+	            , NULL
+#endif
+	        );
+
+	if(!event)
+		return NULL;
+
+	if(IS_ERR(event)) {
+		pr_err("cpu%d. unable to create perf event: %ld\n", cpu, PTR_ERR(event));
+		return NULL;
+	}
+
+	pr_info("cpu%d. enabled counter.\n", cpu);
+
+	return event;
+}
+
+/*
  * Transform an array of platform-agnostic PMC counter configurations (pmc_cfg)
  * into a low level structure that holds the necessary data to configure hardware counters.
  */
-int do_setup_pmcs(pmc_usrcfg_t* pmc_cfg, int used_pmcs_msk,core_experiment_t* exp, int cpu, int exp_idx, struct task_struct* p)
+int do_setup_pmcs(pmc_usrcfg_t* pmc_cfg, int used_pmcs_msk,core_experiment_t* exp,int cpu, int exp_idx, struct task_struct *task)
 {
-	int i;
+	int i,j;
 	int gppmc_id=0;
 	low_level_exp* lle;
 	pmu_props_t* props_cpu=get_pmu_props_cpu(cpu);
-	uint64_t reset_value=0;
 
 #ifndef CONFIG_PMC_AMD
+	uint64_t config_mask;
 	struct hw_event* llex;
 	int nr_fixed_pmcs_used=0;
-	msr_perf_fixed_ctr_ctrl fixed_ctrl;
-	fixed_count_exp *fce;
-
-	/* Configure fixed function counter here */
-	init_msr_perf_fixed_ctr_ctrl(&fixed_ctrl);
+	unsigned int perf_config_fixed[]= {0x00c0,0x003c,0x0300};
 #endif
 	init_core_experiment_t(exp, exp_idx);
+	exp->need_setup=0; /* In perf setup has been already handled */
+
 	/* Set mask of used pmcs !! */
 	exp->used_pmcs=used_pmcs_msk;
 
 	for (i=0; i<MAX_LL_EXPS; i++) {
 		/* PMC is used */
 		if ( used_pmcs_msk & (0x1<<i)) {
-			/* Clear reset value */
-			reset_value=0;
 #ifndef CONFIG_PMC_AMD
-			/* Determine if this is a fixed function counter or not */
+			gppmc_id=i-props_cpu->nr_fixed_pmcs;
+#endif
+			/* Set up int just in case */
+			if (pmc_cfg[i].cfg_ebs_mode)  ///* Set EBS idx */
+				exp->ebs_idx=exp->size;
+
+			lle=&exp->array[exp->size++];
+
+			/* Retrieve low level exp from core_experiment */
+			llex=&lle->event;
+
+			init_hw_event(llex);
+
+#ifndef CONFIG_PMC_AMD
 			if (props_cpu->nr_fixed_pmcs>0 && i<props_cpu->nr_fixed_pmcs) {
-				int fixed_counter_id=i;
-				/* Enable user-mode count for all the available fixed-function PMCs*/
-
-				/* Setup enable 2=user 1=os 3=all !! */
-				set_bit_field(&fixed_ctrl.m_enable[fixed_counter_id],(pmc_cfg[i].cfg_usr << 1)|(pmc_cfg[i].cfg_os));
-
-				/* Set up int just in case */
-				if (pmc_cfg[i].cfg_ebs_mode) {
-					/* Force to user mode in this case */
-					set_bit_field(&fixed_ctrl.m_enable[fixed_counter_id],(pmc_cfg[i].cfg_usr << 1));
-					set_bit_field(&fixed_ctrl.m_pmi[fixed_counter_id],1);
-					reset_value= ((-pmc_cfg[i].cfg_reset_value) & props_cpu->pmc_width_mask);
-					/* Set EBS idx */
-					exp->ebs_idx=exp->size;
-				}
-
-				lle=&exp->array[exp->size++];
-
-				init_low_level_exp_id(lle,"fixed-count",i);
-				llex=&lle->event;
-				init_hw_event(llex,_FIXED);
-
-				fce=&llex->g_event.f_exp;
-				init_fixed_count_exp(fce,MSR_PERF_FIXED_CTR0+fixed_counter_id,fixed_ctrl.m_value,reset_value);
-
+				/* Retrieve PERF RAW config from fixed/normal event config */
+				config_mask=perf_config_fixed[i];
 				nr_fixed_pmcs_used++;
-			} else
-#endif
-			{
-				simple_exp* se;
-				evtsel_msr evtsel;
-				init_evtsel_msr(&evtsel);
-				gppmc_id=i-props_cpu->nr_fixed_pmcs;
-
-#ifndef	CONFIG_PMC_AMD
-				set_bit_field(&evtsel.m_evtsel, pmc_cfg[i].cfg_evtsel);
-				/*
-				 * In modern Intel CPUs with more than 4 GP-PMCs the 'os' flag must be
-				 * enable forcefully for GP-PMCs whose ID ranges between 4 and 7. Otherwise
-				 * these performance counters will always display a 0 count.
-				 * Note that this is necessary due to a hardware issue.
-				 */
-				if (gppmc_id>=4 && gppmc_id<=7)
-					pmc_cfg[i].cfg_os=1;
-#else
-				set_bit_field(&evtsel.m_evtsel, pmc_cfg[i].cfg_evtsel);
-				set_bit_field(&evtsel.m_evtsel2,(pmc_cfg[i].cfg_evtsel >>8));
-#endif
-				set_bit_field(&evtsel.m_umask, pmc_cfg[i].cfg_umask);
-				set_bit_field(&evtsel.m_usr, pmc_cfg[i].cfg_usr);
-				set_bit_field(&evtsel.m_os,pmc_cfg[i].cfg_os);
-				set_bit_field(&evtsel.m_e,pmc_cfg[i].cfg_edge);
-				set_bit_field(&evtsel.m_en,1);
-				set_bit_field(&evtsel.m_inv, pmc_cfg[i].cfg_inv);
-				set_bit_field(&evtsel.m_cmask, pmc_cfg[i].cfg_cmask);
-#ifndef	CONFIG_PMC_AMD
-				set_bit_field(&evtsel.m_int, 1);
-				set_bit_field(&evtsel.m_any, pmc_cfg[i].cfg_any);
-#endif
-				/* Set up int just in case */
-				if (pmc_cfg[i].cfg_ebs_mode) {
-#ifdef	CONFIG_PMC_AMD
-					set_bit_field(&evtsel.m_int, 1);
-#endif
-					set_bit_field(&evtsel.m_os, 0);	/* Force os flag to zero in this case */
-					reset_value= ((-pmc_cfg[i].cfg_reset_value) & props_cpu->pmc_width_mask);
-					/* Set EBS idx */
-					exp->ebs_idx=exp->size;
-				}
-
-				/* HW configuration ready!! */
-				lle=&exp->array[exp->size++];
-
-				init_low_level_exp_id(lle,"gp-pmc",i);
-				init_hw_event(&lle->event,_SIMPLE);
-				se=&lle->event.g_event.s_exp;
-
-				init_simple_exp (se, 				/* Simple exp */
-				                 PMC_MSR_INITIAL_ADDRESS+gppmc_id, 	/* MSR address of the PMC */
-				                 gppmc_id, 				/* Assigned PMC ID */
-				                 EVTSEL_MSR_INITIAL_ADDRESS+gppmc_id,	/* MSR address of the associated evtsel */
-				                 evtsel.m_value,
-				                 reset_value
-				                );
+			} else {
+				/* Retrieve configuration from eventsel */
+				config_mask=(pmc_cfg[i].cfg_umask << 8 | pmc_cfg[i].cfg_evtsel);
 			}
+
+			/*
+			 * In modern Intel CPUs with more than 4 GP-PMCs the 'os' flag must be
+			 * enable forcefully for GP-PMCs whose ID ranges between 4 and 7. Otherwise
+			 * these performance counters will always display a 0 count.
+			 * Note that this is necessary due to a hardware issue.
+			 */
+			if (gppmc_id>=4 && gppmc_id<=7)
+				pmc_cfg[i].cfg_os=1;
+#else
+			/* Retrieve configuration from eventsel */
+			config_mask=(pmc_cfg[i].cfg_umask << 8 | pmc_cfg[i].cfg_evtsel);
+#endif
+			/* Retrieve 'reset_value' from config to hw_event */
+			llex->reset_value=pmc_cfg[i].cfg_reset_value;
+
+			/* Init PERF counter */
+			llex->event=init_counter(task,cpu, &pmc_cfg[i], config_mask);
+
+			if (llex->event==NULL)
+				goto free_up_err;
+
+			/* Init EVENT TASK struct */
+			llex->task=task;
 
 			/* Add metainfo in the core experiment */
 			exp->log_to_phys[exp->size-1]=i;
 			exp->phys_to_log[i]=exp->size-1;
 		}
 	}
-#ifndef CONFIG_PMC_AMD
-	/* Make sure that all fixed-count events have the same value for the ctrl_msr
-		(the last one was configured okay but the others did not) */
-	for (i=1; i<nr_fixed_pmcs_used; i++) {
-		lle=&exp->array[exp->size-(i+1)];
-		fce=&lle->event.g_event.f_exp;
-		fce->evtsel.new_value=fixed_ctrl.m_value;
-	}
-#endif
+
 	return 0;
+free_up_err:
+	for (j=0; j<i; j++)
+		if ( used_pmcs_msk & (0x1<<j))
+			perf_event_release_kernel(exp->array[j].event.event);
+
+	return -EINVAL;
 }
 
+
+/*
+ * Enable perf counter asociated with perf_event.
+ */
+void perf_enable_counters(core_experiment_t* exp)
+{
+	int i;
+
+	for(i=0; i<exp->size; ++i)
+		perf_event_enable(exp->array[i].event.event);
+}
+
+/*
+ * Disable perf counter asociated with perf_event.
+ */
+void perf_disable_counters( core_experiment_t* exp)
+{
+	int i;
+
+	for(i=0; i<exp->size; ++i)
+		perf_event_disable(exp->array[i].event.event);
+}
 
 /*
  * Fill the various fields in a pmc_cfg structure based on a PMC configuration string specified in raw format
@@ -534,88 +578,13 @@ int parse_pmcs_strconfig(const char *buf,
 }
 
 /*
- * Perform a default initialization of all performance monitoring counters
- * in the current CPU.
- */
-void mc_clear_all_platform_counters(pmu_props_t* props_cpu)
-{
-	int i;
-	_msr_t msr;
-	int cnt=0;
-	uint64_t  gp_counter_mask=0;
-#ifndef CONFIG_PMC_AMD
-	_msr_t fixed_count_msr;
-#endif
-	_pmc_t pmc;
-
-
-	for (i=0; i<props_cpu->nr_gp_pmcs; i++,cnt++) {
-		msr.address=EVTSEL_MSR_INITIAL_ADDRESS+i;
-		msr.reset_value=0;
-		pmc.pmc_address=i;
-		pmc.msr.address=PMC_MSR_INITIAL_ADDRESS+i;
-		pmc.msr.reset_value=0;
-		resetMSR(&msr);
-		resetMSR(&pmc.msr);
-		gp_counter_mask|=1<<i;
-	}
-
-
-#ifndef CONFIG_PMC_AMD
-	for (i=0; i<props_cpu->nr_fixed_pmcs; i++,cnt++) {
-		msr.address=MSR_PERF_FIXED_CTR_CTRL;
-		msr.reset_value=0;
-		fixed_count_msr.address=MSR_PERF_FIXED_CTR0+i;
-		fixed_count_msr.reset_value=0;
-
-		resetMSR(&msr);
-		resetMSR(&fixed_count_msr);
-	}
-
-	/* THINK ABOUT THIS!!
-			msr.address=MSR_PERF_GLOBAL_OVF_CTRL;
-			msr.reset_value=0;
-			resetMSR(&msr);
-	*/
-	msr.address=MSR_PERF_GLOBAL_CTRL;
-	msr.reset_value=(gp_counter_mask) | (0x7ULL << 32ULL) ;
-	resetMSR(&msr);
-
-#endif
-
-}
-
-/*
  * Generate a summary string with the configuration of a hardware counter (lle)
  * in human-readable format. The string is stored in buf.
  */
 int print_pmc_config(low_level_exp* lle, char* buf)
 {
-	struct hw_event* event=&lle->event;
-	_msr_t* msrdesc=NULL;
-	_msr_t* msrpmc=NULL;
-
-	switch ( event->type ) {
-	case _SIMPLE:
-		msrdesc=& ( event->g_event.s_exp.evtsel);
-		msrpmc=& ( event->g_event.s_exp.pmc.msr);
-		break;
-#ifndef CONFIG_PMC_AMD
-	case _FIXED:
-		msrdesc=& ( event->g_event.f_exp.evtsel);
-		msrpmc=& ( event->g_event.f_exp.pmc);
-		break;
-#endif
-	default:
-		break;
-	}
-
-	if (msrdesc) {
-		return sprintf(buf,"evtsel%d=0x%012llX\npmcReset=0x%012llX\n",lle->pmc_id,msrdesc->new_value,msrpmc->reset_value);
-	} else {
-		return 0;
-	}
-
+	/* TBD */
+	return 0;
 }
 
 
@@ -673,26 +642,6 @@ int print_pmu_msr_values_debug(char* line_out)
 #endif
 
 
-/*
- * Invoked when a PMC overflows
- * (On success return a positive value)
- */
-static int pmc_do_nmi_counter_overflow(unsigned int cmd, struct pt_regs *regs)
-{
-
-	unsigned int overflow_mask=read_overflow_mask();
-
-	/* Process Counter overflow */
-	if (overflow_mask)
-		do_count_on_overflow(regs,overflow_mask);
-
-
-	reset_overflow_status();
-	/* Write apic again */
-	apic_write(APIC_LVTPC, APIC_DM_NMI);
-	return 1;
-}
-
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4,10,0)
 /* TODO Not implemented for now (robust for online, offline cpus) */
 int pmctrack_cpu_notifier(struct notifier_block *b, unsigned long action,
@@ -728,99 +677,6 @@ static int pmctrack_cpu_down_prep(unsigned int cpu)
 }
 #endif
 
-/* Enable the PERF interrupt on this CPU */
-static void pmc_nmi_cpu_setup(void *dummy)
-{
-	int cpu = smp_processor_id();
-	per_cpu(saved_lvtpc, cpu) = apic_read(APIC_LVTPC);
-	apic_write(APIC_LVTPC, APIC_DM_NMI);
-}
-
-static void pmc_unfill_addresses(int nr_counts) { }
-static int pmc_fill_in_addresses(void)
-{
-	return 0;
-}
-
-
-
-
-
-/*
- * Prepare a CPU to handle interrupts on PMC overflow
- * (Function based on nmi_setup() code in the Linux kernel
- * -  arch/oprofile/nmi_int.c )
- */
-static int pmc_nmi_setup(void)
-{
-	int err=0;
-	int ret;
-	nmi_enabled = 0;
-	ctr_running = 0;
-	/* make variables visible to the nmi handler: */
-	smp_mb();
-
-	if ((err = pmc_fill_in_addresses())) {
-		printk("Can't fill in pmc addresses\n");
-		goto out_pmcs_nmi_setup;
-	}
-
-#ifdef V_2639
-	if ((err = register_die_notifier(&pmctrack_exceptions_nb))) {
-		/* Undo stuff */
-		pmc_unfill_addresses(-1);
-		goto out_pmcs_nmi_setup;
-	}
-#else
-	register_nmi_handler(NMI_LOCAL, pmc_do_nmi_counter_overflow, 0, "PMI_PMCTRACK");
-#endif
-	get_online_cpus();
-
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0)
-	register_cpu_notifier(&pmctrack_cpu_nb);
-	ret=0;
-#else
-	ret = cpuhp_setup_state(CPUHP_AP_ONLINE_DYN, "pmctrack/cpu:online",
-	                        pmctrack_cpu_online, pmctrack_cpu_down_prep);
-	if (ret < 0)
-		goto out_pmcs_nmi_setup;
-	pcap_pmctrack_online = ret;
-#endif
-	nmi_enabled = 1;
-	/* make nmi_enabled visible to the nmi handler: */
-	smp_mb();
-	on_each_cpu(pmc_nmi_cpu_setup, NULL, 1);
-	put_online_cpus();
-
-	reset_overflow_status();
-
-out_pmcs_nmi_setup:
-	return err;
-}
-
-/*
- * Perform the necessary steps to stop receiving interrupts on PMC overflow
- * on the current CPU
- */
-static void pmc_nmi_cpu_shutdown(void *dummy)
-{
-	unsigned int v;
-	int cpu = smp_processor_id();
-
-	/* restoring APIC_LVTPC can trigger an apic error because the delivery
-	  * mode and vector nr combination can be illegal. That's by design: on
-	  * power on apic lvt contain a zero vector nr which are legal only for
-	  * NMI delivery mode. So inhibit apic err before restoring lvtpc
-	*/
-	v = apic_read(APIC_LVTERR);
-	apic_write(APIC_LVTERR, v | APIC_LVT_MASKED);
-	apic_write(APIC_LVTPC, per_cpu(saved_lvtpc, cpu));
-	apic_write(APIC_LVTERR, v);
-	/* nmi_cpu_restore_registers(msrs);
-	if (model->cpu_down)
-		model->cpu_down();
-	*/
-}
 
 /* Stop PMUs and free up resources allocated by init_pmu() */
 int pmu_shutdown(void)
@@ -831,24 +687,16 @@ int pmu_shutdown(void)
 #else
 	cpuhp_remove_state(pcap_pmctrack_online);
 #endif
-	on_each_cpu(pmc_nmi_cpu_shutdown, NULL, 1);
-	nmi_enabled = 0;
-	ctr_running = 0;
 	put_online_cpus();
 	smp_mb();
-#ifdef V_2639
-	unregister_die_notifier(&pmctrack_exceptions_nb);
-#else
-	unregister_nmi_handler(NMI_LOCAL, "PMI_PMCTRACK");
-#endif
-	pmc_unfill_addresses(-1); // Return pmcs!!
 	return 0;
 }
 
 /* Initialize the PMUs of the various CPUs in the system  */
 int init_pmu(void)
 {
-	int dev=0;
+	//int dev=0;
+	int ret=0;
 #ifdef CONFIG_PMC_AMD
 	if (boot_cpu_data.x86_vendor!=X86_VENDOR_AMD)
 		return -ENOTSUPP;
@@ -857,69 +705,20 @@ int init_pmu(void)
 		return -ENOTSUPP;
 #endif
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0)
+	register_cpu_notifier(&pmctrack_cpu_nb);
+	ret=0;
+#else
+	ret = cpuhp_setup_state(CPUHP_AP_ONLINE_DYN, "pmctrack/cpu:online",
+	                        pmctrack_cpu_online, pmctrack_cpu_down_prep);
+	if (ret < 0)
+		return -ENOTSUPP;
+
+	pcap_pmctrack_online = ret;
+#endif
+
 	init_pmu_props();
-
-
-	if((dev = pmc_nmi_setup()) != 0) {
-		printk("Error in pmc_nmi_setup()");
-		return dev;
-	}
 
 	return 0;
 }
-
-#ifdef CONFIG_PMC_AMD
-/* No overflow register in AMD processors */
-void reset_overflow_status(void) {}
-unsigned int read_overflow_mask(void)
-{
-	return 0x1;
-}
-#else
-/* Reset the PMC overflow register */
-void reset_overflow_status(void)
-{
-	_msr_t status;
-	_msr_t overflow;
-
-
-	status.address=MSR_PERF_GLOBAL_STATUS;
-	overflow.address=MSR_PERF_GLOBAL_OVF_CTRL;
-
-	readMSR(&status);
-	overflow.reset_value=status.new_value;
-	resetMSR(&overflow);
-
-}
-
-#define FIXED_COUNTERS_STARTING_OVF_BIT 32
-#define GP_COUNTERS_STARTING_OVF_BIT 0
-
-/*
- * Return a bitmask specifiying which PMCs overflowed
- * This bitmask must be in a platform-independent "normalized" format.
- * bit(i,mask)==1 if pmc_i overflowed
- * (bear in mind that lower PMC ids are reserved for
- * fixed-function PMCs)
- */
-unsigned int read_overflow_mask(void)
-{
-	_msr_t status;
-	unsigned int mask=0;
-	pmu_props_t* props=get_pmu_props_cpu(smp_processor_id());
-	int idx,i;
-	uint64_t pmcn=0;
-
-	status.address=MSR_PERF_GLOBAL_STATUS;
-	readMSR(&status);
-
-	for (i=0,idx=FIXED_COUNTERS_STARTING_OVF_BIT; i<props->nr_fixed_pmcs; i++,idx++,pmcn++)
-		mask|=((status.new_value>>idx)&0x1ULL)<<pmcn;
-
-	for (i=0,idx=GP_COUNTERS_STARTING_OVF_BIT; i<props->nr_gp_pmcs; i++,idx++,pmcn++)
-		mask|=((status.new_value>>idx)&0x1ULL)<<pmcn;
-
-	return mask;
-}
-#endif
 

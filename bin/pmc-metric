@@ -226,7 +226,8 @@ def parse_pmctrack_output(infile,outfile,metrics,bypass,verbose,acum_mode,csv_mo
 				try:
 					metric_val=eval(expr,counts)
 					if len(expr.co_names)==1: ## Only one variable
-						metric_val=metric_val/nr_samples
+						if not name.startswith("energy"):
+							metric_val=metric_val/nr_samples
 				except ZeroDivisionError:
 					metric_val=0.0
 				counts[name]=metric_val ## Evaluate recursive metrics

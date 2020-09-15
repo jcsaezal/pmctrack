@@ -33,6 +33,7 @@ typedef struct {
 	uint_t virt_counter_mask;
 	uint64_t pmc_values[MAX_LL_EXPS];
 	pmc_sample_t last_sample;
+	ktime_t ref_time;
 	spinlock_t lock;
 } cpu_syswide_t;
 
@@ -119,7 +120,6 @@ static int refresh_counts_cpu(cpu_syswide_t* cpudata)
  */
 static void syswide_monitoring_sample_cpu(void* dummy)
 {
-
 	int cpu=smp_processor_id();
 	cpu_syswide_t* cur=&per_cpu(cpu_syswide, cpu);
 	core_experiment_t* core_exp=cur->cur_config;
@@ -128,6 +128,7 @@ static void syswide_monitoring_sample_cpu(void* dummy)
 	pmc_sample_t* sample=&cur->last_sample;
 	unsigned long flags=0;
 	int i=0;
+	ktime_t now;
 
 	/* Grab the spinlock to avoid races when updating "pmc_values" */
 	spin_lock_irqsave(&cur->lock,flags);
@@ -142,6 +143,8 @@ static void syswide_monitoring_sample_cpu(void* dummy)
 		}
 	}
 
+	now=ktime_get();
+
 	/* Generate sample ... */
 	sample->coretype=cur_coretype;
 	sample->exp_idx=core_exp?core_exp->exp_idx:0;
@@ -150,7 +153,8 @@ static void syswide_monitoring_sample_cpu(void* dummy)
 	sample->virt_mask=0;
 	sample->nr_virt_counts=0;
 	sample->pid=cpu; /* In syswide mode -> this field is reused to store the CPU */
-
+	sample->elapsed_time=raw_ktime(ktime_sub(now,cur->ref_time));
+	cur->ref_time=now;
 
 	/* Call the estimation module if the user requested virtual counters */
 	if (cur->virt_counter_mask)
@@ -174,7 +178,11 @@ static void syswide_monitoring_sample_cpu(void* dummy)
 }
 
 /* Main timer function for the syswide-monitoring mode */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,15,0)
 static void fire_syswide_timer(unsigned long data)
+#else
+static void fire_syswide_timer(struct timer_list *t)
+#endif
 {
 	cpu_syswide_t* cur=NULL;
 	unsigned long flags;
@@ -276,10 +284,14 @@ int syswide_monitoring_init(void)
 	spin_lock_init(&syswide_ctl.lock);
 
 	/* Initialize timer fields but do not activate it yet */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,15,0)
 	init_timer(&syswide_ctl.syswide_timer);
 	syswide_ctl.syswide_timer.expires=0; /* Any default value will do here */
 	syswide_ctl.syswide_timer.data=0;
 	syswide_ctl.syswide_timer.function=fire_syswide_timer;
+#else
+	timer_setup(&syswide_ctl.syswide_timer, fire_syswide_timer, 0);
+#endif
 	syswide_ctl.syswide_timer_period=HZ;
 	syswide_ctl.pause_syswide_monitor=0; /* Enabled by default */
 
@@ -359,6 +371,8 @@ static void syswide_monitoring_start_cpu(void* dummy)
 		mc_clear_all_counters(cur->cur_config);
 		mc_restart_all_counters(cur->cur_config);
 	}
+
+	cur->ref_time=ktime_get();
 
 	/* Tell the monitoring module to start syswide monitoring */
 	if (cur->virt_counter_mask)

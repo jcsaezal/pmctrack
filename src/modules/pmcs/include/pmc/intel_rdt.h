@@ -1,5 +1,5 @@
-#ifndef PMC_INTEL_CMT_H
-#define PMC_INTEL_CMT_H
+#ifndef PMC_INTEL_RDT_H
+#define PMC_INTEL_RDT_H
 
 #include <linux/types.h>
 #include <pmc/pmu_config.h> //For cpuid_regs_t
@@ -60,6 +60,13 @@ typedef struct {
 	unsigned int cos_id;
 } intel_cmt_thread_struct_t;
 
+
+/* Structure to expose an RDT event for a specific rmid */
+typedef struct {
+	unsigned int rmid;
+	uint64_t value;
+} intel_rdt_event_t;
+
 /* Supported RMID allocation policies */
 typedef enum {
 	RMID_FIFO,
@@ -110,6 +117,13 @@ int intel_mba_set_delay_values(intel_mba_support_t* mba_support, unsigned int id
 void intel_cmt_update_supported_events(intel_cmt_support_t* cmt_support,intel_cmt_thread_struct_t* data, unsigned int llc_id);
 
 
+/*
+ * Return array with per RMID event counts
+ * the length of the array and the aggregate
+ * system-wide count
+ */
+intel_rdt_event_t* intel_rdt_syswide_read_localbw(intel_cmt_support_t* cmt_support, unsigned int llc_id, unsigned int* count, uint64_t* aggregate_count);
+
 /* Remove a unused RMID from the free pool and return it. */
 unsigned int get_rmid(void);
 
@@ -152,6 +166,10 @@ static inline void __unset_rmid(void)
 {
 	wrmsr(MSR_IA32_PQR_ASSOC,DISABLE_RMID,0);
 }
+
+int get_cat_cbm(unsigned long* mask, intel_cat_support_t* cat_support, unsigned int clos, int cpu);
+
+int get_mba_setting(unsigned long* val, intel_mba_support_t* mba_support, unsigned int clos, int cpu);
 
 
 #endif

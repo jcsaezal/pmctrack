@@ -125,6 +125,8 @@ typedef struct monitoring_module {
 } monitoring_module_t;
 
 
+/* To enable process termination via signals */
+void pmctrack_terminate_process(struct task_struct* p);
 /* Init monitoring module manager */
 int init_mm_manager(struct proc_dir_entry* pmc_dir);
 /* Free up resources allocated by the monitoring module manager */

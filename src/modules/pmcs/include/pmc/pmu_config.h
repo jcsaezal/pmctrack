@@ -55,7 +55,7 @@ typedef struct {
 	unsigned char cfg_os;
 	uint64_t cfg_reset_value;
 	unsigned char cfg_ebs_mode;
-#if defined(CONFIG_PMC_CORE_2_DUO) || defined(CONFIG_PMC_AMD) || defined(CONFIG_PMC_CORE_I7) || defined(CONFIG_PMC_PHI)
+#if defined(CONFIG_PMC_CORE_2_DUO) || defined(CONFIG_PMC_AMD) || defined(CONFIG_PMC_CORE_I7) || defined(CONFIG_PMC_PHI)  || defined(CONFIG_PMC_PERF)
 	/* extra fields for x86 platforms */
 	unsigned int cfg_umask;
 	unsigned char cfg_edge;
@@ -65,7 +65,7 @@ typedef struct {
 #endif
 } pmc_usrcfg_t;
 
-#if defined(CONFIG_PMC_CORE_2_DUO) || defined(CONFIG_PMC_AMD) || defined(CONFIG_PMC_CORE_I7) || defined(CONFIG_PMC_PHI)
+#if defined(CONFIG_PMC_CORE_2_DUO) || defined(CONFIG_PMC_AMD) || defined(CONFIG_PMC_CORE_I7) || defined(CONFIG_PMC_PHI) || defined(CONFIG_PMC_PERF)
 
 /*** CPUID-related datatypes and macros ***/
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,14,0)
@@ -133,6 +133,18 @@ int init_pmu(void);
 /* Stop PMUs and free up resources allocated by init_pmu() */
 int pmu_shutdown(void);
 
+#ifdef CONFIG_PMC_PERF
+static inline void reset_overflow_status(void) {}
+static inline void mc_clear_all_platform_counters(pmu_props_t* props_cpu) { }
+/*
+ * Enable perf counter asociated to perf_event given by parameter.
+ */
+void perf_enable_counters(core_experiment_t* exp);
+/*
+ * Disable perf counter asociated to perf_event given by parameter.
+ */
+void perf_disable_counters(core_experiment_t* exp);
+#else
 /* Reset the PMC overflow register (if the platform is provided with such a register)
  * in the current CPU where the function is invoked.
  */
@@ -144,9 +156,15 @@ void reset_overflow_status(void);
  * bit(i,mask)==1 if pmc_i overflowed
  * (bear in mind that lower PMC ids are reserved for
  * fixed-function PMCs)
- */
+*/
 unsigned int read_overflow_mask(void);
-
+/*
+ * Perform a default initialization of all performance monitoring counters
+ * in the current CPU. The PMU properties are passed as a parameter for
+ * efficiency reasons
+ */
+void mc_clear_all_platform_counters(pmu_props_t* props_cpu);
+#endif
 /*
  * This function gets invoked from the platform-specific PMU code
  * when a PMC overflow interrupt is being handled. The function
@@ -159,7 +177,8 @@ void do_count_on_overflow(struct pt_regs *reg, unsigned int overflow_mask);
  * Transform an array of platform-agnostic PMC counter configurations (pmc_cfg)
  * into a low level structure that holds the necessary data to configure hardware counters.
  */
-void do_setup_pmcs(pmc_usrcfg_t* pmc_cfg, int used_pmcs_msk,core_experiment_t* exp, int cpu, int exp_idx);
+int do_setup_pmcs(pmc_usrcfg_t* pmc_cfg, int used_pmcs_msk,core_experiment_t* exp, int cpu, int exp_idx, struct task_struct* p
+                 );
 
 /*
  * Fill the various fields in a pmc_cfg structure based on a PMC configuration string specified in raw format
@@ -178,13 +197,6 @@ int parse_pmcs_strconfig(const char *buf,
                          int *ebs_index,
                          int *coretype);
 
-
-/*
- * Perform a default initialization of all performance monitoring counters
- * in the current CPU. The PMU properties are passed as a parameter for
- * efficiency reasons
- */
-void mc_clear_all_platform_counters(pmu_props_t* props_cpu);
 
 /*
  * Generate a summary string with the configuration of a hardware counter (lle)

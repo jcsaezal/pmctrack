@@ -315,6 +315,34 @@ int pmct_config_timeout(int msecs, int kernel_control)
 }
 
 /*
+ * Setup maximum number of samples (in EBS mode) that the application
+ * will actually execute. After those samples, the kernel will send a
+ * SIGPROF signal to the process
+ */
+int pmct_config_max_ebs_samples(unsigned int max_ebs_samples)
+{
+	int len=0;
+	char buf[MAX_CONFIG_STRING_SIZE];
+	int fd=open(pmc_config_entry, O_WRONLY);
+
+	if(fd ==-1) {
+		warnx("Can't open %s\n",pmc_config_entry);
+		return -1;
+	}
+
+	len=sprintf(buf,"max_ebs_samples %u\n",max_ebs_samples);
+	len=write(fd,buf,len);
+
+	if(len <= 0) {
+		warnx("Write error in %s\n",pmc_config_entry);
+		return -1;
+	}
+
+	close(fd);
+	return 0;
+}
+
+/*
  * Tell PMCTrack's kernel module which PMC events
  * must be monitored.
  */
@@ -412,7 +440,7 @@ void pmct_print_header (FILE* fo, unsigned int nr_experiments,
                         int extended_output,
                         int syswide,
                         int show_elapsed_time
-                        )
+                       )
 {
 	int i;
 	char* str[2]= {"pid","cpu"};
@@ -433,7 +461,7 @@ void pmct_print_header (FILE* fo, unsigned int nr_experiments,
 	}
 
 	if (show_elapsed_time)
-			fprintf(fo, " %12s","etime_us");
+		fprintf(fo, " %12s","etime_us");
 
 	for(i=0; (virtual_mask) && (i<MAX_VIRTUAL_COUNTERS); i++) {
 		if(virtual_mask & (0x1<<i)) {
@@ -481,10 +509,10 @@ void pmct_print_sample (FILE* fo, unsigned int nr_experiments,
 
 	if (show_elapsed_time) {
 #if defined(__i386__) || defined(__arm__)
-			dst+=sprintf(dst,"%12llu ",sample->elapsed_time/1000);
+		dst+=sprintf(dst,"%12llu ",sample->elapsed_time/1000);
 #else
-			dst+=sprintf(dst,"%12lu ",sample->elapsed_time/1000);
-#endif					
+		dst+=sprintf(dst,"%12lu ",sample->elapsed_time/1000);
+#endif
 	}
 
 	remaining_pmcmask=virtual_mask;

@@ -16,6 +16,9 @@
 #endif
 #include <linux/ktime.h>
 
+#ifdef CONFIG_PMC_PERF
+#include <linux/workqueue.h>
+#endif
 
 /* Divide in 32bit mode */
 #if defined(__i386__) || defined(__arm__)
@@ -176,6 +179,9 @@ typedef struct {
 #ifdef TBS_TIMER
 	struct timer_list timer;				/* Timer used in TBS mode */
 #endif
+#ifdef CONFIG_PMC_PERF
+	struct work_struct read_counters_task;			/* Work to queue */
+#endif
 	spinlock_t lock;					/* Lock for PMC experiments */
 	pid_t pid_monitor;					/* PID of the monitor process */
 	pmc_sample_t* pmc_user_samples;			/* Intermediate buffer to transfer data from kernel space
@@ -186,6 +192,7 @@ typedef struct {
 	pmc_samples_buffer_t* pmc_samples_buffer; /* Buffer shared between monitor process and threads being monitored */
 	uint_t nticks_sampling_period;			/* Scheduler-mode tick-based sampling period */
 	uint_t  kernel_buffer_size;				/* Max capacity (in bytes) of the ring buffer in "pmc_samples_buffer" */
+	uint_t 	max_ebs_samples;				/* Max number of EBS samples to send kill signal to process */
 	ktime_t	ref_time;		 			/* To add timestamps to the various samples */
 	struct monitoring_module* task_mod;		/* Pointer to the monitoring module assigned to this task */
 	void* 	monitoring_mod_priv_data;		/* Per-thread private data for current monitoring module */
@@ -198,9 +205,26 @@ typedef struct {
 #define PMC_PREPARE_MULTIPLEXING	0x8
 #define PMC_READ_SELF_MONITORING 0x10
 
+
 /** Operations on core_experiment_t **/
 /* Initialize core_experiment_t structure */
 void init_core_experiment_t(core_experiment_t* core_experiment, int exp_idx);
+
+/*
+ * Given a null-terminated array of raw-formatted PMC configuration
+ * string, store the associated low-level information into an array of core_experiment_set_t.
+ */
+int configure_performance_counters_set(const char* strconfig[], core_experiment_set_t pmcs_multiplex_cfg[], int nr_coretypes);
+
+
+#ifdef CONFIG_PMC_PERF
+static inline void mc_restart_all_counters(core_experiment_t* core_experiment) {}
+static inline void mc_stop_all_counters(core_experiment_t* core_experiment) {}
+static inline void mc_clear_all_counters(core_experiment_t* core_experiment) {}
+static inline void mc_save_all_counters(core_experiment_t* core_experiment) {}
+static inline void mc_restore_all_counters(core_experiment_t* core_experiment) {}
+static inline  void restore_context_perfregs ( core_experiment_t* core_experiment) {}
+#else
 
 /* Restart PMCs used by a core_experiment_t */
 void mc_restart_all_counters(core_experiment_t* core_experiment);
@@ -217,18 +241,13 @@ void mc_save_all_counters(core_experiment_t* core_experiment);
 /* Restore context associated with PMCs (context switch in) */
 void mc_restore_all_counters(core_experiment_t* core_experiment);
 
-/*
- * Given a null-terminated array of raw-formatted PMC configuration
- * string, store the associated low-level information into an array of core_experiment_set_t.
- */
-int configure_performance_counters_set(const char* strconfig[], core_experiment_set_t pmcs_multiplex_cfg[], int nr_coretypes);
-
 
 /*
  * Monitor resets the Global PMU context (per CPU) ==> for 'old' events
  */
 void restore_context_perfregs ( core_experiment_t* core_experiment);
 
+#endif
 
 /**** Operations on core experiment set_t ****/
 
@@ -236,8 +255,18 @@ void restore_context_perfregs ( core_experiment_t* core_experiment);
 static inline void free_experiment_set(core_experiment_set_t* cset)
 {
 	int i=0;
+#ifdef CONFIG_PMC_PERF
+	int j=0;
+#endif
 
 	for (i=0; i<cset->nr_exps; i++) {
+#ifdef CONFIG_PMC_PERF
+		/* Recorrer contadores del low_level_exp */
+		for(j=0; i<cset->exps[j]->size; ++j) {
+			if (cset->exps[i]->array[j].event.event)
+				perf_event_release_kernel(cset->exps[i]->array[j].event.event);
+		}
+#endif
 		kfree(cset->exps[i]);
 		cset->exps[i]=NULL;
 	}
@@ -375,6 +404,8 @@ static inline void put_pmc_samples_buffer(pmc_samples_buffer_t* sbuf)
 	}
 }
 
+void pmc_samples_buffer_overflow(pmc_samples_buffer_t* sbuf);
+
 /*
  * Pushes a sample (PMC counts and virtual-counter values) into the buffer and
  * notifies the userspace program if necessary.
@@ -383,6 +414,8 @@ static inline void put_pmc_samples_buffer(pmc_samples_buffer_t* sbuf)
  */
 static inline void __push_sample_cbuffer(pmc_samples_buffer_t* sbuf, pmc_sample_t* sample)
 {
+	if (is_full_cbuffer_t(sbuf->pmc_samples))
+		pmc_samples_buffer_overflow(sbuf);
 
 	insert_items_cbuffer_t (sbuf->pmc_samples, sample, sizeof(pmc_sample_t));
 

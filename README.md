@@ -6,16 +6,20 @@ Despite being an OS-oriented tool, PMCTrack still allows gathering PMC values fr
 
 ## Project Contributors
 
-* Juan Carlos Saez Alcaide (<jcsaezal@ucm.es>) - Creator of PMCTrack and main maintainer. 
-* Jorge Casas Hernan - Maintainer of PMCTrack-GUI
-* Abel Serrano Juste (aka [@Akronix](https://github.com/Akronix))
-* Javier Setoain
+* Juan Carlos Saez Alcaide (<jcsaezal@ucm.es>) - Creator of PMCTrack and main maintainer 
+* Adrián García García (aka [@Mizadri](https://github.com/mizadri))
+* Jaime Sáez de Buruaga Brouns (aka [@jaimesaez97](https://github.com/jaimesaez97))
 
 ## Past Contributors
 
-* Guillermo Martinez Fernandez
-* Sergio Sanchez Gordo
-* Sofia Dronda Merino
+* Jorge Casas Hernan 
+* Abel Serrano Juste (aka [@Akronix](https://github.com/Akronix))
+* Germán Franco Dorca
+* Andrés Plaza Hernando
+* Javier Setoain
+* Guillermo Martinez Fernández
+* Sergio Sánchez Gordo
+* Sofía Dronda Merino
 
 ## Publications
 
@@ -27,11 +31,11 @@ Despite being an OS-oriented tool, PMCTrack still allows gathering PMC values fr
 To support PMCTrack, a patched Linux kernel must be installed on the machine. A number of kernel patches for various Linux versions can be found in the `src/kernel-patches` directory. The name of each patch file encodes the Linux kernel version where the patch must be applied to as well as the processor architecture supported. The format is as follows: 
 
 	pmctrack_linux-<kernel_version>_<architecture>.patch 
-		
+
 To build the kernel for PMCTrack, the following option must be enabled when configuring the kernel:
 
 	CONFIG_PMCTRACK=y
-		
+
 
 The kernel headers for the patched Linux version must be installed on the system as well. This is necessary for a successful out-of-tree build of PMCTrack's kernel module. An out-of-tree-ready Makefile can be found in the sources for the different flavors of the kernel module.
 
@@ -56,7 +60,7 @@ On Mac OS X, PMCTrack-GUI has been succesfully tested after installing the above
 	## Set up default configuration for matplotlib 
 	$ mkdir  ~/.matplotlib
 	$ cp /opt/local/Library/Frameworks/Python.framework/Versions/2.7/lib/python2.7/site-packages/matplotlib/mpl-data/matplotlibrc  ~/.matplotlib
-
+	
 	## Select MacPorts Python27 interpreter by default
 	$sudo port select --set python python27
 	$sudo port select --set ipython ipython27
@@ -67,7 +71,7 @@ On Mac OS X, PMCTrack-GUI has been succesfully tested after installing the above
 The `PMCTRACK_ROOT` environment variable must be defined for a successful execution of the various PMCTrack command-line tools. The `shrc` script found in the repository's root directory can be used to set the `PMCTRACK_ROOT` variable appropriately as well as to add command-line tools' directories to the PATH. To make this possible, run the following command in the root directory of the repository:
 
 	$ . shrc
-		
+
 Now kernel-level and user-level components can be easily built with the `pmctrack-manager` script as follows:
 
 	$ pmctrack-manager build
@@ -77,7 +81,7 @@ Now kernel-level and user-level components can be easily built with the `pmctrac
 	Processor_bitwidth=64
 	***********************************************
 	Press ENTER to start the build process...
-
+	
 	*************************************************
 	*** Building supported PMCTrack kernel modules **
 	*************************************************
@@ -174,15 +178,16 @@ After that, load any of the available flavors of the PMCTrack's kernel module co
 
 The following table summarizes the properties of the various flavors of the kernel module:
 
-| Name | Path of the .ko file | Supported processors |  
-| -----| ---------------------| ---------------------|  
-| intel-core | `src/modules/pmcs/intel-core/mchw_intel_core.ko` | Most Intel multi-core processors are compatible with this module, including recent processors based on the Intel "Broadwell" microarchitecture. | 
-| amd | `src/modules/pmcs/amd/mchw_amd.ko` | This module has been successfully tested on AMD opteron processors. Nevertheless, it should be compatible with all AMD multicore processors. | 
-| arm | `src/modules/pmcs/arm/mchw_arm.ko` | This module has been successfully tested on ARM systems featuring 32-bit big.LITTLE processors, which combine ARM Cortex A7 cores with and ARM Cortex A15 cores. Specifically, tests were performed on the ARM Coretile Express Development Board (TC2). | 
-| odroid-xu | `src/modules/pmcs/odroid-xu/mchw_odroid_xu.ko` | Specific module for Odroid XU3 and XU4 boards. More information on these boards can be found at [www.hardkernel.com](http://www.hardkernel.com) | 
-| arm64 | `src/modules/pmcs/arm64/mchw_arm64.ko` | This module has been successfully tested on ARM systems featuring 64-bit big.LITTLE processors, which combine ARM Cortex A57 cores with and ARM Cortex A53 cores. Specifically, tests were performed on the ARM Juno Development Board. | 
-| xeon-phi | `src/modules/pmcs/xeon-phi/mchw_phi.ko` | Intel Xeon Phi Coprocessor | 
-| core2 | `src/modules/pmcs/phi/mchw_core2.ko` | This module has been specifically designed for the Intel QuickIA prototype system. The Intel QuickIA is a dual-socket asymmetric multicore system that features a quad-core Intel Xeon E5450 processor and a dual-core Intel Atom N330. The module also works with Intel Atom processors as well as "old" Intel multicore processors, such as the Intel Core 2 Duo. Nevertheless, given the numerous existing hacks for the QuickIA in this module, users are advised to use the more general "intel-core" flavor.  | 
+| Name | Path of the .ko file | Supported processors |
+| -----| ---------------------| ---------------------|
+| intel-core | `src/modules/pmcs/intel-core/mchw_intel_core.ko` | Most Intel multi-core processors are compatible with this module, including recent processors based on the Intel "Broadwell" microarchitecture. |
+| amd | `src/modules/pmcs/amd/mchw_amd.ko` | This module has been successfully tested on AMD opteron processors. Nevertheless, it should be compatible with all AMD multicore processors. |
+| arm | `src/modules/pmcs/arm/mchw_arm.ko` | This module has been successfully tested on ARM systems featuring 32-bit big.LITTLE processors, which combine ARM Cortex A7 cores with and ARM Cortex A15 cores. Specifically, tests were performed on the ARM Coretile Express Development Board (TC2). |
+| odroid-xu | `src/modules/pmcs/odroid-xu/mchw_odroid_xu.ko` | Specific module for Odroid XU3 and XU4 boards. More information on these boards can be found at [www.hardkernel.com](http://www.hardkernel.com) |
+| arm64 | `src/modules/pmcs/arm64/mchw_arm64.ko` | This module has been successfully tested on ARM systems featuring 64-bit big.LITTLE processors, which combine ARM Cortex A57 cores with and ARM Cortex A53 cores. Specifically, tests were performed on the ARM Juno Development Board. |
+| xeon-phi | `src/modules/pmcs/xeon-phi/mchw_phi.ko` | Intel Xeon Phi Coprocessor |
+| core2 | `src/modules/pmcs/phi/mchw_core2.ko` | This module has been specifically designed for the Intel QuickIA prototype system. The Intel QuickIA is a dual-socket asymmetric multicore system that features a quad-core Intel Xeon E5450 processor and a dual-core Intel Atom N330. The module also works with Intel Atom processors as well as "old" Intel multicore processors, such as the Intel Core 2 Duo. Nevertheless, given the numerous existing hacks for the QuickIA in this module, users are advised to use the more general "intel-core" flavor.  |
+| perf | `src/modules/pmcs/perf/mchw_perf.ko` | Experimental backend that uses Perf Events's kernel API to access performance monitoring counters |
 
 
 Once the most suitable kernel model for the system has been identified, the module can be loaded in the running PMCTrack-enabled kernel as follows:
@@ -408,7 +413,7 @@ The `pmc-events` command can be used to list the virtual counters exported by th
 
 	$ pmc-events -V
 	[Virtual counters]
-
+	
 	energy_pkg
 	energy_dram
 

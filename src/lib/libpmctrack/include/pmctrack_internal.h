@@ -130,6 +130,17 @@ int pmct_config_virtual_counters(const char* virtcfg, unsigned long flags);
  */
 int pmct_config_timeout(int msecs, int kernel_control);
 
+
+/*
+ * Setup maximum number of samples (in EBS mode) that the application
+ * will actually execute. After those samples, the kernel will send a
+ * SIGPROF signal to the process
+ *
+ * The function returns 0 on success, and a non-zero value upon failure.
+ *
+ */
+int pmct_config_max_ebs_samples(unsigned int max_ebs_samples);
+
 /*
  * Tell PMCTrack's kernel module to start a monitoring session in per-thread mode
  *
@@ -171,7 +182,7 @@ void pmct_print_header (FILE* fo, unsigned int nr_experiments,
  *                  events sets are monitored in the various cores of
  *                  an asymmetric multicore system
  * show_elapsed_time: Use a non-zero value to print additional column with the elapsed time
- * 					  relative to the previous sample 
+ * 					  relative to the previous sample
  * nsample: Number of sample to be included in the row
  * sample: Actual sample with PMC and virtual-counter data
  *

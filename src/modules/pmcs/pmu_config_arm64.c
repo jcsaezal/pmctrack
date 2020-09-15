@@ -23,6 +23,8 @@
 #include <asm/smp_plat.h>
 #include <linux/ftrace.h>
 #include <linux/version.h>
+#include <linux/timer.h>
+#include <linux/cpu_pm.h>
 
 typedef unsigned int u32;
 
@@ -34,7 +36,9 @@ int  nr_core_types=1;
 /* Global definition of prop coretype */
 pmu_props_t pmu_props_cputype[PMC_CORE_TYPES];
 pmu_props_t pmu_props_cpu[NR_CPUS];
+struct notifier_block	cpu_pm_nb[NR_CPUS];
 
+static void cpu_pmu_init(void *dummy);
 /*
  * *** IMPORTANT NOTE:***
  * Define the ENABLE_IRQ macro only if using the ARM Juno
@@ -54,7 +58,7 @@ static int setup_overflow_irq(void);
  * Code to list and detect fully-supported ARM Cortex processors
  */
 static struct pmctrack_cpu_model cpu_models[]= {
-	{0xd03,"cortex_a53"},{0xd07,"cortex_a57"},
+	{0xd03,"cortex_a53"},{0xd07,"cortex_a57"},{0xd09,"cortex_a73"},
 	{0,NULL} /* Marker */
 };
 
@@ -192,6 +196,27 @@ void init_pmu_props(void)
 #endif
 }
 
+static int cpu_pm_pmu_notify(struct notifier_block *b, unsigned long cmd,
+                             void *v)
+{
+	switch (cmd) {
+	case CPU_PM_ENTER:
+		break;
+	case CPU_PM_EXIT:
+	case CPU_PM_ENTER_FAILED:
+		/*
+		 * Always reset the PMU registers on power-up even if
+		 * there are no events running.
+		 */
+		cpu_pmu_init((void*)1);
+	default:
+		return NOTIFY_DONE;
+	}
+
+	return NOTIFY_OK;
+}
+
+
 /* Initialize the PMU of the current CPU  */
 static void cpu_pmu_init(void *dummy)
 {
@@ -224,8 +249,15 @@ static void cpu_pmu_init(void *dummy)
 #endif
 	}
 
+
+
 	/* Initialize & Reset PMNC: C and P bits ... and enable */
 	armv8pmu_pmcr_write(ARMV8_PMCR_P | ARMV8_PMCR_C | ARMV8_PMCR_E);
+
+	if (dummy==NULL) {
+		cpu_pm_nb[cpu].notifier_call = cpu_pm_pmu_notify;
+		cpu_pm_register_notifier(&cpu_pm_nb[cpu]);
+	}
 }
 
 /*
@@ -251,7 +283,19 @@ static void cpu_pmu_shutdown(void *dummy)
 	/* Clear global enable flags */
 	armv8pmu_pmcr_write(armv8pmu_pmcr_read() & ~(ARMV8_PMCR_E|ARMV8_PMCR_P | ARMV8_PMCR_C));
 	mc_clear_all_platform_counters(props);
+
 }
+
+//#define WATCHDOG_TIMER
+#ifdef WATCHDOG_TIMER
+static struct timer_list wtimer;
+/* Timer function used for TBS mode */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,15,0)
+static void watchdog_timer(unsigned long data);
+#else
+static void watchdog_timer(struct timer_list *t);
+#endif
+#endif
 
 /* Initialize the PMUs of the various CPUs in the system  */
 int init_pmu(void)
@@ -265,18 +309,42 @@ int init_pmu(void)
 	on_each_cpu(cpu_pmu_init, NULL, 1);
 	put_online_cpus();
 
+#ifdef WATCHDOG_TIMER
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,15,0)
+	/* Timer initialization (but timer is not added!!) */
+	init_timer(&wtimer);
+	wtimer.watchdog_timer=0;
+	wtimer.function=watchdog_timer;
+	wtimer.expires=jiffies+4*HZ;
+#else
+	timer_setup(&wtimer, watchdog_timer, 0);
+#endif
+	add_timer_on(&wtimer,4);
+#endif
+
+
+
 	return 0;
 }
 
 /* Stop PMUs and free up resources allocated by init_pmu() */
 int pmu_shutdown(void)
 {
+	int cpu=0;
 	get_online_cpus();
 	on_each_cpu(cpu_pmu_shutdown, NULL, 1);
 	put_online_cpus();
 
 	unregister_overflow_irq();
 
+	/* Unregister notifiers */
+	for_each_cpu(cpu,cpu_online_mask)
+	cpu_pm_unregister_notifier(&cpu_pm_nb[cpu]);
+
+
+#ifdef WATCHDOG_TIMER
+	del_timer_sync(&wtimer);
+#endif
 	return 0;
 }
 
@@ -303,11 +371,16 @@ static int setup_overflow_irq(void)
 
 
 /* Interrupt lines for the ARM Juno Development Board */
+#ifdef  PMC_JUNO
 #define VEXPRESS_NR_IRQS 6
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(4,0,0)) || (LINUX_VERSION_CODE == KERNEL_VERSION(3,10,68))
 int vexpress_fixed_irqs[VEXPRESS_NR_IRQS]= {50,34,38,54,58,62};
 #else
 int vexpress_fixed_irqs[VEXPRESS_NR_IRQS]= {50,54,58,62,34,38};
+#endif
+#else
+#define VEXPRESS_NR_IRQS 8
+int vexpress_fixed_irqs[VEXPRESS_NR_IRQS]= {7,8,9,10,11,12,13,14}; //56,57,58,59,34,35,36,37};
 #endif
 
 /*
@@ -363,6 +436,7 @@ static irqreturn_t armv8pmu_handle_irq(int irq_num, void *dev)
 }
 
 cpumask_t pmu_active_irqs;
+
 
 /*
  *  Install interrupt handlers to react to PMC overflow interrupts.
@@ -430,13 +504,13 @@ static void unregister_overflow_irq(void)
 	}
 }
 
-#endif
 
+#endif
 /*
  * Transform an array of platform-agnostic PMC counter configurations (pmc_cfg)
  * into a low level structure that holds the necessary data to configure hardware counters.
  */
-void do_setup_pmcs(pmc_usrcfg_t* pmc_cfg, int used_pmcs_msk,core_experiment_t* exp,int cpu, int exp_idx)
+int do_setup_pmcs(pmc_usrcfg_t* pmc_cfg, int used_pmcs_msk,core_experiment_t* exp, int cpu, int exp_idx, struct task_struct* p)
 {
 	int i;
 	low_level_exp* lle;
@@ -515,6 +589,7 @@ void do_setup_pmcs(pmc_usrcfg_t* pmc_cfg, int used_pmcs_msk,core_experiment_t* e
 			exp->phys_to_log[i]=exp->size-1;
 		}
 	}
+	return 0;
 }
 
 /*
@@ -653,7 +728,7 @@ int print_pmc_config(low_level_exp* lle, char* buf)
 	return 0;
 }
 
-#ifdef DEBUG
+
 int print_pmu_msr_values_debug(char* line_out)
 {
 	u32 val;
@@ -667,6 +742,12 @@ int print_pmu_msr_values_debug(char* line_out)
 
 	asm volatile("mrs %0, pmcr_el0" : "=r" (val));
 	dst+=sprintf(dst,"PMCR_EL0=0x%08x\n", val);
+
+	asm volatile("mrs %0, pmintenset_el1" : "=r" (val));
+	dst+=sprintf(dst,"PMINTENSET_EL1=0x%08x\n", val);
+
+	asm volatile("mrs %0, pmintenclr_el1" : "=r" (val));
+	dst+=sprintf(dst,"PMINTENCLR_EL1=0x%08x\n", val);
 
 	asm volatile("mrs %0, pmccfiltr_el0" : "=r" (val));
 	dst+=sprintf(dst,"PMCCFILTR_EL0=0x%08x\n", val);
@@ -698,8 +779,19 @@ int print_pmu_msr_values_debug(char* line_out)
 	}
 	return dst-line_out;
 }
-#endif
 
+
+#ifdef WATCHDOG_TIMER
+static void watchdog_timer(struct timer_list *t)
+{
+	static char buf[800]="";
+
+	print_pmu_msr_values_debug(buf);
+	trace_printk("### WATCHDOG ON CPU %d###\n%s",smp_processor_id(),buf);
+
+	mod_timer(&wtimer, jiffies + 4*HZ);
+}
+#endif
 
 
 
@@ -717,6 +809,12 @@ static void armv8_pmnc_dump_regs(struct arm_pmu *cpu_pmu)
 
 	asm volatile("mrs %0, pmcr_el0" : "=r" (val));
 	printk(KERN_INFO "PMCR_EL0=0x%08x\n", val);
+
+	asm volatile("mrs %0, pmintenset_el1" : "=r" (val));
+	printk(KERN_INFO "PMINTENSET_EL1=0x%08x\n", val);
+
+	asm volatile("mrs %0, pmintenclr_el1" : "=r" (val));
+	printk(KERN_INFO "PMINTENCLR_EL1=0x%08x\n", val);
 
 	asm volatile("mrs %0, pmccfiltr_el0" : "=r" (val));
 	printk(KERN_INFO "PMCCFILTR_EL0=0x%08x\n", val);

@@ -89,6 +89,7 @@ struct options {
 	int timeout_secs;
 	int msecs;
 	int max_samples;
+	int max_ebs_samples;
 	int kernel_buffer_size;
 	unsigned long cpumask;
 	int optind;
@@ -303,9 +304,8 @@ static void print_process_statistics(FILE* fout,
 	if (opt->flags & CMD_FLAG_SHOW_TIME_SECS) {
 		fprintf (fout, "real\t%ld.%02ld\n",
 		         end->tv_sec,
-		         end->tv_usec / 10000);		
-	} 
-	else {
+		         end->tv_usec / 10000);
+	} else {
 		if (end->tv_sec >= 3600)
 			fprintf (fout, "real\t%ld:%02ld:%02ld\n", /* Format: H:M:S  */
 			         end->tv_sec / 3600,
@@ -316,7 +316,7 @@ static void print_process_statistics(FILE* fout,
 			         end->tv_sec / 60,
 			         end->tv_sec % 60,
 			         end->tv_usec / 10000);
-	}	
+	}
 
 	/* User time.  */
 	fprintf (fout, "user\t%ld.%02ld\n",
@@ -498,7 +498,7 @@ static void monitoring_counters(struct options* opts,int optind,char** argv)
 	if(pid == -1) {
 		err(1,"Error forking process.");
 	} else if(pid == 0) {
-		// CHILD CODE:		
+		// CHILD CODE:
 		if (restore_signal_handlers())
 			exit(1);
 
@@ -508,6 +508,9 @@ static void monitoring_counters(struct options* opts,int optind,char** argv)
 		/* Set up kernel buffer size */
 		if (opts->kernel_buffer_size!=-1 && pmct_set_kernel_buffer_size(opts->kernel_buffer_size))
 			pmctrack_exit(1);
+
+		if (opts->max_ebs_samples>0)
+			pmct_config_max_ebs_samples(opts->max_ebs_samples);
 
 		/* Configure counters if there is something to configure */
 		if (opts->strcfg[0] && pmct_config_counters((const char**)opts->strcfg,0))
@@ -644,7 +647,7 @@ void monitoring_counters_syswide(struct options* opts,int optind,char** argv)
 	} else if(pid == 0) {
 		// CHILD CODE:
 		if (restore_signal_handlers())
-			exit(1);		
+			exit(1);
 
 		/* Bind first */
 		bind_process_cpumask(getpid(),opts->cpumask);
@@ -1122,6 +1125,7 @@ void init_options( struct options* opts)
 
 	opts->cpumask = NO_CPU_BINDING;
 	opts->max_samples = -1;
+	opts->max_ebs_samples= -1;
 	opts->flags=0;
 	opts->target_pid=-1;
 	opts->kernel_buffer_size = -1;
@@ -1238,7 +1242,7 @@ static void usage(const char* program_name,int status)
 		printf ("\n\t-n\t<max-samples>\n\t\tRun command until a given number of samples are collected");
 		printf ("\n\t-N\t<secs>\n\t\tRun command for secs seconds only");
 		printf ("\n\t-e\n\t\tEnable extended output");
-		printf ("\n\t-E\n\t\tShow additional column with elapsed time between samples");	
+		printf ("\n\t-E\n\t\tShow additional column with elapsed time between samples");
 		printf ("\n\t-A\n\t\tEnable aggregate count mode");
 		printf ("\n\t-k\t<kernel_buffer_size>\n\t\tSpecify the size of the kernel buffer used for the PMC samples");
 		printf ("\n\t-b\t<cpu or mask>\n\t\tbind monitor program to the specified cpu o cpumask.");
@@ -1247,8 +1251,9 @@ static void usage(const char* program_name,int status)
 		printf ("\n\t-P\t<pmu>\n\t\tSpecify the PMU id to use for the event configuration");
 		printf ("\n\t-L\n\t\tLegacy-mode: do not show counter-to-event mapping");
 		printf ("\n\t-t\n\t\tShow real, user and sys time of child process");
-		printf ("\n\t-st\n\t\tDisplay real time in seconds (when -t option is enabled)");		
+		printf ("\n\t-st\n\t\tDisplay real time in seconds (when -t option is enabled)");
 		printf ("\n\t-p\t<pid>\n\t\tAttach to existing process with given pid");
+		printf ("\n\t-K\t<nsamples>\n\t\tSetup maximum number of samples (in EBS mode) that the application will actually execute");
 		printf ("\nPROG + ARGS:\n\t\tCommand line for the program to be monitored.\n");
 		break;
 	case -2:
@@ -1278,7 +1283,7 @@ int main(int argc, char *argv[])
 		usage(argv[0],0);
 
 	/* Process command-line options ... */
-	while ((optc = getopt(argc, argv, "+hc:T:o:b:n:V:B:eAk:SrP:LtN:p:sE")) != (char)-1) {
+	while ((optc = getopt(argc, argv, "+hc:T:o:b:n:V:B:eAk:SrP:LtN:p:sEK:")) != (char)-1) {
 		switch (optc) {
 		case 'o':
 			if((fo = fopen(optarg, "w")) == NULL)
@@ -1343,7 +1348,10 @@ int main(int argc, char *argv[])
 			break;
 		case 'E':
 			opts.flags|=CMD_FLAG_SHOW_ELAPSED_TIME;
-			break;			
+			break;
+		case 'K':
+			opts.max_ebs_samples=atoi(optarg);
+			break;
 		default:
 			fprintf(stderr, "Wrong option: %c\n", optc);
 			exit(1);

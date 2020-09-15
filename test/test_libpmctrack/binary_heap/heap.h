@@ -41,7 +41,7 @@
 template <class T>
 class heap
 {
-	public:
+public:
 
 	//maximum elements in the heap
 	const static int MAX_HEAP = 1000000;
@@ -59,7 +59,7 @@ class heap
 	size_t size() const;
 
 	//Returns min. elem from the heap.
-		/* Pre: heap has to be not empty */
+	/* Pre: heap has to be not empty */
 	T getMin();
 
 	// Insert element to the adequate positiong inside the heap.
@@ -67,14 +67,14 @@ class heap
 	void insert(const T& x);
 
 	//Returns min. elem from the heap.
-		/* Pre: heap has to be not empty */
+	/* Pre: heap has to be not empty */
 	T deleteMin();
 
 	bool isEmpty() const;
 
 	void changeKey(const unsigned int index_of_elem, const T new_key);
 
-	private:
+private:
 	const static int root = 1;
 	unsigned int last;
 	T cont[MAX_HEAP+1];

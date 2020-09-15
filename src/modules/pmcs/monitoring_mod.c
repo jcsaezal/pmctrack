@@ -24,7 +24,7 @@ static const char* sample_type_to_str[PMC_NR_SAMPLE_TYPES]= {"tick","ebs","exit"
 
 /********************** DEFAULT MONITORING MODULE *********************************/
 /* Definition of the callback functions for the default (dummy) monitoring module */
-#ifdef CONFIG_PMC_PHI
+#if defined(CONFIG_PMC_PHI) || defined (CONFIG_PMC_PERF)
 static int dummy_enable_module(void)
 {
 	return 0;
@@ -47,7 +47,6 @@ static int dummy_on_new_sample(pmon_prof_t* prof,int cpu,pmc_sample_t* sample,in
 {
 	return 0;
 }
-static void dummy_on_migrate(pmon_prof_t* prof, int prev_cpu, int new_cpu) {}
 static void dummy_module_counter_usage(monitoring_module_counter_usage_t* usage)
 {
 	usage->hwpmc_mask=0x0;
@@ -266,7 +265,7 @@ static const struct file_operations proc_mm_manager_fops = {
 extern monitoring_module_t ipc_sampling_sf_mm;
 #elif defined(CONFIG_PMC_CORE_I7)
 extern monitoring_module_t ipc_sampling_sf_mm;
-extern monitoring_module_t intel_cmt_mm;
+extern monitoring_module_t intel_rdt_mm;
 extern monitoring_module_t intel_rapl_mm;
 #elif defined(CONFIG_PMC_ARM) || defined(CONFIG_PMC_ARM64)
 extern monitoring_module_t ipc_sampling_sf_mm;
@@ -280,7 +279,6 @@ extern monitoring_module_t spower_mm;
 #ifdef CONFIG_SMART_POWER_2
 extern monitoring_module_t spower2_mm;
 #endif
-
 
 /* Init monitoring module manager */
 int init_mm_manager(struct proc_dir_entry* pmc_dir)
@@ -318,7 +316,6 @@ int init_mm_manager(struct proc_dir_entry* pmc_dir)
 	}
 #endif
 
-
 	/*
 	 * This is the place where the various
 	 * monitoring modules available in PMCTrack
@@ -330,7 +327,7 @@ int init_mm_manager(struct proc_dir_entry* pmc_dir)
 	load_monitoring_module(&ipc_sampling_sf_mm);
 #elif defined(CONFIG_PMC_CORE_I7)
 	load_monitoring_module(&ipc_sampling_sf_mm);
-	load_monitoring_module(&intel_cmt_mm);
+	load_monitoring_module(&intel_rdt_mm);
 	load_monitoring_module(&intel_rapl_mm);
 #elif defined(CONFIG_PMC_ARM) || defined(CONFIG_PMC_ARM64)
 	load_monitoring_module(&ipc_sampling_sf_mm);
@@ -341,10 +338,11 @@ int init_mm_manager(struct proc_dir_entry* pmc_dir)
 #ifdef CONFIG_SMART_POWER
 	load_monitoring_module(&spower_mm);
 #endif
+
 #ifdef CONFIG_SMART_POWER_2
 	load_monitoring_module(&spower2_mm);
 #endif
-
+	
 	return 0;
 }
 

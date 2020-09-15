@@ -107,8 +107,8 @@ function update_compatible_modules(){
 	local vendor_str=$1
 	local bitw=$2
 	if [ "$vendor_str" == "Intel" ]; then
-		compatible_modules=(intel-core core2)
-		module_names=(mchw_intel_core mchw_core2)
+		compatible_modules=(intel-core core2 perf)
+		module_names=(mchw_intel_core mchw_core2 mchw_perf)
 	elif [ "$vendor_str" == "AMD" ]; then
 		compatible_modules=(amd)
 		module_names=(mchw_amd.ko)

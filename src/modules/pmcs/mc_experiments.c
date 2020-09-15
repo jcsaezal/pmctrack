@@ -43,6 +43,7 @@ void init_core_experiment_t(core_experiment_t* c_exp,int exp_idx)
 	}
 }
 
+#ifndef CONFIG_PMC_PERF
 /* Monitor resets the Global PMU context (per CPU) ==> for 'old' events */
 void restore_context_perfregs ( core_experiment_t* ce )
 {
@@ -58,6 +59,7 @@ void restore_context_perfregs ( core_experiment_t* ce )
 /* Restart PMCs used by a core_experiment_t */
 void mc_restart_all_counters(core_experiment_t* core_experiment)
 {
+
 	unsigned int j;
 
 	/* Counters Reset action (new hardware events)*/
@@ -129,7 +131,7 @@ void mc_restore_all_counters(core_experiment_t* core_experiment)
 
 	reset_overflow_status();
 }
-
+#endif
 
 /******************** Functions related to the computation of high-level performance metrics **************************/
 
@@ -311,6 +313,12 @@ int get_any_cpu_coretype(int coretype)
 		return i;
 }
 #endif
+
+
+void noinline pmc_samples_buffer_overflow(pmc_samples_buffer_t* sbuf)
+{
+	asm(" ");
+}
 
 /* Allocate a buffer with capacity 'size_bytes' */
 pmc_samples_buffer_t* allocate_pmc_samples_buffer(unsigned int size_bytes)
