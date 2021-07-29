@@ -256,7 +256,7 @@ static int setup_cpu_syswide_data(cpu_syswide_t* data,
 {
 	reset_cpu_syswide_data(data,0);
 
-	if (clone_core_experiment_set_t(&data->pmc_config_set,pmc_config_set))
+	if (clone_core_experiment_set_t(&data->pmc_config_set,pmc_config_set,NULL))
 		return -ENOMEM;
 
 	/* Set up cur experiment */
@@ -403,7 +403,7 @@ int syswide_monitoring_start(void)
 	int coretype=0;
 	int cpu;
 	struct task_struct* p=current;
-	pmon_prof_t* prof=(pmon_prof_t*)p->pmc;
+	pmon_prof_t* prof = get_prof(p);
 	cpu_syswide_t* cur;
 	core_experiment_t* experiment=NULL;
 

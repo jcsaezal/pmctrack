@@ -1,6 +1,6 @@
-PMCTrack is an open-source OS-oriented performance monitoring tool for GNU/Linux. This performance tool has been specifically designed to aid kernel developers in implementing scheduling algorithms in Linux that leverage data from performance monitoring counters (PMCs) to perform optimizations at run time. Unlike other monitoring tools, PMCTrack features and in-kernel API enabling the OS scheduler to access per-thread PMC data in an architecture-independent fashion. 
+PMCTrack is an open-source OS-oriented performance monitoring tool for GNU/Linux. This performance tool has been specifically designed to aid kernel developers in implementing scheduling algorithms or resource-management strategies on Linux that leverage data from performance monitoring counters (PMCs) to perform optimizations at run time. Unlike other monitoring tools, PMCTrack features and in-kernel API enabling the OS to access per-thread PMC data in an architecture-independent fashion. 
 
-Despite being an OS-oriented tool, PMCTrack still allows gathering PMC values from user space, enabling kernel developers to carry out the necessary offline analysis and debugging to assist them during the scheduler design process. In addition, the tool provides both the scheduler and the userspace PMCTrack components with other insightful metrics available in modern processors that are not directly exposed as PMCs, such as cache occupancy or energy consumption. 
+Despite being an OS-oriented tool, PMCTrack still allows the gathering of PMC values from user space, enabling kernel developers to carry out the necessary offline analysis and debugging to assist them during the OS-level design process. In addition, the tool provides both the OS and the userspace PMCTrack components with other insightful metrics available in modern processors that are not directly exposed as PMCs, such as cache occupancy or energy consumption. 
 
 [![Analytics](https://ga-beacon.appspot.com/UA-76163836-1/github-pmctrack/readme)](http://pmctrack.dacya.ucm.es)
 
@@ -8,6 +8,7 @@ Despite being an OS-oriented tool, PMCTrack still allows gathering PMC values fr
 
 * Juan Carlos Saez Alcaide (<jcsaezal@ucm.es>) - Creator of PMCTrack and main maintainer 
 * Adrián García García (aka [@Mizadri](https://github.com/mizadri))
+* Lazaro Clemen Palafox (aka <lazarocl@ucm.es>)
 * Jaime Sáez de Buruaga Brouns (aka [@jaimesaez97](https://github.com/jaimesaez97))
 
 ## Past Contributors
@@ -28,9 +29,15 @@ Despite being an OS-oriented tool, PMCTrack still allows gathering PMC values fr
 
 ## System requirements
 
-To support PMCTrack, a patched Linux kernel must be installed on the machine. A number of kernel patches for various Linux versions can be found in the `src/kernel-patches` directory. The name of each patch file encodes the Linux kernel version where the patch must be applied to as well as the processor architecture supported. The format is as follows: 
+Starting from version v2.0, PMCTrack works with vanilla Linux kernels, and, in this case, Linux kernel v5.9.x and above are highly recommended to enjoy the full functionality of the tool. For earlier versions of PMCTrack, a patched Linux kernel must be installed on the machine. A number of kernel patches for various Linux versions can be found in the `src/kernel-patches` directory. The name of each patch file encodes the Linux kernel version where the patch must be applied to as well as the processor architecture supported. The format is as follows: 
 
 	pmctrack_linux-<kernel_version>_<architecture>.patch 
+
+To apply the patch run the following command from the root directory of the kernel sources:
+
+```
+patch -p1 < <path_to_patch_file> 
+```
 
 To build the kernel for PMCTrack, the following option must be enabled when configuring the kernel:
 
@@ -48,9 +55,9 @@ We also created PMCTrack-GUI, a Python front-end for the `pmctrack` command-line
 * sshpass (command)
 * WxPython v3.0
 
-On Debian or Ubuntu the necessary software can be installed as follows:
+On Debian or Ubuntu the necessary software to run PMCTrack-GUI can be installed as follows:
 
-	$ sudo apt-get install python2.7 python-matplotlib python-wxgtk3.0 sshpass 
+	$ sudo apt install python2.7 python-matplotlib python-wxgtk3.0 sshpass 
 
 On Mac OS X, PMCTrack-GUI has been succesfully tested after installing the above software dependencies using MacPorts as follows:
 
@@ -68,7 +75,7 @@ On Mac OS X, PMCTrack-GUI has been succesfully tested after installing the above
 
 ## Building PMCTrack from source for ARM and x86 processors
 
-The `PMCTRACK_ROOT` environment variable must be defined for a successful execution of the various PMCTrack command-line tools. The `shrc` script found in the repository's root directory can be used to set the `PMCTRACK_ROOT` variable appropriately as well as to add command-line tools' directories to the PATH. To make this possible, run the following command in the root directory of the repository:
+Before building PMCTrack make sure a compatible kernel is running (it must be a patched one for PMCTrack versions earlier than 2.0!), and the associated kernel header files are installed on the system. The `PMCTRACK_ROOT` environment variable must be defined for a successful execution of the various PMCTrack command-line tools. The `shrc` script found in the repository's root directory can be used to set the `PMCTRACK_ROOT` variable appropriately as well as to add command-line tools' directories to the PATH. To make this possible, run the following command in the root directory of the repository:
 
 	$ . shrc
 
@@ -187,7 +194,7 @@ The following table summarizes the properties of the various flavors of the kern
 | arm64 | `src/modules/pmcs/arm64/mchw_arm64.ko` | This module has been successfully tested on ARM systems featuring 64-bit big.LITTLE processors, which combine ARM Cortex A57 cores with and ARM Cortex A53 cores. Specifically, tests were performed on the ARM Juno Development Board. |
 | xeon-phi | `src/modules/pmcs/xeon-phi/mchw_phi.ko` | Intel Xeon Phi Coprocessor |
 | core2 | `src/modules/pmcs/phi/mchw_core2.ko` | This module has been specifically designed for the Intel QuickIA prototype system. The Intel QuickIA is a dual-socket asymmetric multicore system that features a quad-core Intel Xeon E5450 processor and a dual-core Intel Atom N330. The module also works with Intel Atom processors as well as "old" Intel multicore processors, such as the Intel Core 2 Duo. Nevertheless, given the numerous existing hacks for the QuickIA in this module, users are advised to use the more general "intel-core" flavor.  |
-| perf | `src/modules/pmcs/perf/mchw_perf.ko` | Experimental backend that uses Perf Events's kernel API to access performance monitoring counters |
+| perf | `src/modules/pmcs/perf/mchw_perf.ko` | Backend that uses Perf Events's kernel API to access performance monitoring counters. It currently works for Intel, AMD, ARMv7 and ARMv8 processors, only. |
 
 
 Once the most suitable kernel model for the system has been identified, the module can be loaded in the running PMCTrack-enabled kernel as follows:

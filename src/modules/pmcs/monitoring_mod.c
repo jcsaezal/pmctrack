@@ -24,7 +24,7 @@ static const char* sample_type_to_str[PMC_NR_SAMPLE_TYPES]= {"tick","ebs","exit"
 
 /********************** DEFAULT MONITORING MODULE *********************************/
 /* Definition of the callback functions for the default (dummy) monitoring module */
-#if defined(CONFIG_PMC_PHI) || defined (CONFIG_PMC_PERF)
+#if defined(CONFIG_PMC_PHI) //|| defined (CONFIG_PMC_PERF)
 static int dummy_enable_module(void)
 {
 	return 0;
@@ -69,13 +69,25 @@ static int dummy_enable_module(void)
 #elif defined(CONFIG_PMC_AMD)
 	    {"pmc0=0xc0,pmc1=0x76",NULL
 	    }; /* Just instr and cycles */
-#elif defined(CONFIG_PMC_CORE_I7)
+#elif defined(CONFIG_PMC_CORE_I7) || defined(CONFIG_PMC_PERF_X86)
 	    {"pmc0,pmc1,pmc2",NULL
 	    };    /* Just the fixed-function PMCs */
-#else /* ARM and ARM64 */
+#elif defined(CONFIG_PMC_ARM) || defined(CONFIG_PMC_ARM64) || defined(CONFIG_PMC_PERF_ARM)
+	    /* ARM and ARM64 */
 	    { "pmc1=0x8,pmc2=0x11",NULL
 	    }; /* Just instr and cycles */
+#else
+	    {
+	        NULL
+	    };
 #endif
+
+#ifdef CONFIG_PMC_PERF_X86
+	/* Set different config for AMD */
+	if (boot_cpu_data.x86_vendor==X86_VENDOR_AMD)
+		pmcstr_cfg[0]="pmc0=0xc0,pmc1=0x76";
+#endif
+
 	if (configure_performance_counters_set(pmcstr_cfg, dummy_pmc_configuration, 2)) {
 		printk("Can't configure global performance counters. This is too bad ... ");
 		return -EINVAL;
@@ -83,6 +95,7 @@ static int dummy_enable_module(void)
 	printk(KERN_ALERT "Dummy monitoring module has been loaded successfuly\n" );
 	return 0;
 }
+
 
 /* By default, the dummy monitoring module does not
  * take the control of performance counters
@@ -98,8 +111,11 @@ void dummy_module_counter_usage(monitoring_module_counter_usage_t* usage)
 #elif defined(CONFIG_PMC_AMD)
 		usage->hwpmc_mask=0x3;
 		usage->nr_experiments=1;
-#elif defined(CONFIG_PMC_CORE_I7)
-		usage->hwpmc_mask=0x7;
+#elif defined(CONFIG_PMC_CORE_I7) || defined(CONFIG_PMC_PERF_X86)
+		if (boot_cpu_data.x86_vendor==X86_VENDOR_AMD)
+			usage->hwpmc_mask=0x3;
+		else
+			usage->hwpmc_mask=0x7;
 		usage->nr_experiments=1;
 #else
 		usage->hwpmc_mask=0x6;
@@ -117,6 +133,7 @@ void dummy_module_counter_usage(monitoring_module_counter_usage_t* usage)
 static void dummy_disable_module(void)
 {
 	int i=0;
+
 	for (i=0; i<2; i++)
 		free_experiment_set(&dummy_pmc_configuration[i]);
 
@@ -142,12 +159,19 @@ static int dummy_on_write_config(const char *str, unsigned int len)
 static int dummy_on_fork(unsigned long clone_flags, pmon_prof_t* prof)
 {
 
-	int i=0;
+	int i=0,j=0,error=0;
 
 	/* If counter config was not inherited already ... */
 	if (dummy_enable_counters && !prof->pmcs_config) {
-		for(i=0; i<2; i++)
-			clone_core_experiment_set_t(&prof->pmcs_multiplex_cfg[i],&dummy_pmc_configuration[i]);
+		for(i=0; i<2; i++) {
+			error=clone_core_experiment_set_t(&prof->pmcs_multiplex_cfg[i],&dummy_pmc_configuration[i],prof->this_tsk);
+
+			if (error) {
+				for (j=0; j<i; j++)
+					free_experiment_set(&prof->pmcs_multiplex_cfg[j]);
+				return error;
+			}
+		}
 
 		/* For now start with slow core events */
 		prof->pmcs_config=get_cur_experiment_in_set(&prof->pmcs_multiplex_cfg[0]);
@@ -246,11 +270,11 @@ int reinitialize_monitoring_module(int module_id);
 static ssize_t proc_mm_manager_write(struct file *filp, const char __user *buff, size_t len, loff_t *off);
 static ssize_t proc_mm_manager_read(struct file *filp, char __user *buf, size_t len, loff_t *off);
 
-static const struct file_operations proc_mm_manager_fops = {
-	.read = proc_mm_manager_read,
-	.write = proc_mm_manager_write,
-	.open = proc_generic_open,
-	.release = proc_generic_close,
+static pmctrack_proc_ops_t proc_mm_manager_fops = {
+	.PMCT_PROC_READ = proc_mm_manager_read,
+	.PMCT_PROC_WRITE = proc_mm_manager_write,
+	.PMCT_PROC_OPEN = proc_generic_open,
+	.PMCT_PROC_RELEASE = proc_generic_close,
 };
 
 
@@ -263,10 +287,11 @@ static const struct file_operations proc_mm_manager_fops = {
 /** @@ Architecture-specific monitoring modules @@ **/
 #if defined(CONFIG_PMC_CORE_2_DUO) || defined(CONFIG_PMC_AMD)
 extern monitoring_module_t ipc_sampling_sf_mm;
-#elif defined(CONFIG_PMC_CORE_I7)
+#elif defined(CONFIG_PMC_CORE_I7) || defined(CONFIG_PMC_PERF_X86)
 extern monitoring_module_t ipc_sampling_sf_mm;
 extern monitoring_module_t intel_rdt_mm;
 extern monitoring_module_t intel_rapl_mm;
+extern monitoring_module_t intel_rdt_userspace_mm;
 #elif defined(CONFIG_PMC_ARM) || defined(CONFIG_PMC_ARM64)
 extern monitoring_module_t ipc_sampling_sf_mm;
 #ifndef ODROID
@@ -279,6 +304,7 @@ extern monitoring_module_t spower_mm;
 #ifdef CONFIG_SMART_POWER_2
 extern monitoring_module_t spower2_mm;
 #endif
+
 
 /* Init monitoring module manager */
 int init_mm_manager(struct proc_dir_entry* pmc_dir)
@@ -325,10 +351,11 @@ int init_mm_manager(struct proc_dir_entry* pmc_dir)
 	/** @@ Architecture-specific monitoring modules @@ **/
 #if defined(CONFIG_PMC_CORE_2_DUO) || defined(CONFIG_PMC_AMD)
 	load_monitoring_module(&ipc_sampling_sf_mm);
-#elif defined(CONFIG_PMC_CORE_I7)
+#elif defined(CONFIG_PMC_CORE_I7) || defined(CONFIG_PMC_PERF_X86)
 	load_monitoring_module(&ipc_sampling_sf_mm);
 	load_monitoring_module(&intel_rdt_mm);
 	load_monitoring_module(&intel_rapl_mm);
+	load_monitoring_module(&intel_rdt_userspace_mm);
 #elif defined(CONFIG_PMC_ARM) || defined(CONFIG_PMC_ARM64)
 	load_monitoring_module(&ipc_sampling_sf_mm);
 #ifndef ODROID
@@ -338,11 +365,9 @@ int init_mm_manager(struct proc_dir_entry* pmc_dir)
 #ifdef CONFIG_SMART_POWER
 	load_monitoring_module(&spower_mm);
 #endif
-
 #ifdef CONFIG_SMART_POWER_2
 	load_monitoring_module(&spower2_mm);
 #endif
-	
 	return 0;
 }
 

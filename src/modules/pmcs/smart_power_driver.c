@@ -603,12 +603,11 @@ static ssize_t spower_read(struct file *file, char *user_buffer,
  * exposed by driver
  *
  */
-static const struct file_operations spower_fops = {
-	.owner =	THIS_MODULE,
-	.write =	spower_write,	 	/* write() operation on the file */
-	.read =		spower_read,
-	.open =		spower_open,			/* open() operation on the file */
-	.release =	spower_release, 		/* close() operation on the file */
+static const pmctrack_proc_ops_t spower_fops = {
+	.PMCT_PROC_WRITE =	spower_write,	 	/* write() operation on the file */
+	.PMCT_PROC_READ =		spower_read,
+	.PMCT_PROC_OPEN =		spower_open,			/* open() operation on the file */
+	.PMCT_PROC_RELEASE =	spower_release, 		/* close() operation on the file */
 };
 
 /*

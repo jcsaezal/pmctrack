@@ -106,24 +106,31 @@ function figure_out_kernel_HZ_setting(){
 function update_compatible_modules(){
 	local vendor_str=$1
 	local bitw=$2
-	if [ "$vendor_str" == "Intel" ]; then
+
+	grep 'CONFIG_PMCTRACK=y' /boot/config-$(uname -r)
+	patched_kernel=$?	
+	
+	if [ "$FORCE_LEGACY" != "yes" ] && [ ${patched_kernel} -ne 0 ]; then
+		compatible_modules=(perf)
+		module_names=(mchw_perf)
+	elif [ "$vendor_str" == "Intel" ]; then
 		compatible_modules=(intel-core core2 perf)
 		module_names=(mchw_intel_core mchw_core2 mchw_perf)
 	elif [ "$vendor_str" == "AMD" ]; then
-		compatible_modules=(amd)
-		module_names=(mchw_amd.ko)
+		compatible_modules=(amd perf)
+		module_names=(mchw_amd.ko mchw_perf)
 	else # ARM
 		if [ $bitw -eq 32 ]; then
 			if [ "$ODROID" == "yes" ]; then
-				compatible_modules=(odroid-xu)		
-				module_names=(mchw_odroid_xu)
+				compatible_modules=(odroid-xu perf)		
+				module_names=(mchw_odroid_xu mchw_perf)
 			else
-				compatible_modules=(arm odroid-xu)
-				module_names=(mchw_arm mchw_odroid_xu)			
+				compatible_modules=(arm odroid-xu perf)
+				module_names=(mchw_arm mchw_odroid_xu mchw_perf)			
 			fi	
 		else
-			compatible_modules=(arm64)	
-			module_names=(mchw_arm64)
+			compatible_modules=(arm64 perf)	
+			module_names=(mchw_arm64 mchw_perf)
 		fi
 	fi	
 }
@@ -300,8 +307,8 @@ function do_clean(){
 	i=0
 	for module in ${compatible_modules[*]}
 	do
-		modname=${module_names[$i]}
-		dir_module="${PMCTRACK_ROOT}/src/modules/pmcs/${module}"
+		modname="${module_names[$i]}.ko"
+        dir_module="${PMCTRACK_ROOT}/src/modules/pmcs/${module}"
 
 		if [ ! -d ${dir_module} ]; then
 			echo "Module directory not found in the source tree: ${dir_module}"

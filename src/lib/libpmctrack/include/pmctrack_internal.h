@@ -293,7 +293,7 @@ int pmct_syswide_start_counting( void );
 
 #define MAX_CORE_TYPES 2
 #define NAME_HW_EVENT_SIZE 50
-#define CODE_HW_EVENT_SIZE 10
+#define CODE_HW_EVENT_SIZE 22
 #define NAME_KEY_PMC_PROPERTY_SIZE 30
 #define VALUE_PMC_PROPERTY_SIZE 50
 #define MAX_NR_PROPERTIES 10

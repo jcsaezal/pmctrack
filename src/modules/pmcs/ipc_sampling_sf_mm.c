@@ -179,23 +179,30 @@ static int ipc_sampling_on_write_config(const char *str, unsigned int len)
 static int ipc_sampling_on_fork(unsigned long clone_flags, pmon_prof_t* prof)
 {
 
-	int i=0;
+	int i=0,j=0,error=0;
 	ipc_sampling_thread_data_t*  data=NULL;
 
 	if (prof->monitoring_mod_priv_data!=NULL)
 		return 0;
 
 	if (!prof->pmcs_config) {
-		for(i=0; i<2; i++)
-			clone_core_experiment_set_t(&prof->pmcs_multiplex_cfg[i],&ipc_sampling_pmc_configuration[i]);
+		for(i=0; i<2; i++) {
+			error=clone_core_experiment_set_t(&prof->pmcs_multiplex_cfg[i],&ipc_sampling_pmc_configuration[i],prof->this_tsk);
+
+			if (error)
+				goto out_err;
+		}
 
 		/* For now start with slow core events */
 		prof->pmcs_config=get_cur_experiment_in_set(&prof->pmcs_multiplex_cfg[0]);
 	}
 
 	data= kmalloc(sizeof (ipc_sampling_thread_data_t), GFP_KERNEL);
-	if (data == NULL)
-		return -ENOMEM;
+
+	if (data == NULL) {
+		error=-ENOMEM;
+		goto out_err;
+	}
 
 	/* Initialization */
 	/* Clone metric metainfo */
@@ -211,6 +218,10 @@ static int ipc_sampling_on_fork(unsigned long clone_flags, pmon_prof_t* prof)
 	data->cur_speedup_factor=ipc_sampling_sfmodel_config.sfmodel_initial_ratio*100; /* 2.5 x (default) */
 	prof->monitoring_mod_priv_data = data;
 	return 0;
+out_err:
+	for (j=0; j<i; j++)
+		free_experiment_set(&prof->pmcs_multiplex_cfg[j]);
+	return error;
 }
 
 /* on exec() callback */

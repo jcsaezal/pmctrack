@@ -11,7 +11,7 @@
 
 #include <pmc/pmc_user.h>
 #include <pmc/mc_experiments.h>
-#include <linux/pmctrack.h>
+#include <pmc/pmctrack_stub.h>
 #include <linux/list.h>
 #include <linux/proc_fs.h>
 
@@ -40,7 +40,7 @@ typedef struct {
 
 /* Interface for monitoring modules */
 typedef struct monitoring_module {
-	char info[MAX_CHARS_EST_MOD];	/* Description for the monitoring module */
+	char *info; /* Description for the monitoring module */
 	int id;	                        /* Monitoring module's internal ID.
 									 * This value is set automatically by the mm_manager
 									 */

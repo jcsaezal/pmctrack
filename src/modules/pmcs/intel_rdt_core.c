@@ -48,10 +48,10 @@ static void update_local_bandwidth(rmid_node_t* node, unsigned int llc_id /* Use
 		return;
 	}
 
-	val&=MAX_CMT_COUNT;
+	val&=private_cmt_support->mbm_max_count;
 
 	if(node->raw_bandwidth_value[llc_id]>val)
-		node->bandwidth_value[llc_id]=(MAX_CMT_COUNT - node->raw_bandwidth_value[llc_id])+val+1;
+		node->bandwidth_value[llc_id]=(private_cmt_support->mbm_max_count - node->raw_bandwidth_value[llc_id])+val+1;
 	else
 		node->bandwidth_value[llc_id]=val-node->raw_bandwidth_value[llc_id];
 
@@ -288,11 +288,11 @@ intel_rdt_event_t* intel_rdt_syswide_read_localbw(intel_cmt_support_t* cmt_suppo
 	return local_bandwidth_counts;
 }
 
-int intel_cmt_probe(void)
+static int qos_extensions_probe(void)
 {
 	cpuid_regs_t cpuid_regs;
 
-	if (boot_cpu_data.x86_vendor!=X86_VENDOR_INTEL)
+	if (!((boot_cpu_data.x86_vendor==X86_VENDOR_INTEL) || (boot_cpu_data.x86_vendor==X86_VENDOR_AMD)))
 		return -ENOTSUPP;
 
 	/* Instructions for Intel CMT Detection
@@ -329,6 +329,23 @@ int intel_cmt_probe(void)
 	return 0;
 }
 
+int intel_cmt_probe(void)
+{
+	if (boot_cpu_data.x86_vendor!=X86_VENDOR_INTEL)
+		return -ENOTSUPP;
+
+	return qos_extensions_probe();
+}
+
+int amd_qos_probe(void)
+{
+	if (boot_cpu_data.x86_vendor!=X86_VENDOR_AMD)
+		return -ENOTSUPP;
+
+	return qos_extensions_probe();
+}
+
+
 int intel_cmt_initialize(intel_cmt_support_t* cmt_support)
 {
 	cpuid_regs_t cpuid_regs;
@@ -343,6 +360,11 @@ int intel_cmt_initialize(intel_cmt_support_t* cmt_support)
 	cmt_support->total_rmids=nr_available_rmids=cpuid_regs.ecx;
 	cmt_support->upscaling_factor=cpuid_regs.ebx;
 	supported_events=cpuid_regs.edx & 0x07;
+
+	if (boot_cpu_data.x86_vendor==X86_VENDOR_AMD)
+		cmt_support->mbm_max_count=MAX_CMT_COUNT_AMD;
+	else
+		cmt_support->mbm_max_count=MAX_CMT_COUNT;
 
 	printk(KERN_INFO "*** Intel CMT Info ***\n");
 	printk(KERN_INFO "Available RMIDs:: %u\n", nr_available_rmids);
@@ -511,6 +533,49 @@ int intel_cat_print_capacity_bitmasks(char* str, intel_cat_support_t* cat_suppor
 	return dest-str;
 }
 
+#define MAX_CBMS 32
+
+struct cpu_qos_masks {
+	uint64_t cbm_value[MAX_CBMS];
+	uint64_t mbam_value[MAX_CBMS];
+	intel_cat_support_t* cat_support;
+};
+
+struct cpu_mask_op {
+	intel_cat_support_t* cat_support;
+	unsigned int idx;
+	unsigned int mask;
+	unsigned char is_cat;
+};
+
+
+DEFINE_PER_CPU(struct cpu_qos_masks, cpu_qos_masks);
+
+
+static void refresh_masks_cpu(void *data)
+{
+	struct cpu_qos_masks* masks=this_cpu_ptr(&cpu_qos_masks);
+	int i=0;
+	uint64_t val;
+	unsigned int mask;
+
+	for (i=0; i<masks->cat_support->cat_nr_cos_available; i++) {
+		rdmsrl(IA32_LLC_MASK_0+i, val);
+		mask=val & masks->cat_support->cat_cbm_mask;
+		masks->cbm_value[i]=mask;
+	}
+}
+
+static void update_mask_cpu(void *data)
+{
+	struct cpu_mask_op* op=(struct cpu_mask_op*) data;
+
+	op->mask&=op->cat_support->cat_cbm_mask;
+	wrmsr(IA32_LLC_MASK_0+op->idx, op->mask, 0);
+	//printk(KERN_INFO "Attempting to set  up CLOS %d MASK to 0x%x, actual value:: 0x%x\n",val,mask,(unsigned int)actual_val);
+}
+
+
 int intel_cat_set_capacity_bitmask(intel_cat_support_t* cat_support, unsigned int idx, unsigned int mask)
 {
 
@@ -522,6 +587,42 @@ int intel_cat_set_capacity_bitmask(intel_cat_support_t* cat_support, unsigned in
 	mask&=cat_support->cat_cbm_mask;
 	wrmsr(IA32_LLC_MASK_0+idx, mask, 0);
 	//printk(KERN_INFO "Attempting to set  up CLOS %d MASK to 0x%x, actual value:: 0x%x\n",val,mask,(unsigned int)actual_val);
+
+	return 0;
+}
+
+int intel_cat_print_capacity_bitmasks_cpu(char* str, intel_cat_support_t* cat_support, int cpu)
+{
+	int i=0;
+	char* dest=str;
+	struct cpu_qos_masks* masks=per_cpu_ptr(&cpu_qos_masks,cpu);
+	/* Update cat support pointer */
+	masks->cat_support=cat_support;
+
+	smp_call_function_single(cpu, refresh_masks_cpu, NULL, 1);
+
+	for (i=0; i<cat_support->cat_nr_cos_available; i++)
+		dest+=sprintf(dest,"llc_cbm%i=0x%llx\n",i,masks->cbm_value[i]);
+
+	return dest-str;
+
+}
+
+int intel_cat_set_capacity_bitmask_cpu(intel_cat_support_t* cat_support, unsigned int idx, unsigned int mask, int cpu)
+{
+
+	struct cpu_mask_op data = {
+		.cat_support=cat_support,
+		.idx=idx,
+		.mask=mask,
+		.is_cat=1
+	};
+
+	// /* For security reasons not allowed to change llc_cbm0 */
+	if (idx<0 || idx>=cat_support->cat_nr_cos_available)
+		return -EINVAL;
+
+	smp_call_function_single(cpu, update_mask_cpu, &data, 1);
 
 	return 0;
 }
@@ -587,9 +688,9 @@ void intel_cmt_update_supported_events(intel_cmt_support_t* cmt_support,intel_cm
 		if (val & (RMID_VAL_ERROR | RMID_VAL_UNAVAIL))
 			trace_printk(KERN_INFO "Error when reading value");
 		else {
-			val&=MAX_CMT_COUNT;
+			val&=cmt_support->mbm_max_count;
 			if(tdata->last_cmt_value[llc_id][L3_TOTAL_BW_EVENT_ID-1]>val) {
-				tdata->last_llc_utilization[llc_id][L3_TOTAL_BW_EVENT_ID-1]=(MAX_CMT_COUNT - tdata->last_cmt_value[llc_id][L3_TOTAL_BW_EVENT_ID-1])+val+1;
+				tdata->last_llc_utilization[llc_id][L3_TOTAL_BW_EVENT_ID-1]=(cmt_support->mbm_max_count - tdata->last_cmt_value[llc_id][L3_TOTAL_BW_EVENT_ID-1])+val+1;
 			} else {
 				tdata->last_llc_utilization[llc_id][L3_TOTAL_BW_EVENT_ID-1]=val-tdata->last_cmt_value[llc_id][L3_TOTAL_BW_EVENT_ID-1];
 			}
@@ -608,9 +709,9 @@ void intel_cmt_update_supported_events(intel_cmt_support_t* cmt_support,intel_cm
 		if (val & (RMID_VAL_ERROR | RMID_VAL_UNAVAIL))
 			trace_printk(KERN_INFO "Error when reading value");
 		else {
-			val&=MAX_CMT_COUNT;
+			val&=cmt_support->mbm_max_count;
 			if(tdata->last_cmt_value[llc_id][L3_LOCAL_BW_EVENT_ID-1]>val) {
-				tdata->last_llc_utilization[llc_id][L3_LOCAL_BW_EVENT_ID-1]=(MAX_CMT_COUNT - tdata->last_cmt_value[llc_id][L3_LOCAL_BW_EVENT_ID-1])+val+1;
+				tdata->last_llc_utilization[llc_id][L3_LOCAL_BW_EVENT_ID-1]=(cmt_support->mbm_max_count - tdata->last_cmt_value[llc_id][L3_LOCAL_BW_EVENT_ID-1])+val+1;
 			} else {
 				tdata->last_llc_utilization[llc_id][L3_LOCAL_BW_EVENT_ID-1]=val-tdata->last_cmt_value[llc_id][L3_LOCAL_BW_EVENT_ID-1];
 			}

@@ -175,6 +175,10 @@ static int parse_csv_file(pmu_info_t *pmu_info)
 		strcpy(hw_subevt->name, subevt_name);
 		hw_subevt->nr_properties = 0;
 
+		/* Remove linebreak */
+		if (flags && flags[strlen(flags)-1]=='\n')
+			flags[strlen(flags)-1]='\0';
+
 		while((flag = strsep(&flags, ";")) != NULL) {
 			key = strsep(&flag, "=");
 			value = strsep(&flag, "=");

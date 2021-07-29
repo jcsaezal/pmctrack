@@ -1,3 +1,14 @@
+/*
+ *  cache_part.h
+ *
+ *  OS-level resource-management framework based on
+ *  HW extensions for cache-partitioning and memory-bandwidth limitation
+ *
+ *  Copyright (c) 2021 Juan Carlos Saez <jcsaezal@ucm.es>
+ *
+ *  This code is licensed under the GNU GPL v2.
+ */
+
 #ifndef PMC_CACHE_PART_H
 #define PMC_CACHE_PART_H
 
@@ -65,6 +76,7 @@ typedef struct app {
 	int static_type;
 	int sensitive_id; /* WATCH OUT: Id for pair_clustering (internal naming!) */
 	struct task_struct* process; /* For debugging with stap */
+	struct task_struct* master_thread; /* For basic support for MT apps */
 	struct list_head link_profiling;
 	int profiling_scheduled;
 	unsigned long next_periodic_profile;

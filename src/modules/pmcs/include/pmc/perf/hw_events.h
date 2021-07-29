@@ -13,8 +13,6 @@
 #include <linux/sched.h>
 
 #include <pmc/perf/pmc_const.h>
-#include <pmc/common/msr.h>
-#include <pmc/common/pmc_types.h>
 
 #ifndef NULL
 #define NULL 0

@@ -3,6 +3,7 @@
 
 #include <linux/types.h>
 #include <pmc/pmu_config.h> //For cpuid_regs_t
+#include <pmc/mc_experiments.h> /* For uint_t */
 
 /* API Intel CMT */
 #define DISABLE_RMID 0  	/* RMID reserved for the OS */
@@ -12,18 +13,19 @@
 #define MSR_IA32_QM_EVTSEL	0xc8d
 #define RMID_VAL_ERROR		(1ULL << 63)
 #define RMID_VAL_UNAVAIL	(1ULL << 62)
-#define RMID_MAX_LLCS		4	/* Max number of processor "chips" in the machine */
+#define RMID_MAX_LLCS		32	/* Max number of processor "chips" in the machine */
 #define CMT_MAX_EVENTS		3 	/* L3_USAGE, L3_TOTAL_BW, L3_LOCAL_BW */
 #define L3_OCCUPANCY_EVENT_ID	0x01
 #define L3_TOTAL_BW_EVENT_ID	0x02
 #define L3_LOCAL_BW_EVENT_ID	0x03
 
 /*
- * We have found empirically that memory bandwith
- * cumulative counters are 24-bit wide !!
+ * Memory bandwith cumulative counters
+ * are 24-bit wide on Intel and 44-bit wide on AMD !!
  * That's the reason for this macro.
  */
 #define MAX_CMT_COUNT	((1ULL<<24ULL)-1ULL)
+#define MAX_CMT_COUNT_AMD	((1ULL<<44ULL)-1ULL)
 
 #define IA32_LLC_MASK_0 0xc90	/* For COS 0 */
 #define IA32_LLC_MASK_1 0xc91  /* For COS 1  (and so on) */
@@ -36,6 +38,7 @@ typedef struct {
 	unsigned int event_l3_occupancy;
 	unsigned int event_l3_total_bw;
 	unsigned int event_l3_local_bw;
+	uint64_t	 mbm_max_count;
 } intel_cmt_support_t;
 
 /* CAT SPECIFIC stuff */
@@ -95,6 +98,7 @@ static inline void initialize_cmt_thread_struct(intel_cmt_thread_struct_t* data)
 
 
 int intel_cmt_probe(void);
+int amd_qos_probe(void);
 
 int intel_cmt_initialize(intel_cmt_support_t* cmt_support);
 int intel_cat_initialize(intel_cat_support_t* cat_support);
@@ -108,6 +112,12 @@ int intel_mba_release(intel_mba_support_t* mba_support);
 int intel_cat_print_capacity_bitmasks(char* str, intel_cat_support_t* cat_support);
 
 int intel_cat_set_capacity_bitmask(intel_cat_support_t* cat_support, unsigned int idx, unsigned int mask);
+
+
+int intel_cat_print_capacity_bitmasks_cpu(char* str, intel_cat_support_t* cat_support, int cpu);
+
+int intel_cat_set_capacity_bitmask_cpu(intel_cat_support_t* cat_support, unsigned int idx, unsigned int mask, int cpu);
+
 
 
 int intel_mba_print_delay_values(char* str, intel_mba_support_t* mba_support);

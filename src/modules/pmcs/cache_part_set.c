@@ -1,3 +1,15 @@
+/*
+ *  cache_part_set.c
+ *
+ *  OS-level resource-management framework based on
+ *  HW extensions for cache-partitioning and memory-bandwidth limitation
+ *
+ *  Copyright (c) 2021 Juan Carlos Saez <jcsaezal@ucm.es>
+ *
+ *  This code is licensed under the GNU GPL v2.
+ */
+
+
 #include <pmc/cache_part.h>
 #include <linux/random.h>
 

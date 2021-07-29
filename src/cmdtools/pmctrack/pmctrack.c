@@ -1095,8 +1095,9 @@ void sigchld_handler(int signo)
 
 void sigint_handler(int signo)
 {
-	if (kill(pid,SIGTERM))
-		fprintf(stderr,"Could not send signal %d to PID %d\n",signo,pid);
+	if (pid>0)
+		if (kill(pid,SIGTERM))
+			fprintf(stderr,"Could not send signal %d to PID %d\n",signo,pid);
 
 	/* Finish immediately */
 	stop_profiling=1;

@@ -11,7 +11,9 @@
 
 
 #include <pmc/data_str/bit_field.h>
+#ifdef CONFIG_PMC_COREI7
 #include <pmc/corei7/pmc_const.h>
+#endif
 
 
 #define clear_bit_layout(bl) (bl).m_value=0

@@ -15,6 +15,7 @@
  * of the vanilla Linux kernel v3.17.3.
  */
 #include <pmc/pmu_config.h>
+#include <pmc/mc_experiments.h>
 #include <linux/irq.h>
 #include <linux/printk.h>
 #include <linux/cpu.h>

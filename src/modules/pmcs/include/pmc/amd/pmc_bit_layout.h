@@ -11,8 +11,9 @@
 
 
 #include <pmc/data_str/bit_field.h>
+#ifdef CONFIG_PMC_AMD
 #include <pmc/amd/pmc_const.h>
-
+#endif
 
 #define clear_bit_layout(bl) (bl).m_value=0
 
@@ -39,6 +40,7 @@ typedef struct {
 }
 evtsel_msr;
 
+typedef evtsel_msr amd_evtsel_msr;
 
 static inline void init_evtsel_msr ( evtsel_msr* evtsel )
 {
@@ -60,6 +62,79 @@ static inline void init_evtsel_msr ( evtsel_msr* evtsel )
 	init_bit_field ( &evtsel->m_ho,&evtsel->m_value,41,1);
 	init_bit_field ( &evtsel->m_nu3,&evtsel->m_value,42,22);
 
+	evtsel->m_value=0;
+}
+
+static inline void init_amd_evtsel_msr(evtsel_msr* evtsel)
+{
+	init_evtsel_msr(evtsel);
+}
+
+/* PERFEVTSEL_MSR bit layout */
+typedef struct {
+	/* Enumeration of bitfields*/
+	bit_field_64 m_evtsel; 	/* Event Selection */
+	bit_field_64 m_umask; 	/* Unit Mask (Subevent selection) */
+	bit_field_64 m_usr;  	/* User mode count (privilege levels 1,2 or 3) */
+	bit_field_64 m_os;  	/* Kernel mode count (privilege level 0) */
+	bit_field_64 m_e;   	/* Edge detection */
+	bit_field_64 m_pc;  	/* Pin control */
+	bit_field_64 m_int; 	/* APIC interrupt enable */
+	bit_field_64 m_any; 	/* ANY thread field (HT) */
+	bit_field_64 m_en;  	/* Enable counters */
+	bit_field_64 m_inv; 	/* Invert flag */
+	bit_field_64 m_cmask; 	/* CMASK */
+	bit_field_64 m_nu2; 	/* Reserved */
+	uint64_t m_value; 	/* 64-bit store */
+}
+intel_evtsel_msr;
+
+
+static inline void init_intel_evtsel_msr ( intel_evtsel_msr* evtsel )
+{
+	/* Bit layout initialization */
+	init_bit_field ( &evtsel->m_evtsel,&evtsel->m_value,0,8 );
+	init_bit_field ( &evtsel->m_umask,&evtsel->m_value,8,8 );
+	init_bit_field ( &evtsel->m_usr,&evtsel->m_value,16,1 );
+	init_bit_field ( &evtsel->m_os,&evtsel->m_value,17,1 );
+	init_bit_field ( &evtsel->m_e,&evtsel->m_value,18,1 );
+	init_bit_field ( &evtsel->m_pc,&evtsel->m_value,19,1 );
+	init_bit_field ( &evtsel->m_int,&evtsel->m_value,20,1 );
+	init_bit_field ( &evtsel->m_any,&evtsel->m_value,21,1 );
+	init_bit_field ( &evtsel->m_en,&evtsel->m_value,22,1 );
+	init_bit_field ( &evtsel->m_inv,&evtsel->m_value,23,1 );
+	init_bit_field ( &evtsel->m_cmask,&evtsel->m_value,24,8 );
+	init_bit_field ( &evtsel->m_nu2,&evtsel->m_value,32,32 );
+
+	evtsel->m_value=0;
+}
+
+/* Core::X86::Msr::ChL3PmcCfg bit layout */
+typedef struct {
+	/* Enumeration of bitfields*/
+	bit_field_64 m_evtsel; 	/* Event Selection */
+	bit_field_64 m_umask; 	/* Unit Mask (Subevent selection) */
+	bit_field_64 m_reserved1;
+	bit_field_64 m_en;  	/* Enable counters */
+	bit_field_64 m_reserved2;
+	bit_field_64 m_slice_mask;  	/* Enable counters */
+	bit_field_64 m_reserved3;
+	bit_field_64 m_thread_mask;  	/* SMT thread */
+	uint64_t m_value; 	/* 64-bit store */
+}
+l3evtsel_msr;
+
+static inline void init_l3evtsel_msr ( l3evtsel_msr* evtsel )
+{
+	/* Bit layout initialization */
+	init_bit_field ( &evtsel->m_evtsel,&evtsel->m_value,0,8 );
+	init_bit_field ( &evtsel->m_umask,&evtsel->m_value,8,8 );
+	init_bit_field ( &evtsel->m_reserved1,&evtsel->m_value,16,6 );
+	init_bit_field ( &evtsel->m_en,&evtsel->m_value,22,1 );
+	init_bit_field ( &evtsel->m_reserved2,&evtsel->m_value,23,25 );
+	init_bit_field ( &evtsel->m_slice_mask,&evtsel->m_value,48,4 );
+	init_bit_field ( &evtsel->m_reserved3,&evtsel->m_value,52,4 );
+	init_bit_field ( &evtsel->m_thread_mask,&evtsel->m_value,56,8 );
 	evtsel->m_value=0;
 }
 

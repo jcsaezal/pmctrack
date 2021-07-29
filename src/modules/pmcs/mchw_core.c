@@ -12,6 +12,10 @@
  * 	 Guillermo Martinez Fernandez,
  *	 Sergio Sanchez Gordo and Sofia Dronda Merino
  *
+ *  Adaptation of the architecture-independent code for patchless PMCTRack
+ *  by Lazaro Clemen and Juan Carlos Saez
+ *  (C) 2021 Lazaro Clemen Palafox <lazarocl@ucm.es>
+ *  (C) 2021 Juan Carlos Saez <jcsaezal@ucm.es>
  */
 
 #include <linux/module.h>
@@ -27,7 +31,7 @@
 #include <linux/notifier.h>
 #include <linux/semaphore.h>
 #include <pmc/pmu_config.h>
-#include <linux/pmctrack.h>
+#include <pmc/pmctrack_stub.h>
 #include <linux/vmalloc.h>
 #include <asm-generic/errno.h>
 #include <linux/mm.h>  /* mmap related stuff */
@@ -55,6 +59,7 @@
 
 #define BUF_LEN_PMC_SAMPLES_EBS_KERNEL (((PAGE_SIZE)/sizeof(pmc_sample_t))*sizeof(pmc_sample_t))
 
+
 /*
  * Different scenarios where performance samples
  * are generated.
@@ -67,14 +72,25 @@ typedef enum {
 	PMC_SELF_EVT		/* Self-monitoring sampling (libpmctrack) */
 } pmc_sampling_event_t;
 
+#ifdef CONFIG_PMC_PERF
+static inline int prof_uses_timer(pmon_prof_t* prof)
+{
+	return (prof->profiling_mode==TBS_USER_MODE ||
+	        prof->profiling_mode==TBS_SCHED_MODE);
+}
+#else
+static inline int prof_uses_timer(pmon_prof_t* prof)
+{
+	return (prof->profiling_mode==TBS_SCHED_MODE);
+}
+#endif
+
+
 /* Declare del_timer_sync PERF wrapper */
 static void cancel_pmctrack_timer(pmon_prof_t* prof);
 
 /* Default per-CPU set of PMC events */
 static DEFINE_PER_CPU(core_experiment_t, cpu_exp);
-
-/* Scheduler function exported by PMCTrack kernel patch */
-extern struct task_struct* find_process_by_pid(pid_t pid);
 
 /* Global PMCTrack configuration parameters */
 typedef struct {
@@ -126,42 +142,42 @@ static inline int refresh_event_multiplexing_cpu(pmon_prof_t* prof,int coretype)
 static ssize_t proc_pmc_config_write(struct file *filp, const char __user *buf, size_t len, loff_t *off);
 static ssize_t proc_pmc_config_read(struct file *filp, char __user *buf, size_t len, loff_t *off);
 
-static const struct file_operations proc_pmc_config_fops = {
-	.read = proc_pmc_config_read,
-	.write = proc_pmc_config_write,
-	.open = proc_generic_open,
-	.release = proc_generic_close,
+static const pmctrack_proc_ops_t proc_pmc_config_fops = {
+	.PMCT_PROC_READ = proc_pmc_config_read,
+	.PMCT_PROC_WRITE = proc_pmc_config_write,
+	.PMCT_PROC_OPEN = proc_generic_open,
+	.PMCT_PROC_RELEASE = proc_generic_close,
 };
 
 /* /proc/pmc/enable */
 static ssize_t proc_pmc_enable_write(struct file *filp, const char __user *buf, size_t len, loff_t *off);
 static ssize_t proc_pmc_enable_read(struct file *filp, char __user *buf, size_t len, loff_t *off);
 
-static const struct file_operations proc_pmc_enable_fops = {
-	.read = proc_pmc_enable_read,
-	.write = proc_pmc_enable_write,
-	.open = proc_generic_open,
-	.release = proc_generic_close,
+static const pmctrack_proc_ops_t proc_pmc_enable_fops = {
+	.PMCT_PROC_READ = proc_pmc_enable_read,
+	.PMCT_PROC_WRITE = proc_pmc_enable_write,
+	.PMCT_PROC_OPEN = proc_generic_open,
+	.PMCT_PROC_RELEASE = proc_generic_close,
 };
 
 /* /proc/pmc/properties */
 static ssize_t proc_pmc_properties_write(struct file *filp, const char __user *buf, size_t len, loff_t *off);
 static ssize_t proc_pmc_properties_read(struct file *filp, char __user *buf, size_t len, loff_t *off);
 
-static const struct file_operations proc_pmc_properties_fops = {
-	.read = proc_pmc_properties_read,
-	.write = proc_pmc_properties_write,
-	.open = proc_generic_open,
-	.release = proc_generic_close,
+static const pmctrack_proc_ops_t proc_pmc_properties_fops = {
+	.PMCT_PROC_READ = proc_pmc_properties_read,
+	.PMCT_PROC_WRITE = proc_pmc_properties_write,
+	.PMCT_PROC_OPEN = proc_generic_open,
+	.PMCT_PROC_RELEASE = proc_generic_close,
 };
 
 /* /proc/pmc/info */
 static ssize_t proc_pmc_info_read(struct file *filp, char __user *buf, size_t len, loff_t *off);
 
-static const struct file_operations proc_pmc_info_fops = {
-	.read = proc_pmc_info_read,
-	.open = proc_generic_open,
-	.release = proc_generic_close,
+static const pmctrack_proc_ops_t proc_pmc_info_fops = {
+	.PMCT_PROC_READ = proc_pmc_info_read,
+	.PMCT_PROC_OPEN = proc_generic_open,
+	.PMCT_PROC_RELEASE = proc_generic_close,
 };
 
 /* /proc/pmc/monitor */
@@ -169,12 +185,12 @@ static ssize_t proc_monitor_pmcs_write(struct file *filp, const char __user *buf
 static ssize_t proc_monitor_pmcs_read (struct file *filp, char __user *buf, size_t len, loff_t *off);
 static int proc_monitor_pmcs_mmap(struct file *filp, struct vm_area_struct *vma);
 
-static const struct file_operations proc_monitor_pmcs_fops = {
-	.read = proc_monitor_pmcs_read,
-	.write = proc_monitor_pmcs_write,
-	.mmap=proc_monitor_pmcs_mmap,
-	.open = proc_generic_open,
-	.release = proc_generic_close,
+static const pmctrack_proc_ops_t proc_monitor_pmcs_fops = {
+	.PMCT_PROC_READ = proc_monitor_pmcs_read,
+	.PMCT_PROC_WRITE = proc_monitor_pmcs_write,
+	.PMCT_PROC_MMAP=proc_monitor_pmcs_mmap,
+	.PMCT_PROC_OPEN = proc_generic_open,
+	.PMCT_PROC_RELEASE = proc_generic_close,
 };
 
 /*
@@ -200,11 +216,11 @@ static void init_percpu_structures(void);
 
 static void cancel_pmctrack_timer(pmon_prof_t* prof)
 {
-	del_timer_sync(&prof->timer);
 #ifdef CONFIG_PMC_PERF
 	/* Delete task from Linux default workqueue */
 	flush_work(&prof->read_counters_task);
 #endif
+	del_timer_sync(&prof->timer);
 }
 
 /*
@@ -298,14 +314,14 @@ int do_count_mc_experiment_buffer(core_experiment_t* core_experiment,
 
 /* Actual implementation of the pmc_ops_t interface */
 pmc_ops_t pmc_mc_prog = {
-	mod_alloc_per_thread_data,
-	mod_save_callback,
-	mod_restore_callback,
-	mod_tbs_tick,
-	mod_exec_thread,
-	mod_free_per_thread_data,
-	mod_exit_thread,
-	mod_get_current_metric_value
+	.pmcs_alloc_per_thread_data=mod_alloc_per_thread_data,
+	.pmcs_save_callback=mod_save_callback,
+	.pmcs_restore_callback=mod_restore_callback,
+	.pmcs_tbs_tick=mod_tbs_tick,
+	.pmcs_exec_thread=mod_exec_thread,
+	.pmcs_free_per_thread_data=mod_free_per_thread_data,
+	.pmcs_exit_thread=mod_exit_thread,
+	.pmcs_get_current_metric_value=mod_get_current_metric_value
 };
 
 #ifdef CONFIG_PMC_PERF
@@ -330,6 +346,48 @@ static void deferred_read_function(struct work_struct *work)
 		sample_counters_user_tbs(prof, prof->pmcs_config, event, cpu);
 	put_task_struct(p);
 }
+
+#endif
+
+#ifndef CONFIG_PMCTRACK
+/*
+ * This function creates a dummy software PMU perf_event so that when PMCTrack is
+ * used without a patched kernel it carries the profiling data within a given task.
+ */
+struct perf_event *create_pmctrack_task_event(struct task_struct* task, pmon_prof_t* prof)
+{
+	struct perf_event *event = NULL;
+	struct perf_event_attr sched_perf_sw_attr = {
+		.type           = PERF_TYPE_SOFTWARE,
+		.config         = PERF_COUNT_SW_DUMMY,
+		.size           = sizeof(struct perf_event_attr),
+		.pinned         = 1,
+		.disabled       = 1,
+	};
+	event = perf_event_create_kernel_counter(&sched_perf_sw_attr, -1, task, NULL, NULL);
+	if(!event) {
+		printk(KERN_INFO "perf event creation failed.\n");
+		return NULL;
+	} else if(IS_ERR(event)) {
+		printk(KERN_INFO "perf event creation failed, error code: %ld\n", PTR_ERR(event));
+		return NULL;
+	}
+
+	/* pmctrack_task initialization */
+	prof->safety_control = SAFETY_CODE;
+	prof->prof_enabled = 0;
+	prof->event=event;
+	/** The profiler will be disabled by default */
+	/* Insert pmctrack_task in to event */
+	event->pmu_private = prof;
+
+	/* Add fake perf event in event list */
+	mutex_lock(&task->perf_event_mutex);
+	list_add_tail(&event->owner_entry, &task->perf_event_list);
+	mutex_unlock(&task->perf_event_mutex);
+
+	return event;
+}
 #endif
 
 /* Invoked when forking a process/thread */
@@ -337,14 +395,30 @@ static int mod_alloc_per_thread_data(unsigned long clone_flags, struct task_stru
 {
 	int i;
 	int ret;
+	pmon_prof_t* prof;
+	pmon_prof_t* par_prof;
 
-	/* Allocate memory to struct pmon_prof_t */
-	pmon_prof_t* prof = (pmon_prof_t*) kmalloc(sizeof(pmon_prof_t), GFP_KERNEL);
+	/* Allocate memory for pmon_prof_t structure */
+	prof = (pmon_prof_t*) kmalloc(sizeof(pmon_prof_t), GFP_KERNEL);
 
 	if(prof == NULL) {
 		printk(KERN_INFO "Can't allocate memory for pmon_prof_t.\n");
 		return -ENOMEM;
 	}
+
+#ifndef CONFIG_PMCTRACK
+	/*
+	 * Attach task-specific data as private data of a fake perf event
+	 * It already takes care of initializing the new fields added by
+	 * perf-events backend, including safety_code and prof_enabled
+	 */
+
+	if (!create_pmctrack_task_event(p,prof)) {
+		printk(KERN_INFO "Can't create pmctrack task event in perf\n");
+		kfree(prof);
+		return -ENOMEM;
+	}
+#endif
 
 	/* Basic prof_struct initialization */
 	prof->pmc_ticks_counter = 0;
@@ -416,9 +490,9 @@ static int mod_alloc_per_thread_data(unsigned long clone_flags, struct task_stru
 	/* No per-thread private data by default */
 	prof->monitoring_mod_priv_data = NULL;
 
-	if (is_new_thread(clone_flags) && current->prof_enabled && current->pmc) {
-		pmon_prof_t* par_prof = (pmon_prof_t*)current->pmc;
+	par_prof=get_prof(current);
 
+	if (is_new_thread(clone_flags) && par_prof && get_prof_enabled(par_prof)) {
 		/* Inherit ebs cap */
 		prof->max_ebs_samples=par_prof->max_ebs_samples;
 
@@ -431,8 +505,18 @@ static int mod_alloc_per_thread_data(unsigned long clone_flags, struct task_stru
 
 			/* Clone pmcs */
 			if (par_prof->pmcs_config) {
+#ifdef CONFIG_PMC_PERF
+				/* TODO: For now in perf no configuration for different core types */
+				if ((ret=clone_core_experiment_set_t(&prof->pmcs_multiplex_cfg[0],&par_prof->pmcs_multiplex_cfg[0],p))) {
+					if (prof->pmc_samples_buffer)
+						put_pmc_samples_buffer(prof->pmc_samples_buffer);
+					kfree(prof);
+					return ret;
+				}
+#else
 				for(i=0; i<AMP_MAX_CORETYPES; i++)
-					clone_core_experiment_set_t(&prof->pmcs_multiplex_cfg[i],&par_prof->pmcs_multiplex_cfg[i]);
+					clone_core_experiment_set_t(&prof->pmcs_multiplex_cfg[i],&par_prof->pmcs_multiplex_cfg[i],p);
+#endif
 				/* For now start with slow core events */
 				prof->pmcs_config=get_cur_experiment_in_set(&prof->pmcs_multiplex_cfg[0]);
 			}
@@ -445,7 +529,7 @@ static int mod_alloc_per_thread_data(unsigned long clone_flags, struct task_stru
 			prof->pmc_jiffies_timeout=jiffies+prof->pmc_jiffies_interval;
 			/* Inherit monitor from the "parent thread" as well */
 			prof->pid_monitor=par_prof->pid_monitor;
-			p->prof_enabled=1;
+			set_prof_enabled(prof,1);
 #ifdef TBS_TIMER
 			if (prof->profiling_mode==TBS_USER_MODE)
 				mod_timer( &prof->timer, prof->pmc_jiffies_timeout);
@@ -458,11 +542,16 @@ static int mod_alloc_per_thread_data(unsigned long clone_flags, struct task_stru
 	}
 
 	if ((ret=mm_on_fork(clone_flags,prof))) {
+		if (prof->pmc_samples_buffer)
+			put_pmc_samples_buffer(prof->pmc_samples_buffer);
 		kfree(prof);
 		return ret;
 	}
 
+#ifdef CONFIG_PMCTRACK
 	p->pmc=prof;
+#endif
+
 	return 0;
 }
 
@@ -513,7 +602,7 @@ static void sample_counters_user_tbs(pmon_prof_t* prof, core_experiment_t* core_
 		/* Prepare next timeout */
 		prof->pmc_jiffies_timeout=jiffies+prof->pmc_jiffies_interval;
 #ifdef TBS_TIMER
-		if (prof->profiling_mode==TBS_USER_MODE && prof->this_tsk->prof_enabled)
+		if (prof->profiling_mode==TBS_USER_MODE && get_prof_enabled(prof))
 			mod_timer( &prof->timer, prof->pmc_jiffies_timeout);
 #endif
 		/* Initialize sample*/
@@ -596,7 +685,6 @@ static void sample_counters_user_tbs(pmon_prof_t* prof, core_experiment_t* core_
 	pmc_sample_t sample;
 	int ebs_idx=-1;
 	int cur_coretype=get_coretype_cpu(cpu);
-	pmu_props_t* props=get_pmu_props_cpu(cpu);
 	ktime_t now;
 	int callback_flags=MM_TICK;
 
@@ -605,16 +693,14 @@ static void sample_counters_user_tbs(pmon_prof_t* prof, core_experiment_t* core_
 
 	do_count_mc_experiment(prof,core_exp,1);
 
-
 	if ((event==PMC_TIMER_TICK_EVT) && (prof->this_tsk!=current))
 		callback_flags|=MM_NO_CUR_CPU;
 
-	/* Prepare next timeout */
-	prof->pmc_jiffies_timeout=jiffies+prof->pmc_jiffies_interval;
-
-	if (prof->profiling_mode==TBS_USER_MODE && prof->this_tsk->prof_enabled)
+	if (prof->profiling_mode==TBS_USER_MODE && get_prof_enabled(prof)) {
+		/* Prepare next timeout */
+		prof->pmc_jiffies_timeout=jiffies+prof->pmc_jiffies_interval;
 		mod_timer( &prof->timer, prof->pmc_jiffies_timeout);
-
+	}
 
 	/* Initialize sample*/
 	switch(event) {
@@ -729,16 +815,16 @@ static inline void sample_counters_sched_tbs(pmon_prof_t* prof, core_experiment_
 		sample.pid=prof->this_tsk->pid;
 		ebs_idx=core_exp->ebs_idx;
 
-		/* This is to handle migration samples correctly !! */
-		if (ebs_idx!=-1) {
-			uint64_t reset_value=__get_reset_value(&(core_exp->array[ebs_idx]));
-			sample.pmc_counts[ebs_idx]+=( (-reset_value) & props->pmc_width_mask);
-		}
-
 		/* Copy and clear samples in prof */
 		for(i=0; i<MAX_LL_EXPS; i++) {
 			sample.pmc_counts[i]=prof->pmc_values[i];
 			prof->pmc_values[i]=0;
+		}
+
+		/* This is to handle migration samples correctly !! */
+		if (ebs_idx!=-1) {
+			uint64_t reset_value=__get_reset_value(&(core_exp->array[ebs_idx]));
+			sample.pmc_counts[ebs_idx]+=( (-reset_value) & props->pmc_width_mask);
 		}
 
 		/* Call the monitoring module (This one controls multiplexation if necesary) !! */
@@ -760,7 +846,7 @@ static void mod_save_callback_gen(void* v_prof, int cpu, int lock)
 {
 	pmon_prof_t* prof=(pmon_prof_t*)v_prof;
 
-	if (!prof || !prof->this_tsk->prof_enabled)
+	if (!get_prof_enabled(prof))
 		return;
 
 	mm_on_switch_out(prof);
@@ -776,13 +862,13 @@ static void mod_save_callback_gen(void* v_prof, int cpu, int lock)
 	if (syswide_monitoring_enabled() && !syswide_monitoring_switch_out(cpu))
 		return;
 
-	if (!prof || !prof->this_tsk->prof_enabled)
+	if (!prof || !get_prof_enabled(prof))
 		return;
 
 	if (lock)
 		spin_lock_irqsave(&prof->lock,flags);
 
-	if (unlikely(!prof->this_tsk->prof_enabled))
+	if (unlikely(!get_prof_enabled(prof)))
 		goto unlock;
 
 	core_exp = prof->pmcs_config?prof->pmcs_config:&per_cpu(cpu_exp, cpu);
@@ -825,12 +911,13 @@ static void mod_save_callback(void* v_prof, int cpu)
 	mod_save_callback_gen(v_prof,cpu,1);
 }
 
+
 #ifdef CONFIG_PMC_PERF
 static inline void mod_restore_callback_gen(void* v_prof, int cpu, int lock)
 {
 	pmon_prof_t* prof=(pmon_prof_t*)v_prof;
 
-	if (!prof || !prof->this_tsk->prof_enabled)
+	if (!get_prof_enabled(prof))
 		return;
 
 	mm_on_switch_in(prof);
@@ -849,13 +936,13 @@ static inline void mod_restore_callback_gen(void* v_prof, int cpu, int lock)
 	if (syswide_monitoring_enabled() && !syswide_monitoring_switch_in(cpu))
 		return;
 
-	if (!prof || !prof->this_tsk->prof_enabled)
+	if (!prof || !get_prof_enabled(prof))
 		return;
 
 	if (lock) {
 		spin_lock_irqsave(&prof->lock,flags);
 
-		if (unlikely(!prof->this_tsk->prof_enabled))
+		if (unlikely(!get_prof_enabled(prof)))
 			goto unlock;
 	}
 
@@ -991,7 +1078,6 @@ static void mod_restore_callback(void* v_prof, int cpu)
 	mod_restore_callback_gen(v_prof,cpu,1);
 }
 
-
 #ifdef TBS_TIMER
 static inline int refresh_event_multiplexing_cpu(pmon_prof_t* prof,int cur_coretype)
 {
@@ -1070,7 +1156,7 @@ static int sample_counters_user_tbs_task(void *vprof)
 
 	spin_lock_irqsave(&prof->lock,flags);
 	core_exp = prof->pmcs_config;
-	if (prof->this_tsk->prof_enabled && prof->pmcs_config && prof->pmc_jiffies_timeout<=jiffies)
+	if (get_prof_enabled(prof) && prof->pmcs_config && prof->pmc_jiffies_timeout<=jiffies)
 		sample_counters_user_tbs(prof,core_exp,PMC_TIMER_TICK_EVT,smp_processor_id());
 	spin_unlock_irqrestore(&prof->lock,flags);
 	return 0;
@@ -1089,9 +1175,9 @@ static void tbs_mode_fire_timer(struct timer_list *t)
 #endif
 	struct task_struct* p;
 	int cpu_task;
-
-
-
+#ifdef CONFIG_PMC_PERF
+	int this_cpu=smp_processor_id();
+#endif
 	if (!prof)
 		return;
 
@@ -1102,8 +1188,14 @@ static void tbs_mode_fire_timer(struct timer_list *t)
 	get_task_struct(p);
 	if (cpu_task==-1 || p->state!=TASK_RUNNING)
 		schedule_work(&prof->read_counters_task);
-	else
+	else if (cpu_task==this_cpu) {
+		/*  Optimistic case read_counters on the same CPU */
+		sample_counters_user_tbs(prof, prof->pmcs_config, PMC_TIMER_TICK_EVT, this_cpu);
+		put_task_struct(p);
+	} else {
+		/* Different CPU needs IPI, issue deferred work */
 		schedule_work_on(cpu_task,&prof->read_counters_task);
+	}
 #else
 	/*
 	 * Obtain CPU safely. Invoke the function to read HW counters
@@ -1138,10 +1230,28 @@ static void mod_tbs_tick(void* v_prof, int cpu)
 {
 	pmon_prof_t* prof=(pmon_prof_t*)v_prof;
 
-	if (!prof || !prof->this_tsk->prof_enabled)
+	if (!prof || !get_prof_enabled(prof))
 		return;
 
 	mm_on_tick(prof,cpu);
+
+	if (prof->pmcs_config && prof->profiling_mode==TBS_SCHED_MODE) {
+		if(prof->pmc_ticks_counter >= (prof->nticks_sampling_period -1)) {
+			/*Sampling interval counter is reset */
+			prof->pmc_ticks_counter = 0;
+			/*
+			 * Note that a tasklet could have been
+			 * used for this kind of deferred work
+			 * The main issues is that they are going
+			 * to remove them fron the kernel
+			 * https://lwn.net/Articles/830964/
+			 */
+			/* Timer expires as of right now */
+			mod_timer( &prof->timer, jiffies);
+		} else {
+			prof->pmc_ticks_counter++;
+		}
+	}
 }
 #else
 /* Invoked from scheduler_tick() */
@@ -1154,14 +1264,14 @@ static void mod_tbs_tick(void* v_prof, int cpu)
 	int cur_coretype=get_coretype_cpu(cpu);
 #endif
 
-	if (!prof || !prof->this_tsk->prof_enabled)
+	if (!prof || !get_prof_enabled(prof))
 		return;
 
 	spin_lock_irqsave(&prof->lock,flags);
 
 	core_exp = prof->pmcs_config?prof->pmcs_config:&per_cpu(cpu_exp, cpu);
 
-	if (unlikely(!prof->this_tsk->prof_enabled))
+	if (unlikely(!get_prof_enabled(prof)))
 		goto unlock;
 
 	mm_on_tick(prof,cpu);
@@ -1188,15 +1298,12 @@ unlock:
 #endif
 
 
-
-
-
 /* Invoked when a process calls exec() */
 static void  mod_exec_thread(struct task_struct* tsk)
 {
-	pmon_prof_t *prof= (pmon_prof_t*)tsk->pmc;
+	pmon_prof_t *prof=get_prof(tsk);
 
-	if(prof == NULL || !tsk->prof_enabled )
+	if(!get_prof_enabled(prof))
 		return;
 
 	/* Just notify the monitoring module */
@@ -1207,7 +1314,7 @@ static void  mod_exec_thread(struct task_struct* tsk)
 static void mod_exit_thread(struct task_struct* tsk)
 {
 	unsigned long flags;
-	pmon_prof_t *prof= (pmon_prof_t*)tsk->pmc;
+	pmon_prof_t *prof=get_prof(tsk);
 	core_experiment_t* core_exp;
 	pmc_sample_t sample;
 	int i=0;
@@ -1215,7 +1322,7 @@ static void mod_exit_thread(struct task_struct* tsk)
 	int cur_coretype=get_coretype_cpu(cpu);
 	ktime_t now;
 
-	if (!tsk || !prof || tsk != prof->this_tsk)
+	if (!prof || tsk != prof->this_tsk)
 		return;
 
 
@@ -1224,9 +1331,10 @@ static void mod_exit_thread(struct task_struct* tsk)
 
 #ifdef TBS_TIMER
 	/* Cancel per-thread timer if in TBS mode */
-	if (prof->profiling_mode==TBS_USER_MODE)
+	if (prof_uses_timer(prof))
 		cancel_pmctrack_timer(prof);
 #endif
+
 	spin_lock_irqsave(&prof->lock,flags);
 
 	core_exp = prof->pmcs_config?prof->pmcs_config:&per_cpu(cpu_exp, cpu);
@@ -1260,7 +1368,7 @@ static void mod_exit_thread(struct task_struct* tsk)
 		}
 
 		//if (prof->virt_counter_mask)
-		if (tsk->prof_enabled)
+		if (get_prof_enabled(prof))
 			mm_on_new_sample(prof,cpu,&sample,MM_EXIT,NULL);
 
 		if (prof->pmc_samples_buffer) {
@@ -1305,6 +1413,20 @@ static void mod_exit_thread(struct task_struct* tsk)
 	}
 
 	spin_unlock_irqrestore(&prof->lock,flags);
+
+#ifdef CONFIG_PMC_PERF
+	if (prof->pmcs_config)
+		perf_disable_counters(prof->pmcs_config);
+#endif
+
+#ifndef CONFIG_PMCTRACK
+	if (prof->event) {
+		/* Free up fake perf event */
+		perf_event_release_kernel(prof->event);
+		prof->event=NULL;
+		add_prof_exited_task(prof);
+	}
+#endif
 }
 
 /*
@@ -1313,7 +1435,7 @@ static void mod_exit_thread(struct task_struct* tsk)
  */
 static int mod_get_current_metric_value(struct task_struct* task, int key, uint64_t* value)
 {
-	pmon_prof_t *prof= (pmon_prof_t*)task->pmc;
+	pmon_prof_t *prof = get_prof(task);
 
 	if(!prof)
 		return -1;
@@ -1324,7 +1446,7 @@ static int mod_get_current_metric_value(struct task_struct* task, int key, uint6
 /* Invoked when the kernel frees up the process descriptor */
 static void mod_free_per_thread_data(struct task_struct* tsk)
 {
-	pmon_prof_t *prof= (pmon_prof_t*)tsk->pmc;
+	pmon_prof_t *prof = get_prof(tsk);
 	int i=0;
 
 	if(prof == NULL) return;
@@ -1333,7 +1455,7 @@ static void mod_free_per_thread_data(struct task_struct* tsk)
 	mm_on_free_task(prof);
 
 	/* Disable profiling no matter what */
-	tsk->prof_enabled = 0;
+	set_prof_enabled(prof, 0);
 
 	/* Deallocate memory from thread-specific PMC data if any */
 	if (prof->pmcs_config) {
@@ -1353,8 +1475,14 @@ static void mod_free_per_thread_data(struct task_struct* tsk)
 		prof->pmc_kernel_samples=NULL;
 	}
 
-	kfree(tsk->pmc);
+
+#ifndef CONFIG_PMCTRACK
+	del_prof_exited_task(prof);
+#else
 	tsk->pmc = NULL;
+#endif
+
+	kfree(prof);
 }
 
 
@@ -1399,13 +1527,13 @@ static ssize_t proc_pmc_config_write(struct file *filp, const char __user *buff,
 		if (val!=0)
 			ret=val;
 	} else if (strncmp(kbuf,"selfmon",7)==0) {
-		pmon_prof_t* prof=(pmon_prof_t*)current->pmc;
+		pmon_prof_t* prof = get_prof(current);
 		if (!prof)
 			ret=-EINVAL;
 		else
 			prof->flags|=PMC_SELF_MONITORING;
 	} else if (strncmp(kbuf,"selfmoff",8)==0) {
-		pmon_prof_t* prof=(pmon_prof_t*)current->pmc;
+		pmon_prof_t* prof = get_prof(current);
 		if (!prof)
 			ret=-EINVAL;
 		else
@@ -1422,19 +1550,21 @@ static ssize_t proc_pmc_config_write(struct file *filp, const char __user *buff,
 		if (val!=0)
 			ret=val;
 	} else if (sscanf(kbuf, "sched_sampling_period_t %i",&val)==1 && val>0) {
-		pmon_prof_t* prof=(pmon_prof_t*)current->pmc;
+		pmon_prof_t* prof = get_prof(current);
 
 		if (prof) {
 			prof->nticks_sampling_period=msecs_to_jiffies(val);
+			prof->pmc_jiffies_interval=msecs_to_jiffies(val);
 		}
 	} else if (sscanf(kbuf, "timeout %i",&val)==1 && val>0) {
-		pmon_prof_t* prof=(pmon_prof_t*)current->pmc;
+		pmon_prof_t* prof = get_prof(current);
 
 		if (prof) {
 			prof->pmc_jiffies_interval=msecs_to_jiffies(val);
+			prof->nticks_sampling_period=msecs_to_jiffies(val);
 		}
 	} else if(sscanf(kbuf,"kernel_buffer_size_t %i",&val)==1 && val>0) {
-		pmon_prof_t* prof=(pmon_prof_t*)current->pmc;
+		pmon_prof_t* prof = get_prof(current);
 
 		if (prof) {
 			unsigned int new_size=(val/sizeof(pmc_sample_t))*sizeof(pmc_sample_t);
@@ -1444,7 +1574,8 @@ static ssize_t proc_pmc_config_write(struct file *filp, const char __user *buff,
 				prof->kernel_buffer_size=new_size;
 		}
 	} else if (sscanf(kbuf, "max_ebs_samples %i",&val)==1 && val>0) {
-		pmon_prof_t* prof=(pmon_prof_t*)current->pmc;
+		pmon_prof_t* prof = get_prof(current);
+
 		if (prof)
 			prof->max_ebs_samples=val;
 	} else if ((val=mm_on_write_config(kbuf,len))!=0) {
@@ -1507,7 +1638,6 @@ err_config_read:
 
 #define MAX_STR_CONFIG_LEN 100
 
-
 struct attach_arg {
 	pmon_prof_t* monitor;
 	pmon_prof_t* monitored;
@@ -1515,11 +1645,13 @@ struct attach_arg {
 };
 
 
+#ifndef CONFIG_PMC_PERF
 static int set_up_monitoring_task(void *data)
 {
 	struct attach_arg* arg=(struct attach_arg*) data;
 	pmon_prof_t* monitor=arg->monitor;
 	pmon_prof_t* target=arg->monitored;
+
 	unsigned long flags;
 	struct task_struct* p=target->this_tsk;
 	int i=0;
@@ -1558,7 +1690,8 @@ static int set_up_monitoring_task(void *data)
 		mod_timer( &target->timer, target->pmc_jiffies_timeout);
 #endif
 	smp_mb();
-	p->prof_enabled=1;
+	set_prof_enabled(target, 1);
+
 	/* Set itself as the monitor */
 	target->pid_monitor=monitor->this_tsk->pid;
 
@@ -1568,6 +1701,7 @@ static int set_up_monitoring_task(void *data)
 	spin_unlock_irqrestore(&target->lock,flags);
 	return 0;
 }
+#endif
 
 static noinline int pmctrack_task_detach_force(struct task_struct* target, pid_t monitor_pid);
 
@@ -1577,24 +1711,28 @@ static int pmctrack_pid_attach(pid_t pid)
 	struct task_struct* target=NULL;
 	pmon_prof_t* monitor;
 	pmon_prof_t* monitored;
-	struct attach_arg arg;
 	unsigned long flags;
 	int attachable=1;
 	int try_force_detach=0;
-	core_experiment_set_t set[AMP_MAX_CORETYPES];
 	int retval=0;
+#ifndef CONFIG_PMC_PERF
+	struct attach_arg arg;
+	core_experiment_set_t set[AMP_MAX_CORETYPES];
 	int i,j=0;
 	int cpu_task;
 	const int max_nr_tries=3;
 	int nr_tries=0;
 	int ret=-EAGAIN;
+#endif
 
-	if (pid<0 || !cur->pmc)
+	monitor=get_prof(cur);
+	if (pid<0 || !monitor)
 		return -EINVAL;
 
 	rcu_read_lock();
-	target = find_process_by_pid(pid);
-	if(!target || !target->pmc) {
+	target = pmctrack_find_process_by_pid(pid);
+
+	if(!target || !(monitored = get_prof(target))) {
 		rcu_read_unlock();
 		return -ESRCH;
 	}
@@ -1602,23 +1740,22 @@ static int pmctrack_pid_attach(pid_t pid)
 	get_task_struct(target);
 	rcu_read_unlock();
 
-	monitor= (pmon_prof_t*)current->pmc;
-	monitored = (pmon_prof_t*)target->pmc;
-
 	/* Phase one: set up monitor */
 	spin_lock_irqsave(&monitored->lock,flags);
-	if (!target->pmc || target->prof_enabled || monitored->pid_monitor!=-1 || monitored->pmc_samples_buffer) {
+
+	if (get_prof_enabled(monitored) || monitored->pid_monitor!=-1 || monitored->pmc_samples_buffer) {
 		attachable=0;
-		try_force_detach=(target->pmc && target->prof_enabled && monitored->pid_monitor!=-1 &&  monitored->pmc_samples_buffer);
-	} else
+		try_force_detach=(get_prof_enabled(monitored) && monitored->pid_monitor!=-1 &&  monitored->pmc_samples_buffer);
+	} else {
 		attachable=1;
+	}
 	spin_unlock_irqrestore(&monitored->lock,flags);
 
 	/* Try to detach first */
 	if (try_force_detach) {
-		if ((retval=pmctrack_task_detach_force(target,monitored->pid_monitor)))
+		if ((retval=pmctrack_task_detach_force(target,monitored->pid_monitor))) {
 			goto out_err;
-		else
+		} else
 			attachable=1;
 	}
 
@@ -1627,10 +1764,57 @@ static int pmctrack_pid_attach(pid_t pid)
 		goto out_err;
 	}
 
+
+#ifdef CONFIG_PMC_PERF
+	/* TODO: For now in perf no configuration for different core types */
+
+	/* Phase 2 allocate experiments ..*/
+	/* Free up previous experiment set just in case... */
+	free_experiment_set(&monitored->pmcs_multiplex_cfg[0]);
+	if ((retval=clone_core_experiment_set_t(&monitored->pmcs_multiplex_cfg[0],&monitor->pmcs_multiplex_cfg[0],target)))
+		goto out_err;
+
+
+	spin_lock_irqsave(&monitored->lock,flags);
+
+	/* Get reference to buffer */
+	if (monitor->pmc_samples_buffer) {
+		get_pmc_samples_buffer(monitor->pmc_samples_buffer);
+		monitored->pmc_samples_buffer=monitor->pmc_samples_buffer;
+	}
+
+	/* For now start with slow core events */
+	monitored->pmcs_config=get_cur_experiment_in_set(&monitored->pmcs_multiplex_cfg[0]);
+
+	/* Inherit virtual counters */
+	monitored->virt_counter_mask=monitor->virt_counter_mask;
+
+	/* Inherit intervals from the monitor process  */
+	monitored->pmc_jiffies_interval=monitor->pmc_jiffies_interval;
+	monitored->nticks_sampling_period=monitor->nticks_sampling_period;
+	monitored->pmc_jiffies_timeout=jiffies+monitored->pmc_jiffies_interval;
+#ifdef TBS_TIMER
+	if (monitored->profiling_mode==TBS_USER_MODE)
+		mod_timer( &monitored->timer, monitored->pmc_jiffies_timeout);
+#endif
+	smp_mb();
+
+	/* Set itself as the monitor */
+	monitored->pid_monitor=monitor->this_tsk->pid;
+
+	set_prof_enabled(monitored, 1);
+
+	spin_unlock_irqrestore(&monitored->lock,flags);
+
+	/* enable performance counters (outside of lock) ... */
+	perf_enable_counters(monitored->pmcs_config);
+
+	retval=0;
+#else
 	/* Phase 2 allocate experiments ..*/
 	for(i=0; i<AMP_MAX_CORETYPES; i++) {
 		init_core_experiment_set_t(&set[i]);
-		retval=clone_core_experiment_set_t(&set[i],&monitor->pmcs_multiplex_cfg[i]);
+		retval=clone_core_experiment_set_t(&set[i],&monitor->pmcs_multiplex_cfg[i],target);
 
 		if (retval) {
 			for (j=0; j<i; j++)
@@ -1671,12 +1855,52 @@ static int pmctrack_pid_attach(pid_t pid)
 	if (retval)
 		for(i=0; i<AMP_MAX_CORETYPES; i++)
 			free_experiment_set(&set[i]);
+
+#endif
 out_err:
 	put_task_struct(target);
 	return retval;
 }
 
 
+#ifdef CONFIG_PMC_PERF
+static int disable_monitoring_task(void *data)
+{
+	struct attach_arg* arg=(struct attach_arg*) data;
+	pmon_prof_t* target=arg->monitored;
+	unsigned long flags;
+
+	spin_lock_irqsave(&target->lock,flags);
+
+	/* Remove reference to the buffer */
+	if (target->pmc_samples_buffer) {
+		put_pmc_samples_buffer(target->pmc_samples_buffer);
+		target->pmc_samples_buffer=NULL;
+	}
+
+	/* Disable monitor field */
+	target->pid_monitor=-1;
+	set_prof_enabled(target, 0);
+
+	spin_unlock_irqrestore(&target->lock,flags);
+
+#ifdef TBS_TIMER
+	/* Disable timer if detach process was successful */
+	if (prof_uses_timer(target))
+		cancel_pmctrack_timer(target);
+#endif
+
+	/*  Deallocate memory from thread-specific PMC data if any */
+	if (target->pmcs_config) {
+		perf_disable_counters(target->pmcs_config);
+		/* Todo only big-core counters...*/
+		free_experiment_set(&target->pmcs_multiplex_cfg[0]);
+		init_core_experiment_set_t(&target->pmcs_multiplex_cfg[0]);
+		target->pmcs_config=NULL;
+	}
+	return 0;
+}
+#else
 static int disable_monitoring_task(void *data)
 {
 	struct attach_arg* arg=(struct attach_arg*) data;
@@ -1697,7 +1921,7 @@ static int disable_monitoring_task(void *data)
 
 	/* Disable monitor field */
 	target->pid_monitor=-1;
-	p->prof_enabled=0;
+	set_prof_enabled(target, 0);
 
 	/* Deallocate memory from thread-specific PMC data if any */
 	if (target->pmcs_config) {
@@ -1711,7 +1935,7 @@ static int disable_monitoring_task(void *data)
 	spin_unlock_irqrestore(&target->lock,flags);
 	return 0;
 }
-
+#endif
 
 static noinline int pmctrack_pid_detach(pid_t pid)
 {
@@ -1719,21 +1943,25 @@ static noinline int pmctrack_pid_detach(pid_t pid)
 	struct task_struct* target=NULL;
 	pmon_prof_t* monitor;
 	pmon_prof_t* monitored;
-	struct attach_arg arg;
 	unsigned long flags;
 	int detachable;
 	int retval=0;
+#ifndef CONFIG_PMC_PERF
+	struct attach_arg arg;
 	int cpu_task;
 	const int max_nr_tries=3;
 	int nr_tries=0;
 	int ret=-EAGAIN;
+#endif
 
 	if (pid<0)
 		return -EINVAL;
 
+	monitor = get_prof(current);
+
 	rcu_read_lock();
-	target = find_process_by_pid(pid);
-	if(!target || !target->pmc) {
+	target = pmctrack_find_process_by_pid(pid);
+	if(!target || !(monitored=get_prof(target))) {
 		rcu_read_unlock();
 		return -ESRCH;
 	}
@@ -1741,12 +1969,9 @@ static noinline int pmctrack_pid_detach(pid_t pid)
 	get_task_struct(target);
 	rcu_read_unlock();
 
-	monitor= (pmon_prof_t*)current->pmc;
-	monitored = (pmon_prof_t*)target->pmc;
-
 	/* Phase one: set up monitor */
 	spin_lock_irqsave(&monitored->lock,flags);
-	if (!target->pmc || !target->prof_enabled || monitored->pid_monitor!=cur->pid)
+	if (!get_prof_enabled(monitored) || monitored->pid_monitor!=cur->pid)
 		detachable=0;
 	else
 		detachable=1;
@@ -1757,6 +1982,39 @@ static noinline int pmctrack_pid_detach(pid_t pid)
 		goto out_err;
 	}
 
+
+#ifdef CONFIG_PMC_PERF
+	spin_lock_irqsave(&monitored->lock,flags);
+
+	/* Remove reference to the buffer */
+	if (monitored->pmc_samples_buffer) {
+		put_pmc_samples_buffer(monitored->pmc_samples_buffer);
+		monitored->pmc_samples_buffer=NULL;
+	}
+
+	/* Disable monitor field */
+	monitored->pid_monitor=-1;
+	set_prof_enabled(monitored, 0);
+
+	spin_unlock_irqrestore(&monitored->lock,flags);
+
+#ifdef TBS_TIMER
+	/* Disable timer if detach process was successful */
+	if (prof_uses_timer(monitored))
+		cancel_pmctrack_timer(monitored);
+#endif
+
+	/*  Deallocate memory from thread-specific PMC data if any */
+	if (monitored->pmcs_config) {
+		perf_disable_counters(monitored->pmcs_config);
+		/* Todo only big-core counters...*/
+		free_experiment_set(&monitored->pmcs_multiplex_cfg[0]);
+		init_core_experiment_set_t(&monitored->pmcs_multiplex_cfg[0]);
+		monitored->pmcs_config=NULL;
+	}
+
+	retval=0;
+#else
 	/* Phase 2: prepare xcall */
 	arg.monitor=monitor;
 	arg.monitored=monitored;
@@ -1783,11 +2041,11 @@ static noinline int pmctrack_pid_detach(pid_t pid)
 			trace_printk("Couldn't detach process successfuly after %d tries\n",nr_tries);
 		retval=ret;
 	}
-
 #ifdef TBS_TIMER
 	/* Disable timer if detach process was successful */
-	if (ret==0 && monitored->profiling_mode==TBS_USER_MODE)
+	if (ret==0 && prof_uses_timer(monitored))
 		cancel_pmctrack_timer(monitored);
+#endif
 #endif
 out_err:
 	put_task_struct(target);
@@ -1801,16 +2059,18 @@ static noinline int pmctrack_task_detach_force(struct task_struct* target, pid_t
 	pmon_prof_t* monitored;
 	struct attach_arg arg;
 	int retval=0;
+#ifndef CONFIG_PMC_PERF
 	int cpu_task;
 	const int max_nr_tries=3;
 	int nr_tries=0;
 	int ret=-EAGAIN;
+#endif
 
 	if (monitor_pid<0)
 		return 0; //Then there is nothing to do here
 
 	rcu_read_lock();
-	monitor_task = find_process_by_pid(monitor_pid);
+	monitor_task = pmctrack_find_process_by_pid(monitor_pid);
 	/* Monitor process exists-> cannot detach*/
 	if( monitor_task) {
 		rcu_read_unlock();
@@ -1818,15 +2078,17 @@ static noinline int pmctrack_task_detach_force(struct task_struct* target, pid_t
 	}
 	rcu_read_unlock();
 
-	monitored = (pmon_prof_t*)target->pmc;
+	monitored = get_prof(target);
 
 	/* Let's assume it is detachable */
 	/* Prepare xcall */
 	arg.monitor=NULL;
 	arg.monitored=monitored;
 
+#ifdef CONFIG_PMC_PERF
+	disable_monitoring_task(&arg);
+#else
 	cpu_task=task_cpu_safe(target);
-
 	/*
 	 * Obtain CPU safely. Invoke the function to read HW counters
 	 * on the CPU where the task runs.
@@ -1847,10 +2109,10 @@ static noinline int pmctrack_task_detach_force(struct task_struct* target, pid_t
 			trace_printk("Couldn't detach process successfuly after %d tries\n",nr_tries);
 		retval=ret;
 	}
+#endif
 
 	return retval;
 }
-
 
 
 /* Write callback for /proc/pmc/monitor */
@@ -1877,7 +2139,7 @@ static ssize_t proc_monitor_pmcs_write(struct file *filp, const char __user *buf
 	if(sscanf(kbuf,"pid_monitor %i", &val)==1 && val>0) {
 		pid = (pid_t)val;
 		rcu_read_lock();
-		tsM = find_process_by_pid(pid);
+		tsM = pmctrack_find_process_by_pid(pid);
 		if(!tsM) {
 			rcu_read_unlock();
 			return -ESRCH;
@@ -1886,8 +2148,8 @@ static ssize_t proc_monitor_pmcs_write(struct file *filp, const char __user *buf
 		get_task_struct(tsM);
 		rcu_read_unlock();
 
-		monitor= (pmon_prof_t*)current->pmc;
-		monitored = (pmon_prof_t*)tsM->pmc;
+		monitor = get_prof(current);
+		monitored = get_prof(tsM);
 
 		if (!monitored || !monitored->pmc_samples_buffer) {
 			put_task_struct(tsM);
@@ -1905,7 +2167,7 @@ static ssize_t proc_monitor_pmcs_write(struct file *filp, const char __user *buf
 	} else if (sscanf(kbuf,"pid_detach %i", &val)==1 && val>0) {
 		return pmctrack_pid_detach(val);
 	} else if (strncmp(kbuf,"ON",2)==0) {
-		prof= (pmon_prof_t*)current->pmc;
+		prof = get_prof(current);
 		if (!prof)
 			return -EINVAL;
 
@@ -1937,7 +2199,7 @@ static ssize_t proc_monitor_pmcs_write(struct file *filp, const char __user *buf
 		if (prof->profiling_mode==TBS_USER_MODE)
 			mod_timer( &prof->timer, prof->pmc_jiffies_timeout);
 #endif
-		current->prof_enabled=1;
+		set_prof_enabled(prof, 1);
 #ifdef CONFIG_PMC_PERF
 		/* Enable perf_counters */
 		perf_enable_counters(prof->pmcs_config);
@@ -1946,13 +2208,13 @@ static ssize_t proc_monitor_pmcs_write(struct file *filp, const char __user *buf
 
 		spin_unlock_irqrestore(&prof->lock,flags);
 	} else if (strncmp(kbuf,"OFF",3)==0) {
-		prof= (pmon_prof_t*)current->pmc;
+		prof = get_prof(current);
 
 		if (!prof)
 			return -EINVAL;
 #ifdef TBS_TIMER
 		/* Cancel per-thread timer if in TBS mode */
-		if (prof->profiling_mode==TBS_USER_MODE && current->prof_enabled)
+		if (prof_uses_timer(prof) && get_prof_enabled(prof))
 			cancel_pmctrack_timer(prof);
 #endif
 		spin_lock_irqsave(&prof->lock,flags);
@@ -1960,7 +2222,7 @@ static ssize_t proc_monitor_pmcs_write(struct file *filp, const char __user *buf
 		 * sample_counters_user_tbs() so that the
 		 * timer does not get reloaded()
 		 * */
-		current->prof_enabled=0;
+		set_prof_enabled(prof, 0);
 #ifdef CONFIG_PMC_PERF
 		/* Disable PERF counters */
 		perf_disable_counters(prof->pmcs_config);
@@ -1994,7 +2256,7 @@ static ssize_t proc_monitor_pmcs_read (struct file *filp, char __user *buf, size
 	int retval;
 
 	lentotal=0;
-	prof_mon = (pmon_prof_t*)current->pmc;
+	prof_mon = get_prof(current);
 
 	if(prof_mon == NULL)
 		return 0;
@@ -2142,7 +2404,7 @@ static struct vm_operations_struct mmap_vm_ops = {
 static int proc_monitor_pmcs_mmap(struct file *filp, struct vm_area_struct *vma)
 {
 	pmc_sample_t *handler;
-	pmon_prof_t* prof=(pmon_prof_t*)current->pmc;
+	pmon_prof_t* prof=get_prof(current);
 
 	if (!prof || prof->pmc_kernel_samples) /* NULL or shared page already reserved */
 		return -EINVAL;
@@ -2173,7 +2435,7 @@ static int proc_monitor_pmcs_mmap(struct file *filp, struct vm_area_struct *vma)
 /* Write callback for /proc/pmc/enable */
 static ssize_t proc_pmc_enable_write(struct file *filp, const char __user *buff, size_t len, loff_t *off)
 {
-	pmon_prof_t* prof=(pmon_prof_t*)current->pmc;
+	pmon_prof_t* prof=get_prof(current);
 	char kbuf[MAX_STR_CONFIG_LEN];
 	pmc_samples_buffer_t* pmc_buf=NULL;
 	unsigned long flags=0;
@@ -2214,7 +2476,7 @@ static ssize_t proc_pmc_enable_write(struct file *filp, const char __user *buff,
 		if (prof->profiling_mode==TBS_USER_MODE)
 			mod_timer( &prof->timer, prof->pmc_jiffies_timeout);
 #endif
-		current->prof_enabled=1;
+		set_prof_enabled(prof, 1);
 
 #ifdef CONFIG_PMC_PERF
 		/* Enable perf_counters */
@@ -2228,14 +2490,14 @@ static ssize_t proc_pmc_enable_write(struct file *filp, const char __user *buff,
 			return -EINVAL;
 #ifdef TBS_TIMER
 		/* Cancel per-thread timer if in TBS mode */
-		if (prof->profiling_mode==TBS_USER_MODE && current->prof_enabled)
+		if (prof_uses_timer(prof) && get_prof_enabled(prof))
 			cancel_pmctrack_timer(prof);
 #endif
 		/* Prevent the perf interrupt to kick in when trying to do this */
 		spin_lock_irqsave(&prof->lock,flags);
 
-		if (current->prof_enabled)
-			current->prof_enabled=0;
+		if(get_prof_enabled(prof))
+			set_prof_enabled(prof, 0);
 
 #ifdef CONFIG_PMC_PERF
 		/* Disable PERF counters */
@@ -2260,7 +2522,7 @@ static ssize_t proc_pmc_enable_write(struct file *filp, const char __user *buff,
 #ifdef SCHED_AMP
 	else if (strcmp(kbuf,"ON_SF")==0 && prof!=NULL) {
 		prof->flags|=PMCTRACK_SF_NOTIFICATIONS;
-		current->prof_enabled=1;
+		set_prof_enabled(prof, 1);
 	} else
 		return -EINVAL;
 #endif
@@ -2272,11 +2534,12 @@ static ssize_t proc_pmc_enable_read(struct file *filp, char __user *buf, size_t 
 {
 	int nbytes;
 	char kbuf[50]="";
+	pmon_prof_t* prof=get_prof(current);
 
 	if (*off>0)
 		return 0;
 
-	if(current->prof_enabled)
+	if(get_prof_enabled(prof))
 		nbytes=sprintf(kbuf,"profiling is ON\n");
 	else
 		nbytes=sprintf(kbuf,"profiling is OFF\n");
@@ -2356,7 +2619,7 @@ static int configure_virtual_counters_thread(const char *buf,struct task_struct*
 	unsigned int used_virt=0;
 	int error=0;
 	unsigned int nr_virt_pmcs=0;
-	pmon_prof_t *prof= (pmon_prof_t*)p->pmc;
+	pmon_prof_t *prof = get_prof(p);
 	pmc_samples_buffer_t* pmc_buf=NULL;
 	unsigned long flags=0;
 	unsigned int highest_virt_pmc=0;
@@ -2422,17 +2685,16 @@ static int configure_virtual_counters_thread(const char *buf,struct task_struct*
  */
 static int configure_performance_counters_thread(const char *buf,struct task_struct* p, int system_wide)
 {
-	pmc_usrcfg_t pmc_cfg[MAX_LL_EXPS];
-	unsigned int used_pmcs=0;
+	pmc_config_set_t cfg_set;
 	int error=0;
-	unsigned int nr_pmcs=0;
-	pmon_prof_t *prof= (pmon_prof_t*)p->pmc;
+	pmon_prof_t *prof = get_prof(p);
 	core_experiment_t* exp[AMP_MAX_CORETYPES];
 	pmc_samples_buffer_t* pmc_buf=NULL;
 	unsigned long flags=0;
-	int ebs_index=0;
-	int coretype=0;
 	int i=0,j=0;
+#ifdef CONFIG_PMC_PERF
+	int k=0;
+#endif
 	monitoring_module_counter_usage_t usage;
 	int cpu=raw_smp_processor_id();
 
@@ -2449,22 +2711,22 @@ static int configure_performance_counters_thread(const char *buf,struct task_str
 	}
 
 	/* Check user-provided configuration */
-	error=parse_pmcs_strconfig(buf,1,pmc_cfg,&used_pmcs,&nr_pmcs,&ebs_index,&coretype);
+	error=parse_pmcs_strconfig(buf,1,cfg_set.pmc_cfg,&cfg_set.used_pmcs,&cfg_set.nr_pmcs,&cfg_set.ebs_index,&cfg_set.coretype);
 
 	if (error)
 		return error;
 
-	if (system_wide && ebs_index!=-1) {
+	if (system_wide && cfg_set.ebs_index!=-1) {
 		printk(KERN_INFO "EBS is not supported in system-wide mode\n");
 		return -EINVAL;
 	}
 
-	if (prof->profiling_mode==EBS_MODE && ebs_index==-1) {
+	if (prof->profiling_mode==EBS_MODE && cfg_set.ebs_index==-1) {
 		printk(KERN_INFO "The ebs field must be specified once in EBS mode\n");
 		return -EINVAL;
 	}
 
-	if (prof->profiling_mode==TBS_USER_MODE && ebs_index!=-1) {
+	if (prof->profiling_mode==TBS_USER_MODE && cfg_set.ebs_index!=-1) {
 		printk(KERN_INFO "Attempting to activate ebs in the second event set but not in the first one\n");
 		return -EINVAL;
 	}
@@ -2478,22 +2740,27 @@ static int configure_performance_counters_thread(const char *buf,struct task_str
 		pmc_buf=allocate_pmc_samples_buffer(prof->kernel_buffer_size);
 		if (pmc_buf == NULL) {
 			printk(KERN_INFO "Can't allocate memory to store buffer samples\n");
-			return -1;
+			return -ENOMEM;
 		}
 	}
 
 	/* Allocate memory for PMCs/EVTSELs ...  */
-	if (coretype!=-1) {
+	if (cfg_set.coretype!=-1) {
+		/* If we have one core only - the 0 entry of the local array is used only */
 		exp[0]= (core_experiment_t*) kmalloc(sizeof(core_experiment_t), GFP_KERNEL);
 		if(exp[0] == NULL) {
 			printk(KERN_INFO "Can't allocate memory to store all pmcs configuration\n");
 			put_pmc_samples_buffer(pmc_buf);
-			return -1;
+			return -ENOMEM;
 		}
 
 		/*  Initialize structure for just one coretype */
-		if ((error=do_setup_pmcs(pmc_cfg,used_pmcs,exp[0],cpu,0,p)))
+		if ((error=do_setup_pmcs(cfg_set.pmc_cfg,cfg_set.used_pmcs,exp[0],cpu,0,p))) {
+			kfree(exp[0]);
+			exp[0]=NULL;
+			put_pmc_samples_buffer(pmc_buf);
 			return error;
+		}
 	} else {
 
 		for (i=0; i<AMP_MAX_CORETYPES; i++) {
@@ -2502,21 +2769,48 @@ static int configure_performance_counters_thread(const char *buf,struct task_str
 			/* Free memory in case of failure */
 			if(exp[i] == NULL) {
 				printk(KERN_INFO "Can't allocate memory to store all pmcs configuration\n");
-				for (j=0; j<i; j++)
+				for (j=0; j<i; j++) {
 					kfree(exp[j]);
+					exp[j]=NULL;
+				}
 				put_pmc_samples_buffer(pmc_buf);
-				return -1;
+				return -ENOMEM;
 			}
 		}
 
-		/*  Initialize structure for just one coretype */
-		if ((error=do_setup_pmcs(pmc_cfg,used_pmcs,exp[0],cpu,0,p)))
-			return error;
+#ifdef CONFIG_PMC_PERF
+		/* CRITICAL: THIS CODE DOES NOT GET INVOKED FOR NOW, AS IT IS NOT TESTED!!!*/
+		for (i=0; i<AMP_MAX_CORETYPES; i++) {
+			/*  Initialize structure for just one coretype */
+			error=do_setup_pmcs(cfg_set.pmc_cfg,cfg_set.used_pmcs,exp[i],get_any_cpu_coretype(i),i,p);
 
-		/* TODO, this is not supported in perf!! */
+			if (error) {
+				printk(KERN_INFO "Error detected in PMC configuration\n");
+				for (j=0; j<i; j++) {
+					/* Release perf events as well */
+					for (k=0; k<exp[j]->size; k++) {
+						if (exp[j]->array[k].event.event)
+							perf_event_release_kernel(exp[j]->array[k].event.event);
+					}
+					kfree(exp[j]);
+					exp[j]=NULL;
+				}
+				kfree(exp[i]); /* Free up memory of problematic event set */
+				put_pmc_samples_buffer(pmc_buf);
+				return error;
+			}
+		}
+#else
+		/*  Initialize structure for just one coretype */
+		if ((error=do_setup_pmcs(cfg_set.pmc_cfg,cfg_set.used_pmcs,exp[0],cpu,0,p))) {
+			put_pmc_samples_buffer(pmc_buf);
+			return error;
+		}
+
 		/* Replicate for all  */
 		for (i=1; i<AMP_MAX_CORETYPES; i++)
 			memcpy(exp[i],exp[0],sizeof(core_experiment_t));
+#endif
 	}
 
 	/* Prevent the perf interrupt to kick in when trying to do this */
@@ -2531,17 +2825,19 @@ static int configure_performance_counters_thread(const char *buf,struct task_str
 	}
 
 	/* Set up profiling mode (even in system-wide) */
-	if (ebs_index==-1)
+	if (cfg_set.ebs_index==-1)
 		prof->profiling_mode=TBS_USER_MODE;
 	else
 		prof->profiling_mode=EBS_MODE;
 
 	/* Add to set */
-	if (coretype==-1) {
-		for (i=0; i<AMP_MAX_CORETYPES; i++)
-			add_experiment_to_set(&prof->pmcs_multiplex_cfg[i],exp[i]);
+	if (cfg_set.coretype==-1) {
+		for (i=0; i<AMP_MAX_CORETYPES; i++) {
+			cfg_set.coretype=i;
+			add_experiment_to_set(&prof->pmcs_multiplex_cfg[i],exp[i],&cfg_set);
+		}
 	} else {
-		add_experiment_to_set(&prof->pmcs_multiplex_cfg[coretype],exp[0]);
+		add_experiment_to_set(&prof->pmcs_multiplex_cfg[cfg_set.coretype],exp[0],&cfg_set);
 	}
 
 	/* Assign newly created data */
@@ -2574,20 +2870,13 @@ static int configure_performance_counters_thread(const char *buf,struct task_str
  */
 int configure_performance_counters_set(const char* strconfig[], core_experiment_set_t core_exp_set[], int nr_coretypes)
 {
-#ifdef CONFIG_PMC_PERF
-	/* TODO: Missing functionality for now */
-	return -EINVAL;
-#else
-	int i=0,j=0,k=0;
+	int i=0,j=0;
+	pmc_config_set_t cfg_set[AMP_MAX_EXP_CORETYPE];
 	int nr_experiments=0;
-	pmc_usrcfg_t pmc_cfg[AMP_MAX_EXP_CORETYPE][MAX_LL_EXPS];
+#ifndef CONFIG_PMC_PERF
+	int k=0;
 	core_experiment_t* exp[AMP_MAX_CORETYPES];
-	struct {
-		unsigned int used_pmcs;
-		unsigned int nr_pmcs;
-		int ebs_index;
-		int coretype;
-	} aux_pmc_info[AMP_MAX_EXP_CORETYPE];
+#endif
 	int error=0;
 	unsigned int nr_ebs=0;
 
@@ -2599,14 +2888,14 @@ int configure_performance_counters_set(const char* strconfig[], core_experiment_
 	/* Make sure strconfig is Okay !! */
 	while (i<AMP_MAX_EXP_CORETYPE && strconfig[i]!=NULL) {
 		/* Check provided configuration */
-		error=parse_pmcs_strconfig(strconfig[i],1,pmc_cfg[i],&aux_pmc_info[i].used_pmcs,
-		                           &aux_pmc_info[i].nr_pmcs,&aux_pmc_info[i].ebs_index,
-		                           &aux_pmc_info[i].coretype);
+		error=parse_pmcs_strconfig(strconfig[i],1,cfg_set[i].pmc_cfg,&cfg_set[i].used_pmcs,
+		                           &cfg_set[i].nr_pmcs,&cfg_set[i].ebs_index,
+		                           &cfg_set[i].coretype);
 
 		if (error)
 			return error;
 
-		if (aux_pmc_info[i].ebs_index!=-1)
+		if (cfg_set[i].ebs_index!=-1)
 			nr_ebs++;
 
 		i++;
@@ -2621,9 +2910,23 @@ int configure_performance_counters_set(const char* strconfig[], core_experiment_
 
 	nr_experiments=i;
 
+#ifdef CONFIG_PMC_PERF
 	for (i=0; i<nr_experiments; i++) {
-		if (aux_pmc_info[i].coretype!=-1) {
-			j=aux_pmc_info[i].coretype;
+		if (cfg_set[i].coretype!=-1) {
+			j=cfg_set[i].coretype;
+			/* Add just config to set */
+			add_experiment_to_set(&core_exp_set[j],NULL,&cfg_set[i]);
+		} else {
+
+			/* Add just config to set */
+			for (j=0; j<nr_coretypes; j++)
+				add_experiment_to_set(&core_exp_set[j],NULL,&cfg_set[i]);
+		}
+	}
+#else
+	for (i=0; i<nr_experiments; i++) {
+		if (cfg_set[i].coretype!=-1) {
+			j=cfg_set[i].coretype;
 			exp[j]= (core_experiment_t*) kmalloc(sizeof(core_experiment_t), GFP_KERNEL);
 
 			if(exp[j] == NULL) {
@@ -2634,11 +2937,11 @@ int configure_performance_counters_set(const char* strconfig[], core_experiment_
 			}
 
 			/*  Initialize structure for just one coretype */
-			if ((error=do_setup_pmcs(pmc_cfg[i],aux_pmc_info[i].used_pmcs,exp[j],get_any_cpu_coretype(j),0,NULL)))
+			if ((error=do_setup_pmcs(cfg_set[i].pmc_cfg,cfg_set[i].used_pmcs,exp[j],get_any_cpu_coretype(j),0,NULL)))
 				return error;
 
 			/* Add to set */
-			add_experiment_to_set(&core_exp_set[j],exp[j]);
+			add_experiment_to_set(&core_exp_set[j],exp[j],&cfg_set[i]);
 		} else {
 
 			for (j=0; j<nr_coretypes; j++) {
@@ -2656,7 +2959,7 @@ int configure_performance_counters_set(const char* strconfig[], core_experiment_
 			}
 
 			/*  Initialize structure for just one coretype */
-			if ((error=do_setup_pmcs(pmc_cfg[i],aux_pmc_info[i].used_pmcs,exp[0],get_any_cpu_coretype(0),0,NULL)))
+			if ((error=do_setup_pmcs(cfg_set[i].pmc_cfg,cfg_set[i].used_pmcs,exp[0],get_any_cpu_coretype(0),0,NULL)))
 				return error;
 
 			/* Replicate for all */
@@ -2665,12 +2968,11 @@ int configure_performance_counters_set(const char* strconfig[], core_experiment_
 
 			/* Add experiments to set */
 			for (j=0; j<nr_coretypes; j++)
-				add_experiment_to_set(&core_exp_set[j],exp[j]);
+				add_experiment_to_set(&core_exp_set[j],exp[j],&cfg_set[i]);
 		}
 	}
-
-	return 0;
 #endif
+	return 0;
 }
 
 
@@ -3007,7 +3309,7 @@ void do_count_on_overflow(struct pt_regs *regs, unsigned int overflow_mask)
 	unsigned int this_cpu=smp_processor_id();
 	pmu_props_t* props=get_pmu_props_cpu(this_cpu);
 	struct task_struct* p=current;
-	pmon_prof_t* prof=p->pmc;
+	pmon_prof_t* prof=get_prof(p);
 	core_experiment_t* core_exp=NULL;
 	int cur_coretype=get_coretype_cpu(this_cpu);
 	ktime_t now;
@@ -3015,9 +3317,13 @@ void do_count_on_overflow(struct pt_regs *regs, unsigned int overflow_mask)
 	if (!prof)
 		return;
 
-	spin_lock(&prof->lock);
+	/* For safe synchronization with exit */
+	if (!spin_trylock(&prof->lock)) {
+		trace_printk("Failed perf overflow related processing %d\n",this_cpu);
+		return;
+	}
 
-	if (!p->prof_enabled || !prof->pmcs_config)
+	if (!get_prof_enabled(prof) || !prof->pmcs_config)
 		goto exit_unlock;
 
 	core_exp =prof->pmcs_config;
@@ -3046,7 +3352,8 @@ void do_count_on_overflow(struct pt_regs *regs, unsigned int overflow_mask)
 	if (read_ok && prof->pmc_samples_buffer) {
 		ebs_idx=core_exp->ebs_idx;
 
-		if (prof)
+		/* Make sure that the task is running */
+		if (prof && prof->this_tsk->state==TASK_RUNNING)
 			mm_on_new_sample(prof,this_cpu,&sample,MM_TICK,regs);
 
 		spin_lock(&prof->pmc_samples_buffer->lock);
@@ -3074,7 +3381,7 @@ void do_count_on_overflow(struct pt_regs *regs, unsigned int overflow_mask)
 	pmu_props_t* props=get_pmu_props_cpu(this_cpu);
 	unsigned int filtered_mask=0;
 	struct task_struct* p=current;
-	pmon_prof_t* prof=p->pmc;
+	pmon_prof_t* prof=get_prof(p);
 	core_experiment_t* core_exp=NULL;
 	unsigned long flags=0;
 	int cur_coretype=get_coretype_cpu(this_cpu);
@@ -3086,7 +3393,7 @@ void do_count_on_overflow(struct pt_regs *regs, unsigned int overflow_mask)
 
 	spin_lock_irqsave(&prof->lock,flags);
 
-	if (!p->prof_enabled) {
+	if (!get_prof_enabled(prof)) {
 		// Stop counters to avoid spurious interrupts
 		mc_clear_all_platform_counters(props);
 	} else {
@@ -3180,19 +3487,38 @@ static int __init pmctrack_module_init(void)
 	int ret=0;
 	int error_mm_manager=0;
 	int error_proc_entries=0;
-
+	unsigned char init_pmu_ok=0;
+	unsigned char register_pmc_module_ok=0;
+#ifndef CONFIG_PMCTRACK
+	unsigned char register_stubs_ok=0;
+#endif
 	if ((ret=init_pmu())!=0) {
 		printk("Can't Init PMU");
 		return ret;
 	}
 
+	init_pmu_ok=1;
+
 	init_pmon_config_t();
 	init_percpu_structures();
+	init_prof_exited_tasks();
+
+#ifndef CONFIG_PMCTRACK
+	if((ret = pmctrack_init()) != 0) {
+		printk("Can't load pmctrack stub");
+		goto out_error;
+	}
+
+	register_stubs_ok=1;
+#endif
 
 	if((ret = register_pmc_module(&pmc_mc_prog,THIS_MODULE)) != 0) {
 		printk("Can't load pmc module");
-		return ret;
+		goto out_error;
 	}
+
+	register_pmc_module_ok=1;
+
 
 	/* Create /proc/pmc directory */
 	pmc_dir=proc_mkdir("pmc",NULL);
@@ -3225,6 +3551,15 @@ static int __init pmctrack_module_init(void)
 	printk(KERN_INFO "PMCTrack module loaded\n");
 	return 0;
 out_error:
+
+#ifndef CONFIG_PMCTRACK
+	if (register_stubs_ok)
+		pmctrack_exit();
+#endif
+	if (register_pmc_module_ok)
+		unregister_pmc_module(&pmc_mc_prog,THIS_MODULE);
+	if (init_pmu_ok)
+		pmu_shutdown();
 	if (error_proc_entries)
 		destroy_proc_entries();
 	if (error_mm_manager) /* Unload monitoring module manager */
@@ -3233,13 +3568,16 @@ out_error:
 		pmc_dir=NULL;
 		remove_proc_entry("pmc", NULL);
 	}
-	unregister_pmc_module(&pmc_mc_prog,THIS_MODULE);
+
 	return ret;
 }
 
 /* Module cleanup function */
 static void __exit pmctrack_module_exit(void)
 {
+#ifndef CONFIG_PMCTRACK
+	pmctrack_exit();
+#endif
 	if(!unregister_pmc_module(&pmc_mc_prog,THIS_MODULE)) {
 		/* Restore the APIC and stuff */
 		pmu_shutdown();

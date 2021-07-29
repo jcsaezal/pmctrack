@@ -15,7 +15,9 @@
 #include <pmc/monitoring_mod.h>
 #include <pmc/intel_rdt.h>
 #include <pmc/intel_rapl.h>
+#ifdef  CONFIG_PMC_CORE_I7
 #include <pmc/edp.h>
+#endif
 
 #include <asm/atomic.h>
 #include <asm/topology.h>
@@ -27,7 +29,9 @@
 static intel_cmt_support_t cmt_support;
 static intel_cat_support_t cat_support;
 static intel_mba_support_t mba_support;
+#ifdef  CONFIG_PMC_CORE_I7
 static intel_rapl_support_t* rapl_support=NULL;
+#endif
 
 /* Configuration parameters for this monitoring module */
 static struct {
@@ -35,31 +39,37 @@ static struct {
 	unsigned char use_rapl_counters;
 	unsigned char reset_on_cswitch;
 	unsigned char force_ebs_counters;
+	unsigned int ebs_window;
 }
-intel_cmt_config= {RMID_FIFO,0,0,0};
+intel_cmt_config;
 
 /* Per-thread private data for this monitoring module */
 typedef struct {
 	unsigned char first_time;
 	intel_cmt_thread_struct_t cmt_data;
+#ifdef  CONFIG_PMC_CORE_I7
 	intel_rapl_control_t rapl_ctrl;
 	uint64_t instr_counter;		/* Global instruction counter to compute the EDP */
+#endif
 	uint_t security_id;
 } intel_cmt_thread_data_t;
 
 
+#ifdef  CONFIG_PMC_CORE_I7
 static core_experiment_set_t ebs_sampling_pmc_configuration;
 
 static const char* ebs_sampling_pmcstr_cfg[]= {
 	"pmc0,ebs0,pmc1",
 	NULL
 };
+#endif
 
 
 
 /* Return the capabilities/properties of this monitoring module */
 static void intel_cmt_module_counter_usage(monitoring_module_counter_usage_t* usage)
 {
+#ifdef CONFIG_PMC_CORE_I7
 	if (intel_cmt_config.use_rapl_counters) {
 		int i;
 		usage->hwpmc_mask=0;
@@ -67,7 +77,9 @@ static void intel_cmt_module_counter_usage(monitoring_module_counter_usage_t* us
 		usage->nr_experiments=0;
 		for (i=0; i<usage->nr_virtual_counters; i++)
 			usage->vcounter_desc[i]=rapl_support->available_vcounters[i];
-	} else {
+	} else
+#endif
+	{
 		usage->hwpmc_mask=0;
 		usage->nr_virtual_counters=CMT_MAX_EVENTS; // L3_USAGE, L3_TOTAL_BW, L3_LOCAL_BW
 		usage->nr_experiments=0;
@@ -83,10 +95,18 @@ static int intel_cmt_enable_module(void)
 {
 	int retval=0;
 
+	intel_cmt_config.rmid_allocation_policy=RMID_FIFO;
+	intel_cmt_config.use_rapl_counters=0;
+	intel_cmt_config.reset_on_cswitch=0;
+	intel_cmt_config.force_ebs_counters=0;
+	intel_cmt_config.ebs_window=5000;
+
+#ifdef  CONFIG_PMC_CORE_I7
 	if (configure_performance_counters_set(ebs_sampling_pmcstr_cfg, &ebs_sampling_pmc_configuration, 1)) {
 		printk("Can't configure global performance counters. This is too bad ... ");
 		return -EINVAL;
 	}
+#endif
 
 	if ((retval=intel_cmt_initialize(&cmt_support)))
 		return retval;
@@ -96,6 +116,7 @@ static int intel_cmt_enable_module(void)
 		return retval;
 	}
 
+#ifdef  CONFIG_PMC_CORE_I7
 	if ((retval=edp_initialize_environment())) {
 		intel_cat_release(&cat_support);
 		intel_cmt_release(&cmt_support);
@@ -103,7 +124,7 @@ static int intel_cmt_enable_module(void)
 	}
 
 	rapl_support=get_global_rapl_handler();
-
+#endif
 	intel_mba_initialize(&mba_support);
 
 	return 0;
@@ -115,11 +136,13 @@ static void intel_cmt_disable_module(void)
 	intel_cmt_release(&cmt_support);
 	intel_cat_release(&cat_support);
 	intel_mba_release(&mba_support);
+
+#ifdef  CONFIG_PMC_CORE_I7
 	edp_release_resources();
 	rapl_support=NULL;
 
 	free_experiment_set(&ebs_sampling_pmc_configuration);
-
+#endif
 	printk(KERN_ALERT "%s monitoring module unloaded!!\n",INTEL_CMT_MODULE_STR);
 }
 
@@ -145,11 +168,15 @@ static int intel_cmt_on_read_config(char* str, unsigned int len)
 	}
 	dest+=intel_cat_print_capacity_bitmasks(dest,&cat_support);
 	dest+=intel_mba_print_delay_values(dest,&mba_support);
+#ifdef  CONFIG_PMC_CORE_I7
 	dest+=sprintf(dest,"force_ebs_counters=%u\n",
 	              intel_cmt_config.force_ebs_counters);
 	dest+=sprintf(dest,"use_rapl_counters=%u\n",
 	              intel_cmt_config.use_rapl_counters);
+	dest+=sprintf(dest,"ebs_window=%u\n",
+	              intel_cmt_config.ebs_window);
 	dest+=edp_dump_global_counters(dest);
+#endif
 	return dest-str;
 }
 
@@ -166,7 +193,7 @@ static int intel_cmt_on_write_config(const char *str, unsigned int len)
 		set_cmt_policy(intel_cmt_config.rmid_allocation_policy);
 	} else if (sscanf(str,"cos_id=%i",&val)==1 &&
 	           (val>=0 && val<cat_support.cat_nr_cos_available)) {
-		pmon_prof_t* prof=current->pmc;
+		pmon_prof_t* prof = get_prof(current);
 		intel_cmt_thread_data_t*  data;
 
 		if (!prof || !prof->monitoring_mod_priv_data)
@@ -180,10 +207,13 @@ static int intel_cmt_on_write_config(const char *str, unsigned int len)
 		intel_cat_set_capacity_bitmask(&cat_support,val,mask);
 	} else if (sscanf(str,"mba_delay%i %u",&val,&uval)==2) {
 		intel_mba_set_delay_values(&mba_support,val,uval);
+#ifdef  CONFIG_PMC_CORE_I7
 	} else if (sscanf(str,"force_ebs_counters %u",&uval)==1) {
 		intel_cmt_config.force_ebs_counters=uval;
 	} else if (sscanf(str,"use_rapl_counters %u",&uval)==1 &&  (uval==0 || uval==1) ) {
 		intel_cmt_config.use_rapl_counters=uval;
+	} else if (sscanf(str,"ebs_window %u",&uval)==1 &&  uval>10 ) {
+		intel_cmt_config.ebs_window=uval;
 	} else if (strncmp(str,"restart_edp",11)==0) {
 		printk(KERN_INFO "Resetting global EDP counters\n");
 		edp_reset_global_counters();
@@ -196,14 +226,35 @@ static int intel_cmt_on_write_config(const char *str, unsigned int len)
 		printk(KERN_INFO "Resume global EDP counts\n");
 		edp_resume_global_counts();
 		return len;
+#endif
 	}
 	return len;
 }
 
+#ifdef  CONFIG_PMC_CORE_I7
+/* For dynamic changes in EBS window */
+static void update_reset_value(core_experiment_t* core_exp, int reset_counters)
+{
+	pmu_props_t* props_cpu=get_pmu_props_cpu(0);
+	uint64_t reset_value=0;
+
+	reset_value=(props_cpu->pmc_width_mask+1-intel_cmt_config.ebs_window*1000) & props_cpu->pmc_width_mask;
+
+	__set_reset_value(&core_exp->array[core_exp->ebs_idx],reset_value);
+
+	if (reset_counters)
+		mc_restart_all_counters(core_exp);
+}
+#endif
+
 /* on fork() callback */
 static int intel_cmt_on_fork(unsigned long clone_flags, pmon_prof_t* prof)
 {
+#ifdef CONFIG_PMC_CORE_I7
+	int error=0;
+#endif
 	intel_cmt_thread_data_t*  data=NULL;
+	pmon_prof_t *pprof = get_prof(current);
 
 	if (prof->monitoring_mod_priv_data!=NULL)
 		return 0;
@@ -215,8 +266,7 @@ static int intel_cmt_on_fork(unsigned long clone_flags, pmon_prof_t* prof)
 
 	initialize_cmt_thread_struct(&data->cmt_data);
 
-	if (is_new_thread(clone_flags) && current->pmc) {
-		pmon_prof_t *pprof= (pmon_prof_t*)current->pmc;
+	if (is_new_thread(clone_flags) && get_prof_enabled(pprof)) {
 		intel_cmt_thread_data_t* parent_data=pprof->monitoring_mod_priv_data;
 		data->first_time=0;
 		data->cmt_data.rmid=parent_data->cmt_data.rmid;
@@ -227,6 +277,7 @@ static int intel_cmt_on_fork(unsigned long clone_flags, pmon_prof_t* prof)
 		data->cmt_data.rmid=0; /* It will be assigned in the first context switch */
 	}
 
+#ifdef CONFIG_PMC_CORE_I7
 	intel_rapl_control_init(&data->rapl_ctrl);
 
 	if (!intel_cmt_config.reset_on_cswitch)
@@ -234,16 +285,24 @@ static int intel_cmt_on_fork(unsigned long clone_flags, pmon_prof_t* prof)
 
 	/* EBS functionality: Configure counters (if counters were not already forced by the user) */
 	if (!prof->pmcs_config && intel_cmt_config.force_ebs_counters) {
-		clone_core_experiment_set_t(&prof->pmcs_multiplex_cfg[0],&ebs_sampling_pmc_configuration);
+		error=clone_core_experiment_set_t(&prof->pmcs_multiplex_cfg[0],&ebs_sampling_pmc_configuration,prof->this_tsk);
+
+		if (error) {
+			kfree(data);
+			return error;
+		}
 
 		prof->pmcs_config=get_cur_experiment_in_set(&prof->pmcs_multiplex_cfg[0]);
 
 		/* Activate EBS MODE if necessary */
-		if (prof->pmcs_config->ebs_idx!=-1)
+		if (prof->pmcs_config->ebs_idx!=-1) {
 			prof->profiling_mode=EBS_SCHED_MODE;
+			update_reset_value(prof->pmcs_config,0);
+		}
 	}
 
 	data->instr_counter=0;
+#endif
 	data->security_id=current_monitoring_module_security_id();
 	prof->monitoring_mod_priv_data = data;
 	return 0;
@@ -264,14 +323,15 @@ static int intel_cmt_on_new_sample(pmon_prof_t* prof,int cpu,pmc_sample_t* sampl
 	intel_rdt_event_t* global_mbm_events;
 	uint64_t total_bw;
 	unsigned int rmid_count;
-
+#ifdef CONFIG_PMC_CORE_I7
 	intel_rapl_sample_t rapl_sample;
 	int active_domains=0;
-
+#endif
 
 	if (tdata==NULL)
 		return 0;
 
+#ifdef CONFIG_PMC_CORE_I7
 	/*
 	 * Update global instruction counter to measure EDP.
 	 * Important assumption -> instructions are always counted
@@ -281,7 +341,6 @@ static int intel_cmt_on_new_sample(pmon_prof_t* prof,int cpu,pmc_sample_t* sampl
 
 	//if (flags & MM_EXIT)
 	//	edp_update_global_instr_counter(&tdata->instr_counter);
-
 
 	if (intel_cmt_config.use_rapl_counters) {
 		if (!intel_cmt_config.reset_on_cswitch || !(flags & MM_NO_CUR_CPU))
@@ -301,8 +360,9 @@ static int intel_cmt_on_new_sample(pmon_prof_t* prof,int cpu,pmc_sample_t* sampl
 			}
 		}
 
-	} else {
-
+	} else
+#endif
+	{
 		if (tdata->first_time)
 			return 0;
 
@@ -334,11 +394,14 @@ static void intel_cmt_on_migrate(pmon_prof_t* prof, int prev_cpu, int new_cpu) {
 static void intel_cmt_on_exit(pmon_prof_t* prof)
 {
 	intel_cmt_thread_data_t* data=(intel_cmt_thread_data_t*)prof->monitoring_mod_priv_data;
+
 	if (data)
 		put_rmid(data->cmt_data.rmid);
 
-	if (prof->this_tsk->prof_enabled)
+#ifdef CONFIG_PMC_CORE_I7
+	if (get_prof_enabled(prof))
 		edp_update_global_instr_counter(&data->instr_counter);
+#endif
 }
 
 /* Free up private data */
@@ -361,7 +424,7 @@ static void intel_cmt_on_switch_in(pmon_prof_t* prof)
 		// Assign RMID
 		data->cmt_data.rmid=get_rmid();
 		data->first_time=0;
-		was_first_time=0;
+		was_first_time=1;
 #ifdef DEBUG
 		trace_printk("Assigned RMID::%u\n",data->cmt_data.rmid);
 #endif
@@ -374,21 +437,26 @@ static void intel_cmt_on_switch_in(pmon_prof_t* prof)
 		intel_cmt_update_supported_events(&cmt_support,&data->cmt_data,llc_id);
 	}
 
+#ifdef CONFIG_PMC_CORE_I7
 	/* Update prev counts */
 	if (intel_cmt_config.reset_on_cswitch)
 		intel_rapl_update_energy_values_thread(rapl_support,&data->rapl_ctrl,0);
+#endif
 }
 
 /* on switch_out callback */
 static void intel_cmt_on_switch_out(pmon_prof_t* prof)
 {
+#ifdef CONFIG_PMC_CORE_I7
 	intel_cmt_thread_data_t* data=(intel_cmt_thread_data_t*)prof->monitoring_mod_priv_data;
-
+#endif
 	__unset_rmid();
 
+#ifdef CONFIG_PMC_CORE_I7
 	/* Accumulate energy readings */
 	if (!data->first_time && intel_cmt_config.reset_on_cswitch)
 		intel_rapl_update_energy_values_thread(rapl_support,&data->rapl_ctrl,1);
+#endif
 }
 
 /* Modify this function if necessary to expose CMT/MBM information to the OS scheduler */

@@ -13,6 +13,7 @@
  */
 
 #include <pmc/pmu_config.h>
+#include <pmc/mc_experiments.h>
 #include <asm/nmi.h>
 #include <asm/apic.h>
 #include <asm/processor.h>

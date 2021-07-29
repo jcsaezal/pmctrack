@@ -1,6 +1,7 @@
 MODULE_NAME=mchw_phi
 obj-m += $(MODULE_NAME).o 
-$(MODULE_NAME)-objs +=  mchw_core.o mc_experiments.o pmu_config_phi.o cbuffer.o monitoring_mod.o syswide.o 
+$(MODULE_NAME)-objs +=  mchw_core.o mc_experiments.o pmu_config_phi.o cbuffer.o monitoring_mod.o \
+						syswide.o pmctrack_stub.o 
 SYMLINKS=$(patsubst %.o,%.c,$($(MODULE_NAME)-objs))
 SOURCES=$(patsubst %.o,../%.c,$($(MODULE_NAME)-objs))
 

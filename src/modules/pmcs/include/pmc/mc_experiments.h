@@ -4,11 +4,17 @@
  *  Copyright (c) 2015 Juan Carlos Saez <jcsaezal@ucm.es>
  *
  *  This code is licensed under the GNU GPL v2.
+ *
+ *  Adaptation of the architecture-independent code for patchless PMCTrack
+ *  by Lazaro Clemen and Juan Carlos Saez
+ *  (C) 2021 Lazaro Clemen Palafox <lazarocl@ucm.es>
+ *  (C) 2021 Juan Carlos Saez <jcsaezal@ucm.es>
  */
 
 #ifndef MC_EXPERIMENTS_H
 #define MC_EXPERIMENTS_H
 #include <pmc/ll_events.h>
+#include <pmc/pmu_config.h>
 #if defined (__linux__)
 #include <linux/types.h>
 #else
@@ -20,6 +26,14 @@
 #include <linux/workqueue.h>
 #endif
 
+#ifndef CONFIG_PMCTRACK
+#include <linux/list.h>
+#include <linux/perf_event.h>
+
+#define SAFETY_CODE 0x777
+//#define SAFETY_CODE     ((unsigned char *)"0x777")
+#endif
+
 /* Divide in 32bit mode */
 #if defined(__i386__) || defined(__arm__)
 #define pmc_do_div(a,b) do_div(a,b)
@@ -28,7 +42,7 @@
 #endif
 
 #define MAX_32_B 0xffffffff
-#define AMP_MAX_EXP_CORETYPE	5
+#define AMP_MAX_EXP_CORETYPE	2
 #define AMP_MAX_CORETYPES	2
 #define PMC_NEW_THREAD  (CLONE_FS| CLONE_FILES | CLONE_VM| \
 CLONE_SIGHAND| CLONE_THREAD )
@@ -71,6 +85,14 @@ typedef struct {
 }
 core_experiment_t;
 
+typedef struct {
+	pmc_usrcfg_t pmc_cfg[MAX_LL_EXPS];
+	unsigned int used_pmcs;
+	unsigned int nr_pmcs;
+	int ebs_index;
+	int coretype;
+} pmc_config_set_t;
+
 /*
  * Set of core_experiment_t structures.
  * This is the basic structure to support the event multiplexing feature:
@@ -80,43 +102,101 @@ typedef struct {
 	core_experiment_t* exps[AMP_MAX_EXP_CORETYPE];
 	int nr_exps;
 	int cur_exp;	/* Contador modular entre 0 y nr_exps */
+#ifdef CONFIG_PMC_PERF
+	pmc_config_set_t pmc_config[AMP_MAX_EXP_CORETYPE];
+	int nr_configs;
+#endif
 } core_experiment_set_t;
 
-/* Load extensions for the QuickIA prototype system */
-#ifdef CONFIG_PMC_CORE_2_DUO
-#define PMCTRACK_QUICKIA
+
+/**************************************************************************
+ * Functions enabling the PMCTrack platform-independent core (mchw_core.c)
+ * to interact with the platform-specific code.
+ *
+ * (The implementation of most of these functions is platform specific)
+ **************************************************************************/
+
+/* Initialize the PMUs of the various CPUs in the system  */
+int init_pmu(void);
+
+/* Stop PMUs and free up resources allocated by init_pmu() */
+int pmu_shutdown(void);
+
+#ifdef CONFIG_PMC_PERF
+static inline void reset_overflow_status(void) {}
+static inline void mc_clear_all_platform_counters(pmu_props_t* props_cpu) { }
+/*
+ * Enable perf counter asociated to perf_event given by parameter.
+ */
+void perf_enable_counters(core_experiment_t* exp);
+/*
+ * Disable perf counter asociated to perf_event given by parameter.
+ */
+void perf_disable_counters(core_experiment_t* exp);
+#else
+/* Reset the PMC overflow register (if the platform is provided with such a register)
+ * in the current CPU where the function is invoked.
+ */
+void reset_overflow_status(void);
+
+/*
+ * Return a bitmask specifiying which PMCs overflowed
+ * This bitmask must be in a platform-independent "normalized" format.
+ * bit(i,mask)==1 if pmc_i overflowed
+ * (bear in mind that lower PMC ids are reserved for
+ * fixed-function PMCs)
+*/
+unsigned int read_overflow_mask(void);
+/*
+ * Perform a default initialization of all performance monitoring counters
+ * in the current CPU. The PMU properties are passed as a parameter for
+ * efficiency reasons
+ */
+void mc_clear_all_platform_counters(pmu_props_t* props_cpu);
+#endif
+/*
+ * This function gets invoked from the platform-specific PMU code
+ * when a PMC overflow interrupt is being handled. The function
+ * takes care of reading the performance counters and pushes a PMC sample
+ * into the samples buffer when in EBS mode.
+ */
+void do_count_on_overflow(struct pt_regs *reg, unsigned int overflow_mask);
+
+/*
+ * Transform an array of platform-agnostic PMC counter configurations (pmc_cfg)
+ * into a low level structure that holds the necessary data to configure hardware counters.
+ */
+int do_setup_pmcs(pmc_usrcfg_t* pmc_cfg, int used_pmcs_msk,core_experiment_t* exp, int cpu, int exp_idx, struct task_struct* p
+                 );
+
+/*
+ * Fill the various fields in a pmc_cfg structure based on a PMC configuration string specified in raw format
+ * (e.g., pmc0=0xc0,pmc1=0x76,...). The associated processing is platform specific and also provides
+ * the caller with the number of pmcs used, a bitmask with the set of PMCs claimed by the
+ * raw string, and other relevant information for mchw_core.c.
+ *
+ * This function returns 0 on success, and a negative value if errors were detected when
+ * processing the raw-formatted string.
+ */
+int parse_pmcs_strconfig(const char *buf,
+                         unsigned char ebs_allowed,
+                         pmc_usrcfg_t* pmc_cfg,
+                         unsigned int* used_pmcs_mask,
+                         unsigned int* nr_pmcs,
+                         int *ebs_index,
+                         int *coretype);
+
+
+/*
+ * Generate a summary string with the configuration of a hardware counter (lle)
+ * in human-readable format. The string is stored in buf.
+ */
+int print_pmc_config(low_level_exp* lle, char* buf);
+
+#ifdef DEBUG
+int print_pmu_msr_values_debug(char* line_out);
 #endif
 
-extern int* coretype_cpu;
-extern int  nr_core_types;
-
-#ifdef SCHED_AMP
-#include <linux/amp_core.h>
-#elif defined(PMCTRACK_QUICKIA)
-static int coretype_cpu_quickia[]= {0,0,1,1,0,0,1,1}; /* Test machine with 8 cores !! */
-static inline int get_nr_coretypes(void)
-{
-	return 2;
-}
-static inline int get_coretype_cpu(int cpu)
-{
-	return coretype_cpu_quickia[cpu];
-}
-static inline int get_any_cpu_coretype(int coretype)
-{
-	return coretype==1?3:1;
-}
-#else /* Default implementation */
-static inline int get_nr_coretypes(void)
-{
-	return nr_core_types;
-}
-static inline int get_coretype_cpu(int cpu)
-{
-	return coretype_cpu[cpu];
-}
-int get_any_cpu_coretype(int coretype);
-#endif
 
 
 /*** Platform-Independent datatypes of PMCTrack's kernel module */
@@ -159,6 +239,12 @@ struct monitoring_module;
  * by PMCTrack's kernel module
  */
 typedef struct {
+#ifndef CONFIG_PMCTRACK
+	int safety_control;
+	unsigned char prof_enabled;
+	struct perf_event *event;
+	struct list_head links; 			/* For the exited task list */
+#endif
 	uint64_t pmc_values[MAX_LL_EXPS]; 	/* Accumulator for PMC values */
 	struct task_struct *this_tsk;		/* Backwards pointer to the task struct of this thread */
 	unsigned int pmc_ticks_counter; 	/* Sampling interval control field for TBS.
@@ -260,13 +346,17 @@ static inline void free_experiment_set(core_experiment_set_t* cset)
 #endif
 
 	for (i=0; i<cset->nr_exps; i++) {
+		if (!cset->exps[i])
+			continue;
+
 #ifdef CONFIG_PMC_PERF
 		/* Recorrer contadores del low_level_exp */
-		for(j=0; i<cset->exps[j]->size; ++j) {
+		for(j=0; j<cset->exps[i]->size; ++j) {
 			if (cset->exps[i]->array[j].event.event)
 				perf_event_release_kernel(cset->exps[i]->array[j].event.event);
 		}
 #endif
+		cset->exps[i]->size=0; /* set to zero */
 		kfree(cset->exps[i]);
 		cset->exps[i]=NULL;
 	}
@@ -275,11 +365,17 @@ static inline void free_experiment_set(core_experiment_set_t* cset)
 }
 
 /* Add one PMC experiment to a given experiment set */
-static inline void add_experiment_to_set(core_experiment_set_t* cset, core_experiment_t* exp)
+static inline void add_experiment_to_set(core_experiment_set_t* cset, core_experiment_t* exp, pmc_config_set_t* config)
 {
-	/* Modifies the exp_idx with the position in the vector !!! */
-	exp->exp_idx=cset->nr_exps;
-	cset->exps[cset->nr_exps++]=exp;
+	/* When using the perf backend, a NULL value can be passed just to copy the low-level configuration structure */
+	if (exp) {
+		/* Modifies the exp_idx with the position in the vector !!! */
+		exp->exp_idx=cset->nr_exps;
+		cset->exps[cset->nr_exps++]=exp;
+	}
+#ifdef CONFIG_PMC_PERF
+	memcpy(&cset->pmc_config[cset->nr_configs++],config,sizeof(pmc_config_set_t));
+#endif
 }
 
 /* Rewind the pointer for event multiplexing */
@@ -317,40 +413,14 @@ static inline void init_core_experiment_set_t(core_experiment_set_t* cset)
 
 	cset->nr_exps=0;
 	cset->cur_exp=0;
+#ifdef CONFIG_PMC_PERF
+	/* The actual pmc_config_set_t array requires no initialization */
+	cset->nr_configs=0;
+#endif
 }
 
 /* Copy the configuration of a experiment set into another */
-static inline int clone_core_experiment_set_t(core_experiment_set_t* dst,core_experiment_set_t* src)
-{
-	int i=0,j=0;
-	core_experiment_t* exp=NULL;
-
-	dst->nr_exps=0;
-	dst->cur_exp=0;
-
-	for (i=0; i<src->nr_exps; i++) {
-		if (src->exps[i]!=NULL) {
-			exp= (core_experiment_t*) kmalloc(sizeof(core_experiment_t), GFP_KERNEL);
-			if (!exp)
-				goto free_allocated_experiments;
-			memcpy(exp,src->exps[i],sizeof(core_experiment_t));
-			/* Do not inherit overflow counters */
-			for (j=0; j<MAX_LL_EXPS; j++)
-				exp->nr_overflows[j]=0;
-			dst->exps[i]=exp;
-			dst->nr_exps++;
-		}
-
-	}
-
-	return 0;
-free_allocated_experiments:
-	for (i=0; i<dst->nr_exps; i++) {
-		kfree(dst->exps[i]);
-		dst->exps[i]=NULL;
-	}
-	return -ENOMEM;
-}
+int clone_core_experiment_set_t(core_experiment_set_t* dst,core_experiment_set_t* src, struct task_struct* p);
 
 static inline int clone_core_experiment_set_t_noalloc(core_experiment_set_t* dst,core_experiment_set_t* src)
 {
@@ -470,15 +540,18 @@ static inline void push_sample_cbuffer(pmon_prof_t* prof,pmc_sample_t* sample)
 static inline int task_cpu_safe(struct task_struct *p)
 {
 
-#if !defined(CONFIG_PMC_ARM) && (LINUX_VERSION_CODE >= KERNEL_VERSION(4,9,0))
-	return p->cpu;
-#else
+
+#if !defined(CONFIG_THREAD_INFO_IN_TASK)
 	struct thread_info* ti=task_thread_info(p);
 
 	if (ti)
 		return ti->cpu;
 	else
 		return -1;
+
+#else
+//(!defined(CONFIG_PMC_ARM) && (LINUX_VERSION_CODE >= KERNEL_VERSION(4,9,0)))
+	return p->cpu;
 #endif
 }
 
@@ -507,5 +580,127 @@ pmct_cpu_function_call(struct task_struct *p, int cpu, int (*func) (void *info),
 #define raw_ktime(kt) (kt)
 #endif
 
+
+/**** Operations on a task_struct ****/
+
+
+#ifndef CONFIG_PMCTRACK
+
+void init_prof_exited_tasks(void);
+void add_prof_exited_task(pmon_prof_t *prof);
+pmon_prof_t* get_prof_exited_task(struct task_struct* p);
+void del_prof_exited_task(pmon_prof_t *prof);
+
+/*
+ * Retrieve profiling from the given task
+ */
+static inline pmon_prof_t* get_prof(struct task_struct* p)
+{
+	struct perf_event *event;
+	pmon_prof_t* prof;
+
+
+	if (p == NULL)
+		return NULL;
+
+
+	/* Ensure there is at least one element in the list */
+	if (list_empty(&(p->perf_event_list))) {
+		/* It could be a dead task ... */
+		/* Look in global list*/
+		if ((p->state & TASK_DEAD) != 0)
+			return get_prof_exited_task(p);
+		else
+			return NULL;
+	}
+
+	/* General case */
+
+	//mutex_lock(&p->perf_event_mutex);
+	event = list_first_entry(&(p->perf_event_list), typeof(*event), owner_entry);
+	//mutex_unlock(&p->perf_event_mutex);
+
+	if (event != NULL) {
+		prof = (pmon_prof_t*)(event->pmu_private);
+	} else {
+		printk(KERN_INFO "Failed to retrieve process perf_event\n");
+		return NULL;
+	}
+
+	/* Ensure it is the right event */
+	if (!prof || prof->safety_control != SAFETY_CODE) {
+		printk(KERN_INFO "Failed perf_event safety check\n");
+		return NULL;
+	}
+
+	return prof;
+}
+
+static inline unsigned char get_prof_enabled(pmon_prof_t *prof)
+{
+	if (prof) return prof->prof_enabled;
+	else return 0;
+}
+
+static inline void set_prof_enabled(pmon_prof_t *prof, unsigned char enable)
+{
+	if (prof)
+		prof->prof_enabled = enable;
+}
+
+
+#else
+
+static inline void init_prof_exited_tasks(void) {}
+static inline void add_prof_exited_task(pmon_prof_t *prof) { }
+static inline pmon_prof_t* get_prof_exited_task(struct task_struct* p)
+{
+	return NULL;
+}
+static inline void del_prof_exited_task(pmon_prof_t *prof) {}
+
+static inline pmon_prof_t* get_prof(struct task_struct* p)
+{
+	return (p == NULL ? NULL : (pmon_prof_t*) p->pmc);
+}
+
+static inline unsigned char get_prof_enabled(pmon_prof_t *prof)
+{
+	if (prof)
+		return prof->this_tsk->prof_enabled;
+	else return 0;
+}
+
+static inline void set_prof_enabled(pmon_prof_t *prof, unsigned char enable)
+{
+	if(prof)
+		prof->this_tsk->prof_enabled = enable;
+}
+
+#endif
+
+
+struct task_struct *pmctrack_find_process_by_pid(pid_t pid);
+
+/** Code to guarantee portability in procfs handling **/
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,8,0)
+typedef struct proc_ops pmctrack_proc_ops_t;
+#define PMCT_PROC_OPEN proc_open
+#define PMCT_PROC_READ proc_read
+#define PMCT_PROC_WRITE proc_write
+#define PMCT_PROC_LSEEK proc_lseek
+#define PMCT_PROC_RELEASE proc_release
+#define PMCT_PROC_IOCTL proc_ioctl
+#define PMCT_PROC_MMAP proc_mmap
+#else
+typedef struct file_operations pmctrack_proc_ops_t;
+#define PMCT_PROC_OPEN open
+#define PMCT_PROC_READ read
+#define PMCT_PROC_WRITE write
+#define PMCT_PROC_LSEEK lseek
+#define PMCT_PROC_RELEASE release
+#define PMCT_PROC_IOCTL ioctl
+#define PMCT_PROC_MMAP mmap
+#endif
 
 #endif

@@ -22,3 +22,14 @@ bus_accesses,-,0x19,-,-
 data_mem_access,-,0x13,-,-
 instr_cache_access,-,0x14,-,-
 data_cache_eviction,-,0x15,-,-
+a7_cycles,-,0x11,-,pmu=6
+a7_instr,-,0x8,-,pmu=6
+a7_instr_arch_executed,-,0x8,-,pmu=6
+a7_l2_cache_accesses,-,0x16,-,pmu=6
+a7_l2_cache_refills,-,0x17,-,pmu=6
+a7_l2_cache_writebacks,-,0x18,-,pmu=6
+a7_l1_data_refills,-,0x03,-,pmu=6
+a7_l1_data_accesses,-,0x04,-,pmu=6
+a7_llc_accesses,-,0x16,-,pmu=6
+a7_llc_misses,-,0x17,-,pmu=6
+

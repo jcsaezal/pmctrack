@@ -4,6 +4,11 @@
  *  Copyright (c) 2015 Juan Carlos Saez <jcsaezal@ucm.es>
  *
  *  This code is licensed under the GNU GPL v2.
+ *
+ *  Adaptation of the architecture-independent code for patchless PMCTrack
+ *  by Lazaro Clemen and Juan Carlos Saez
+ *  (C) 2021 Lazaro Clemen Palafox <lazarocl@ucm.es>
+ *  (C) 2021 Juan Carlos Saez <jcsaezal@ucm.es>
  */
 
 #include <pmc/mc_experiments.h>
@@ -131,6 +136,154 @@ void mc_restore_all_counters(core_experiment_t* core_experiment)
 
 	reset_overflow_status();
 }
+#endif
+
+
+#ifdef CONFIG_PMC_PERF
+int clone_core_experiment_set_t(core_experiment_set_t* dst,core_experiment_set_t* src, struct task_struct* p)
+{
+	int i=0,j=0,k=0;
+	core_experiment_t* exp=NULL;
+	int error=0;
+	pmc_config_set_t* config;
+
+	dst->nr_exps=0;
+	dst->cur_exp=0;
+
+	/* Just memory allocation */
+	for (i=0; i<src->nr_configs; i++) {
+		exp= (core_experiment_t*) kmalloc(sizeof(core_experiment_t), GFP_KERNEL);
+		if (!exp) {
+			error=-ENOMEM;
+			goto free_allocated_experiments;
+		}
+		dst->exps[i]=exp;
+		dst->nr_exps++;
+		/* Copy configuration */
+		memcpy(&dst->pmc_config[dst->nr_configs++],&src->pmc_config[i],sizeof(pmc_config_set_t));
+
+	}
+
+	/* No need to check user-provided configuration */
+	/* Now proceed to setup config */
+	for (i=0; i<dst->nr_configs; i++) {
+		config=&dst->pmc_config[i];
+
+		if (config->coretype==-1) {
+			error=-ENOTSUPP;
+			goto free_perf_events;
+		}
+
+		for (k=0; k<MAX_LL_EXPS; k++) {
+			if ( config->used_pmcs & (0x1<<k)) {
+				/* Update force enable flag */
+				config->pmc_cfg[k].cfg_force_enable=1;
+			}
+		}
+
+		error=do_setup_pmcs(config->pmc_cfg,config->used_pmcs,dst->exps[i],get_any_cpu_coretype(config->coretype),i,p);
+
+		if (error)
+			goto free_perf_events;
+	}
+
+	return 0;
+free_perf_events:
+	for (j=0; j<i; j++) {
+		/* Release perf events as well */
+		for (k=0; k<dst->exps[j]->size; k++) {
+			if (dst->exps[j]->array[k].event.event)
+				perf_event_release_kernel(dst->exps[j]->array[k].event.event);
+		}
+	}
+
+free_allocated_experiments:
+	for (i=0; i<dst->nr_exps; i++) {
+		kfree(dst->exps[i]);
+		dst->exps[i]=NULL;
+	}
+	return error;
+}
+#else
+int clone_core_experiment_set_t(core_experiment_set_t* dst,core_experiment_set_t* src, struct task_struct* p)
+{
+	int i=0,j=0;
+	core_experiment_t* exp=NULL;
+
+	dst->nr_exps=0;
+	dst->cur_exp=0;
+
+	for (i=0; i<src->nr_exps; i++) {
+		if (src->exps[i]!=NULL) {
+			exp= (core_experiment_t*) kmalloc(sizeof(core_experiment_t), GFP_KERNEL);
+			if (!exp)
+				goto free_allocated_experiments;
+			memcpy(exp,src->exps[i],sizeof(core_experiment_t));
+			/* Do not inherit overflow counters */
+			for (j=0; j<MAX_LL_EXPS; j++)
+				exp->nr_overflows[j]=0;
+			dst->exps[i]=exp;
+			dst->nr_exps++;
+		}
+
+	}
+
+	return 0;
+free_allocated_experiments:
+	for (i=0; i<dst->nr_exps; i++) {
+		kfree(dst->exps[i]);
+		dst->exps[i]=NULL;
+	}
+	return -ENOMEM;
+}
+#endif
+
+#ifndef CONFIG_PMCTRACK
+DEFINE_RWLOCK(gone_tasks_lock);
+LIST_HEAD(gone_tasks);
+
+void init_prof_exited_tasks(void)
+{
+	INIT_LIST_HEAD(&gone_tasks);
+}
+
+void add_prof_exited_task(pmon_prof_t *prof)
+{
+	unsigned long flags;
+
+	write_lock_irqsave(&gone_tasks_lock,flags);
+	list_add_tail(&prof->links,&gone_tasks);
+	write_unlock_irqrestore(&gone_tasks_lock,flags);
+}
+
+pmon_prof_t * get_prof_exited_task(struct task_struct* p)
+{
+	unsigned long flags;
+	pmon_prof_t * prof=NULL;
+	pmon_prof_t * next;
+
+	read_lock_irqsave(&gone_tasks_lock,flags);
+
+	list_for_each_entry(next,&gone_tasks,links) {
+		if (next->this_tsk==p) {
+			prof=next;
+			break;
+		}
+	}
+	read_unlock_irqrestore(&gone_tasks_lock,flags);
+
+	return prof;
+}
+
+void del_prof_exited_task(pmon_prof_t *prof)
+{
+	unsigned long flags;
+
+	write_lock_irqsave(&gone_tasks_lock,flags);
+	list_del(&prof->links);
+	write_unlock_irqrestore(&gone_tasks_lock,flags);
+}
+
 #endif
 
 /******************** Functions related to the computation of high-level performance metrics **************************/
@@ -606,3 +759,22 @@ void* insert_phase_in_table(phase_table_t* table, void* phase)
 	memcpy(free_phase_loc->data,phase,table->phase_struct_size);
 	return free_phase_loc->data;
 }
+
+
+extern struct pid *find_pid_ns(int nr, struct pid_namespace *ns);
+extern struct task_struct *pid_task(struct pid *pid, enum pid_type type);
+extern struct pid_namespace *task_active_pid_ns(struct task_struct *tsk);
+
+struct task_struct *pmctrack_find_process_by_pid(pid_t pid)
+{
+	if (pid) {
+		struct pid_namespace *ns = task_active_pid_ns(current);
+
+		RCU_LOCKDEP_WARN(!rcu_read_lock_held(),
+		                 "find_task_by_pid_ns() needs rcu_read_lock() protection");
+		return pid_task(find_pid_ns(pid, ns), PIDTYPE_PID);
+	} else {
+		return current;
+	}
+}
+

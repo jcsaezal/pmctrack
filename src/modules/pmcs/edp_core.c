@@ -154,7 +154,7 @@ int edp_dump_global_counters(char* buf)
 	return dst-buf;
 }
 
-#elif defined(CONFIG_PMC_CORE_I7)
+#elif defined(CONFIG_PMC_CORE_I7) || (defined(CONFIG_PMC_PERF) && defined(__x86_64__))
 #include <pmc/intel_rapl.h>
 
 
