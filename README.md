@@ -8,7 +8,7 @@ Despite being an OS-oriented tool, PMCTrack still allows the gathering of PMC va
 
 * Juan Carlos Saez Alcaide (<jcsaezal@ucm.es>) - Creator of PMCTrack and main maintainer 
 * Adrián García García (aka [@Mizadri](https://github.com/mizadri))
-* Lazaro Clemen Palafox (aka <lazarocl@ucm.es>)
+* Lazaro Clemen Palafox (<lazarocl@ucm.es>)
 * Jaime Sáez de Buruaga Brouns (aka [@jaimesaez97](https://github.com/jaimesaez97))
 
 ## Past Contributors
