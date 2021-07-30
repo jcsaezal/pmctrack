@@ -378,7 +378,7 @@ struct perf_event *create_pmctrack_task_event(struct task_struct* task, pmon_pro
 	prof->prof_enabled = 0;
 	prof->event=event;
 	/** The profiler will be disabled by default */
-	/* Insert pmctrack_task in to event */
+	/* Insert pmon_prof_t in to the event */
 	event->pmu_private = prof;
 
 	/* Add fake perf event in event list */

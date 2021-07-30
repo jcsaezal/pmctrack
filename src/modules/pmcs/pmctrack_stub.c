@@ -30,7 +30,6 @@
 
 
 /*
-* This should be for x86 only for now.
 * regs_get_kernel_argument introduced in following kernels
 * - x86: Linux 4.20.0
 * - arm64: Linux 5.2.0
@@ -401,7 +400,6 @@ static struct ftrace_hook ftrace_hooks[] = {
 	{.name = "sched_exec"},
 	{.name = "scheduler_tick"},
 	{.name = "finish_task_switch"},
-	{.name = "do_exit"},
 #if defined CONFIG_X86 && !defined CONFIG_PMC_PERF
 	{.name = "perf_event_nmi_handler"}, // x86 and legacy only
 #endif
@@ -410,14 +408,6 @@ static struct ftrace_hook ftrace_hooks[] = {
 /**
  * ftrace - callback functions
  */
-static void notrace fh_ftrace_do_exit(unsigned long ip, unsigned long parent_ip,
-                                      struct ftrace_ops *ops, struct pt_regs *regs)
-{
-	preempt_enable_notrace();
-	pmcs_exit_thread(current);
-	preempt_disable_notrace();
-}
-
 static void notrace fh_ftrace_free_task(unsigned long ip, unsigned long parent_ip,
                                         struct ftrace_ops *ops, struct pt_regs *regs)
 {
@@ -485,21 +475,21 @@ int fh_install_hook(struct ftrace_hook *hook)
 {
 	int err;
 
-	hook->ops.flags = FTRACE_OPS_FL_SAVE_REGS
-	                  | FTRACE_OPS_FL_RCU;
-
-	if(strcmp(hook->name, "do_exit") == 0) {
-		hook->ops.func = fh_ftrace_do_exit;
-	} else if(strcmp(hook->name, "free_task") == 0) {
+	if(strcmp(hook->name, "free_task") == 0) {
 		hook->ops.func = fh_ftrace_free_task;
+		hook->ops.flags = FTRACE_OPS_FL_SAVE_REGS;
 	} else if(strcmp(hook->name, "copy_semundo") == 0) {
 		hook->ops.func = fh_ftrace_sched_fork;
+		hook->ops.flags = FTRACE_OPS_FL_SAVE_REGS;
 	} else if(strcmp(hook->name, "sched_exec") == 0) {
 		hook->ops.func = fh_ftrace_sched_exec;
+		hook->ops.flags = FTRACE_OPS_FL_RCU;
 	} else if(strcmp(hook->name, "scheduler_tick") == 0) {
 		hook->ops.func = fh_ftrace_scheduler_tick;
+		hook->ops.flags = FTRACE_OPS_FL_RCU;
 	} else if(strcmp(hook->name, "finish_task_switch") == 0) {
 		hook->ops.func = fh_ftrace_finish_task_switch;
+		hook->ops.flags = FTRACE_OPS_FL_RCU;
 	}
 #if defined CONFIG_X86 && !defined CONFIG_PMC_PERF
 	else if(strcmp(hook->name, "perf_event_nmi_handler") == 0) {
@@ -587,7 +577,7 @@ void fh_remove_hooks(struct ftrace_hook *hooks, size_t count)
 /*** Tracepoints setup **/
 
 /**
- * Tracepoint probe function
+ * Tracepoint probe functions
  */
 static void probe_sched_switch(void *data, bool preempt, struct task_struct *prev,
                                struct task_struct *next)
@@ -595,8 +585,20 @@ static void probe_sched_switch(void *data, bool preempt, struct task_struct *pre
 	pmcs_save_callback(prev, smp_processor_id());
 }
 
+static void probe_sched_process_exit(void *data, struct task_struct *p) 
+{
+#if defined(__aarch64__) || defined (__arm__)
+	preempt_enable_notrace();
+#endif
+    	pmcs_exit_thread(p);
+#if defined(__aarch64__) || defined (__arm__)
+	preempt_disable_notrace();
+#endif
+}
+
 struct tracepoints_table interests[] = {
 	{.name = "sched_switch", .fct = probe_sched_switch},
+	{.name = "sched_process_exit", .fct = probe_sched_process_exit},
 };
 
 /**
