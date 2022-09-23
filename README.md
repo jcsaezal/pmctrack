@@ -10,6 +10,7 @@ Despite being an OS-oriented tool, PMCTrack still allows the gathering of PMC va
 * Adrián García García (aka [@Mizadri](https://github.com/mizadri))
 * Lazaro Clemen Palafox (aka [@lz-palafox](https://github.com/lz-palafox))
 * Jaime Sáez de Buruaga Brouns (aka [@jaimesaez97](https://github.com/jaimesaez97))
+* Carlos Bilbao (aka [@Zildj1an](https://github.com/Zildj1an))
 
 ## Past Contributors
 
