@@ -10,7 +10,6 @@
  *  This code is licensed under the GNU GPL v2.
  */
 
-#ifndef CONFIG_PMCTRACK
 #include <linux/ftrace.h>
 #include <linux/tracepoint.h>
 #include <linux/ptrace.h>
@@ -19,7 +18,6 @@
 #include <linux/kernel.h>
 #include <linux/version.h>
 #include <linux/kallsyms.h>
-#include <asm/nmi.h>
 #include <linux/rwlock.h>
 #include <linux/rcupdate.h>
 
@@ -27,8 +25,34 @@
 #include <linux/err.h>
 #include <linux/module.h>
 #include <pmc/pmctrack_stub.h>
+#include <linux/kprobes.h>
+#if defined CONFIG_X86
+#include <pmc/intel_ehfi.h>
+#include <asm/nmi.h>
+#endif
+
+/** ## Compatibility code for patch
+ *
+ * https://lore.kernel.org/lkml/20201113171939.162178036@goodmis.org/
+ *
+ */
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(5,15,0)
+typedef struct pt_regs ftrace_regs_t;
+static __always_inline struct pt_regs *ftrace_get_regs(ftrace_regs_t *fregs)
+{
+	if (!fregs)
+		return NULL;
+
+	return fregs;
+}
+#else
+typedef struct ftrace_regs ftrace_regs_t;
+#endif
 
 
+#if defined(CONFIG_X86) && defined(CONFIG_KPROBES) && !defined(CONFIG_PMCTRACK)
+#define USE_BLOCKING_KPROBE
+#endif
 /*
 * regs_get_kernel_argument introduced in following kernels
 * - x86: Linux 4.20.0
@@ -45,7 +69,7 @@ static inline unsigned long pt_regs_read_reg(const struct pt_regs *regs, int r)
 	return (r == 31) ? 0 : regs->uregs[r];
 }
 #endif
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5,2,0)
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(5,2,0)) || defined(__arm__)
 /**
  * regs_get_kernel_argument() - get Nth function argument in kernel
  * @regs:	pt_regs of that context
@@ -127,6 +151,7 @@ struct ftrace_hook {
 	struct ftrace_ops ops;
 };
 
+#ifndef CONFIG_PMCTRACK
 /**
  * struct tracepoints_table - Data structure to store tracepoints information
  * @name:	name of the tracepoint
@@ -390,33 +415,48 @@ int pmcs_get_current_metric_value(struct task_struct* task, int key, uint64_t* v
 
 	return ret;
 }
-
+#endif
 
 /*** Ftrace setup ***/
 
 static struct ftrace_hook ftrace_hooks[] = {
+#ifndef CONFIG_PMCTRACK
 	{.name = "free_task"},
+#ifndef USE_BLOCKING_KPROBE
+#ifdef __arma__
+	{.name = "sched_fork"},
+#else
 	{.name = "copy_semundo"}, 	// sched_fork
+#endif
+#endif
 	{.name = "sched_exec"},
 	{.name = "scheduler_tick"},
 	{.name = "finish_task_switch"},
+#endif
 #if defined CONFIG_X86 && !defined CONFIG_PMC_PERF
 	{.name = "perf_event_nmi_handler"}, // x86 and legacy only
+#endif
+#if defined CONFIG_X86
+	{.name = "intel_thermal_interrupt"},
 #endif
 };
 
 /**
  * ftrace - callback functions
  */
+#ifndef CONFIG_PMCTRACK
 static void notrace fh_ftrace_free_task(unsigned long ip, unsigned long parent_ip,
-                                        struct ftrace_ops *ops, struct pt_regs *regs)
+                                        struct ftrace_ops *ops, ftrace_regs_t *fregs)
 {
+	struct pt_regs *regs = ftrace_get_regs(fregs);
 	pmcs_free_per_thread_data((void*) regs_get_kernel_argument(regs, 0));
 }
 
 static void notrace fh_ftrace_sched_fork(unsigned long ip, unsigned long parent_ip,
-        struct ftrace_ops *ops, struct pt_regs *regs)
+        struct ftrace_ops *ops, ftrace_regs_t *fregs)
 {
+
+	struct pt_regs *regs = ftrace_get_regs(fregs);
 	struct task_struct* p=(struct task_struct*) regs_get_kernel_argument(regs, 1);
 	preempt_enable_notrace();
 	pmcs_alloc_per_thread_data(regs_get_kernel_argument(regs, 0), p);
@@ -424,22 +464,23 @@ static void notrace fh_ftrace_sched_fork(unsigned long ip, unsigned long parent_
 }
 
 static void notrace fh_ftrace_sched_exec(unsigned long ip, unsigned long parent_ip,
-        struct ftrace_ops *ops, struct pt_regs *regs)
+        struct ftrace_ops *ops, ftrace_regs_t *fregs)
 {
 	pmcs_exec_thread(current);
 }
 
 static void notrace fh_ftrace_scheduler_tick(unsigned long ip, unsigned long parent_ip,
-        struct ftrace_ops *ops, struct pt_regs *regs)
+        struct ftrace_ops *ops, ftrace_regs_t *fregs)
 {
 	pmcs_tbs_tick(current, smp_processor_id());
 }
 
 static void notrace fh_ftrace_finish_task_switch(unsigned long ip, unsigned long parent_ip,
-        struct ftrace_ops *ops, struct pt_regs *regs)
+        struct ftrace_ops *ops, ftrace_regs_t *fregs)
 {
 	pmcs_restore_callback(current, smp_processor_id());
 }
+#endif
 
 #if defined CONFIG_X86 && !defined CONFIG_PMC_PERF
 /**
@@ -456,12 +497,21 @@ static int livepatch_perf_event_nmi_handler(unsigned int cmd, struct pt_regs *re
  * counter overflow interrupt registration operation.
  */
 static void notrace fh_ftrace_perf_event_nmi_handler(unsigned long ip, unsigned long parent_ip,
-        struct ftrace_ops *ops, struct pt_regs *regs)
+        struct ftrace_ops *ops, ftrace_regs_t *fregs)
 {
+	struct pt_regs *regs = ftrace_get_regs(fregs);
 	/* Allow patching functions where RCU is not watching */
 	//preempt_disable_notrace();
 	regs->ip = (unsigned long) livepatch_perf_event_nmi_handler;
 	//preempt_enable_notrace();
+}
+#endif
+
+#if defined CONFIG_X86
+static void notrace fh_ftrace_intel_thermal_interrupt(unsigned long ip, unsigned long parent_ip,
+        struct ftrace_ops *ops, ftrace_regs_t *fregs)
+{
+	intel_ehfi_process_event();
 }
 #endif
 
@@ -475,32 +525,44 @@ int fh_install_hook(struct ftrace_hook *hook)
 {
 	int err;
 
+#ifndef CONFIG_PMCTRACK
 	if(strcmp(hook->name, "free_task") == 0) {
 		hook->ops.func = fh_ftrace_free_task;
 		hook->ops.flags = FTRACE_OPS_FL_SAVE_REGS;
-	} else if(strcmp(hook->name, "copy_semundo") == 0) {
-		hook->ops.func = fh_ftrace_sched_fork;
-		hook->ops.flags = FTRACE_OPS_FL_SAVE_REGS;
-	} else if(strcmp(hook->name, "sched_exec") == 0) {
-		hook->ops.func = fh_ftrace_sched_exec;
-		hook->ops.flags = FTRACE_OPS_FL_RCU;
-	} else if(strcmp(hook->name, "scheduler_tick") == 0) {
-		hook->ops.func = fh_ftrace_scheduler_tick;
-		hook->ops.flags = FTRACE_OPS_FL_RCU;
-	} else if(strcmp(hook->name, "finish_task_switch") == 0) {
-		hook->ops.func = fh_ftrace_finish_task_switch;
-		hook->ops.flags = FTRACE_OPS_FL_RCU;
-	}
+	} else
+#ifdef __arma__
+		if(strcmp(hook->name, "sched_fork") == 0) {
+#else
+		if(strcmp(hook->name, "copy_semundo") == 0) {
+#endif
+			hook->ops.func = fh_ftrace_sched_fork;
+			hook->ops.flags = FTRACE_OPS_FL_SAVE_REGS;
+		} else if(strcmp(hook->name, "sched_exec") == 0) {
+			hook->ops.func = fh_ftrace_sched_exec;
+			hook->ops.flags = FTRACE_OPS_FL_RCU;
+		} else if(strcmp(hook->name, "scheduler_tick") == 0) {
+			hook->ops.func = fh_ftrace_scheduler_tick;
+			hook->ops.flags = FTRACE_OPS_FL_RCU;
+		} else if(strcmp(hook->name, "finish_task_switch") == 0) {
+			hook->ops.func = fh_ftrace_finish_task_switch;
+			hook->ops.flags = FTRACE_OPS_FL_RCU;
+		} else
+#endif
 #if defined CONFIG_X86 && !defined CONFIG_PMC_PERF
-	else if(strcmp(hook->name, "perf_event_nmi_handler") == 0) {
-		hook->ops.func = fh_ftrace_perf_event_nmi_handler;
-		hook->ops.flags = FTRACE_OPS_FL_SAVE_REGS
-		                  | FTRACE_OPS_FL_IPMODIFY;
+			if(strcmp(hook->name, "perf_event_nmi_handler") == 0) {
+				hook->ops.func = fh_ftrace_perf_event_nmi_handler;
+				hook->ops.flags = FTRACE_OPS_FL_SAVE_REGS
+				                  | FTRACE_OPS_FL_IPMODIFY;
+			}
+#endif
+#if defined CONFIG_X86
+	if(strcmp(hook->name, "intel_thermal_interrupt") == 0) {
+		hook->ops.func = fh_ftrace_intel_thermal_interrupt;
+		hook->ops.flags = FTRACE_OPS_FL_RCU;
 	}
 #endif
-
 	err = ftrace_set_filter(&hook->ops, hook->name, strlen(hook->name), 0);
-	if (err) {
+	if (err<0) {
 		printk("ftrace - set filter for %s failed. Error code %d\n", hook->name, err);
 		return err;
 	}
@@ -553,6 +615,8 @@ int fh_install_hooks(struct ftrace_hook *hooks, size_t count)
 			while (i != 0) {
 				fh_remove_hook(&hooks[--i]);
 			}
+			if (err>0)
+				err=-ENOTSUPP;
 			return err;
 		}
 	}
@@ -576,6 +640,7 @@ void fh_remove_hooks(struct ftrace_hook *hooks, size_t count)
 
 /*** Tracepoints setup **/
 
+#ifndef CONFIG_PMCTRACK
 /**
  * Tracepoint probe functions
  */
@@ -585,12 +650,12 @@ static void probe_sched_switch(void *data, bool preempt, struct task_struct *pre
 	pmcs_save_callback(prev, smp_processor_id());
 }
 
-static void probe_sched_process_exit(void *data, struct task_struct *p) 
+static void probe_sched_process_exit(void *data, struct task_struct *p)
 {
 #if defined(__aarch64__) || defined (__arm__)
 	preempt_enable_notrace();
 #endif
-    	pmcs_exit_thread(p);
+	pmcs_exit_thread(p);
 #if defined(__aarch64__) || defined (__arm__)
 	preempt_disable_notrace();
 #endif
@@ -651,6 +716,48 @@ int trace_event_init(void)
 
 	return 0;
 }
+#else
+static void trace_event_exit(void) {}
+#endif
+
+#ifdef USE_BLOCKING_KPROBE
+/* kprobe pre_handler: called just before the probed instruction is executed */
+static int __kprobes handler_prefork(struct kprobe *kprobe, struct pt_regs *regs)
+{
+	/* A dump_stack() here will give a stack backtrace */
+
+	struct task_struct* p=(struct task_struct*) regs_get_kernel_argument(regs, 1);
+
+	preempt_enable_notrace();
+	pmcs_alloc_per_thread_data(regs_get_kernel_argument(regs, 0), p);
+
+#ifdef DEBUG
+	trace_printk("<%s> p->addr = 0x%p, ip = %lx, flags = 0x%lx\n",
+	             kprobe->symbol_name, kprobe->addr, regs->ip, regs->flags);
+#endif
+	preempt_disable_notrace();
+
+	return 0;
+}
+
+/* kprobe post_handler: called after the probed instruction is executed */
+static void __kprobes handler_postfork(struct kprobe *p, struct pt_regs *regs,
+                                       unsigned long flags)
+{
+#ifdef DEBUG
+	trace_printk("<%s> p->addr = 0x%p, flags = 0x%lx\n",
+	             p->symbol_name, p->addr, regs->flags);
+#endif
+}
+
+/* For each probe you need to allocate a kprobe structure */
+static struct kprobe kp = {
+	.symbol_name	= "copy_semundo",
+	.pre_handler = handler_prefork,
+	.post_handler = handler_postfork,
+};
+
+#endif
 
 
 /*** PMCTrack unpatched setup **/
@@ -664,9 +771,11 @@ int pmctrack_init(void)
 	return -1;
 #endif
 
+#ifndef CONFIG_PMCTRACK
 	err = trace_event_init();
 	if (err)
 		return err;
+#endif
 
 	err = fh_install_hooks(ftrace_hooks, ARRAY_SIZE(ftrace_hooks));
 	if (err) {
@@ -674,6 +783,15 @@ int pmctrack_init(void)
 		return err;
 	}
 
+#ifdef USE_BLOCKING_KPROBE
+	err= register_kprobe(&kp);
+	if (err) {
+		pr_err("register_kprobe failed, returned %d\n", err);
+		fh_remove_hooks(ftrace_hooks, ARRAY_SIZE(ftrace_hooks));
+		trace_event_exit();
+		return err;
+	}
+#endif
 	return 0;
 }
 
@@ -681,6 +799,7 @@ void pmctrack_exit(void)
 {
 	fh_remove_hooks(ftrace_hooks, ARRAY_SIZE(ftrace_hooks));
 	trace_event_exit();
-}
-
+#ifdef USE_BLOCKING_KPROBE
+	unregister_kprobe(&kp);
 #endif
+}

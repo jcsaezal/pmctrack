@@ -67,6 +67,11 @@ void mc_restart_all_counters(core_experiment_t* core_experiment)
 
 	unsigned int j;
 
+	if (!core_experiment) {
+		printk(KERN_INFO "Core experiment is NULL for pid=%d\n",current->pid);
+		return;
+	}
+
 	/* Counters Reset action (new hardware events)*/
 	for(j=0; j<core_experiment->size; j++) {
 		low_level_exp* lle = &core_experiment->array[j];
@@ -150,6 +155,9 @@ int clone_core_experiment_set_t(core_experiment_set_t* dst,core_experiment_set_t
 	dst->nr_exps=0;
 	dst->cur_exp=0;
 
+	/* Clean up */
+	init_core_experiment_set_t(dst);
+
 	/* Just memory allocation */
 	for (i=0; i<src->nr_configs; i++) {
 		exp= (core_experiment_t*) kmalloc(sizeof(core_experiment_t), GFP_KERNEL);
@@ -181,7 +189,7 @@ int clone_core_experiment_set_t(core_experiment_set_t* dst,core_experiment_set_t
 			}
 		}
 
-		error=do_setup_pmcs(config->pmc_cfg,config->used_pmcs,dst->exps[i],get_any_cpu_coretype(config->coretype),i,p);
+		error=do_setup_pmcs(config,config->used_pmcs,dst->exps[i],get_any_cpu_coretype(config->coretype),i,p);
 
 		if (error)
 			goto free_perf_events;
@@ -212,6 +220,9 @@ int clone_core_experiment_set_t(core_experiment_set_t* dst,core_experiment_set_t
 
 	dst->nr_exps=0;
 	dst->cur_exp=0;
+
+	/* Clean up just in case */
+	init_core_experiment_set_t(dst);
 
 	for (i=0; i<src->nr_exps; i++) {
 		if (src->exps[i]!=NULL) {
@@ -365,6 +376,7 @@ void compute_value(pmc_metric_t* metric, uint64_t* hw_events, pmc_metric_t* metr
 			metric->count=0;
 		}
 		break;
+	case op_virtual: /* In this case the user should set up the metric values later */
 	default:
 		metric->count = 0;
 		break;
@@ -615,13 +627,13 @@ phase_table_t* create_phase_table(unsigned int max_phases, size_t phase_struct_s
 		return NULL;
 
 	/* Allocate memory */
-	if ((phase_pool=vmalloc(phase_struct_size*max_phases))==NULL)
+	if ((phase_pool=kmalloc(phase_struct_size*max_phases,GFP_KERNEL))==NULL)
 		goto free_up_resources;
 
-	if ((node_pool=vmalloc(sizeof(phase_node_t)*max_phases))==NULL)
+	if ((node_pool=kmalloc(sizeof(phase_node_t)*max_phases,GFP_KERNEL))==NULL)
 		goto free_up_resources;
 
-	if ((table=vmalloc(sizeof(phase_table_t)))==NULL)
+	if ((table=kmalloc(sizeof(phase_table_t),GFP_KERNEL))==NULL)
 		goto free_up_resources;
 
 	/* Initialize phase table */
@@ -646,11 +658,11 @@ phase_table_t* create_phase_table(unsigned int max_phases, size_t phase_struct_s
 	return table;
 free_up_resources:
 	if (node_pool)
-		vfree(node_pool);
+		kfree(node_pool);
 	if (phase_pool)
-		vfree(phase_pool);
+		kfree(phase_pool);
 	if (table)
-		vfree(table);
+		kfree(table);
 	return NULL;
 }
 
@@ -658,10 +670,10 @@ free_up_resources:
 void destroy_phase_table(phase_table_t* table)
 {
 	if (table->node_pool)
-		vfree(table->node_pool);
+		kfree(table->node_pool);
 	if (table->phase_pool)
-		vfree(table->phase_pool);
-	vfree(table);
+		kfree(table->phase_pool);
+	kfree(table);
 }
 
 /* Retrieve the most similar phase in a phase table */

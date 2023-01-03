@@ -430,8 +430,11 @@ int vexpress_fixed_irqs[VEXPRESS_NR_IRQS]= {
 	192,193,194,195,266,312,390,410
 #elif LINUX_VERSION_CODE <= KERNEL_VERSION(4,2,0)
 	192,193,194,195,279,280,281,282
-#elif LINUX_VERSION_CODE < KERNEL_VERSION(4,14,0)
+#elif LINUX_VERSION_CODE <= KERNEL_VERSION(4,14,0)
 	192,193,194,195,279,280,281,282
+	/*	192,134,135,136,137,193,194,195 */
+#elif LINUX_VERSION_CODE <= KERNEL_VERSION(5,5,0)
+	152,153,154,155,156,157,158,159
 	/*	192,134,135,136,137,193,194,195 */
 #else
 	69,70,71,72,73,74,75,76
@@ -521,8 +524,9 @@ static void unregister_overflow_irq(void)
  * Transform an array of platform-agnostic PMC counter configurations (pmc_cfg)
  * into a low level structure that holds the necessary data to configure hardware counters.
  */
-int do_setup_pmcs(pmc_usrcfg_t* pmc_cfg, int used_pmcs_msk,core_experiment_t* exp, int cpu, int exp_idx, struct task_struct* p)
+int do_setup_pmcs(pmc_config_set_t* cconfig, int used_pmcs_msk,core_experiment_t* exp, int cpu, int exp_idx, struct task_struct* p)
 {
+	pmc_usrcfg_t* pmc_cfg=cconfig->pmc_cfg;
 	int i;
 	low_level_exp* lle;
 	pmu_props_t* props_cpu=get_pmu_props_cpu(cpu);

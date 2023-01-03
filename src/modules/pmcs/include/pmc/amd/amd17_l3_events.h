@@ -9,32 +9,18 @@
 #ifndef AMD17_L3_EVENTS_H
 #define AMD17_L3_EVENTS_H
 
-#define NR_L3_PERF_PMCS				6
-#define L3_PERF_EVTSEL0					0xC0010230
-/*  L3_PERF_EVTSELs do not have consecutive addresses  */
-#define L3_PERF_EVTSEL_INCR			2
-#define L3_PERF_PMC_MSR0				0xC0010231
-/*  L3_PERF_PMC_MSRs do not have consecutive addresses  */
-#define L3_PERF_PMC_MSR_INCR		2
-#define L3_PERF_PMC_RDPMC0			0XA
-
-#define AMD_MAX_L3_EVENTS 2
 
 
 /* Load implementation */
 #include <pmc/amd/amd_hw_events.h>
 #include <pmc/amd/pmc_bit_layout.h>
+#include <pmc/amd/pmc_const.h>
 
 typedef enum {
 	PMC_SAVE_CTX,
 	PMC_RESTORE_CTX,
 	PMC_UPDATE_CTX
 } pmc_context_t;
-
-#define AMD17_L3_MISSES_EVTSEL 0x6
-#define AMD17_L3_MISSES_UMASK 0x1
-#define AMD17_L3_ACCESSES_EVTSEL 0x1
-#define AMD17_L3_ACCESSES_UMASK 0x80
 
 
 static void init_amd_l3_event(amd_hw_event_t* event, unsigned int evtsel,  unsigned int umask)

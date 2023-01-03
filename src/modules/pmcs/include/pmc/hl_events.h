@@ -30,6 +30,7 @@ typedef enum {
 	op_rate,
 	op_rate2,
 	op_none,
+	op_virtual,
 	_AVAILABLE_RELATIONS
 } pmc_relation_mode_t;
 
@@ -63,6 +64,7 @@ pmc_metric_t;
 /* Helper macros to build simple metric sets */
 #define PMC_ARG(arg) {.type=hw_event_arg,.index=(arg)}
 #define PMC_METRIC(id,op,arg1,arg2,scale_factor) {id,op,PMC_ARG(arg1),PMC_ARG(arg2),scale_factor,0}
+#define PMC_VIRTUAL_METRIC(id) {id,op_virtual}
 
 /* Helper type for evaluating the value of hl_events */
 typedef struct {

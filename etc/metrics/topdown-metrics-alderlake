@@ -1,0 +1,8 @@
+retiring=(int(virt1)&0xff)/2.55
+bad_spec=((int(virt1)>>8)&0xff)/2.55
+frontend_b=((int(virt1)>>16)&0xff)/2.55
+backend_b=((int(virt1)>>24)&0xff)/2.55
+heavy_ops=((int(virt1)>>32)&0xff)/2.55
+branch_misp=((int(virt1)>>40)&0xff)/2.55
+fetch_lat=((int(virt1)>>48)&0xff)/2.55
+memory_b=((int(virt1)>>56)&0xff)/2.55

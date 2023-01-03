@@ -2,7 +2,7 @@
 #define PMC_EDP_H
 #include <pmc/mc_experiments.h>
 
-#ifdef CONFIG_PMC_CORE_2_DUO /* For QuickIA*/
+#if defined(CONFIG_PMC_CORE_2_DUO) || defined(CONFIG_PMC_AMD)
 static inline int edp_initialize_environment(void)
 {
 	return 0;

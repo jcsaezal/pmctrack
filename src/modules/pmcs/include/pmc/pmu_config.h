@@ -13,6 +13,7 @@
 #define PMU_CONFIG_H
 #include <linux/version.h>
 #include <linux/types.h>
+#include <linux/cpu.h>
 
 #define PMC_CORE_TYPES 2 				/* Max core types supported */
 #define PMCTRACK_MODEL_STRING_LEN 30
@@ -52,10 +53,12 @@ typedef struct {
 	int pmc_width;					/* Bit width of each PMC */
 	uint64_t pmc_width_mask;		/* Bitmask with pmc_width consecutive 1s */
 	unsigned long processor_model;	/* Procesor model integer code (meaning is platform specific) */
+	unsigned int pmu_model;
 	unsigned int coretype;			/* Number of core type or PMU id for this PMU */
 	char arch_string[PMCTRACK_MODEL_STRING_LEN];	/* Procesor model string (PMCTrack-specific format) */
 	pmu_flag_t flags[PMCTRACK_MAX_PMU_FLAGS];		/* Set of configuration flags to be specified for each PMC or experiment */
 	unsigned int nr_flags;							/* Number of flags in the array */
+	unsigned char initialized;
 } pmu_props_t;
 
 /*
@@ -94,13 +97,37 @@ typedef struct {
 #endif
 } pmc_usrcfg_t;
 
-#if defined(CONFIG_PMC_CORE_2_DUO) || defined(CONFIG_PMC_AMD) || defined(CONFIG_PMC_CORE_I7) || defined(CONFIG_PMC_PHI) || defined(CONFIG_PMC_PERF)
-
+#if defined(CONFIG_PMC_CORE_2_DUO) || defined(CONFIG_PMC_AMD) || defined(CONFIG_PMC_CORE_I7) || defined(CONFIG_PMC_PHI) || defined(CONFIG_PMC_PERF_X86)
+#if defined(HAVE_HRESET)
+static inline void hreset(unsigned int eax)
+{
+#ifdef __USE_HRESET_BUILTIN
+	/* Requires a recent GCC version (11 or higher)
+	  to compile with -mhreset flags (USER_CFLAGS)
+	  and GNU assembler from GNU binutils v2.36 or higher */
+	__builtin_ia32_hreset(eax);
+#else
+	/* Only requirement: GNU assembler from GNU binutils v2.36 or higher */
+	asm volatile("hreset $1"
+	             : /* No output*/
+	             : "a" (eax)
+	             : "memory"
+	            );
+#endif
+}
+#else
+static inline void hreset(unsigned int eax) {}
+#endif
 /*** CPUID-related datatypes and macros ***/
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,14,0)
 #include <asm/processor.h>
 typedef struct cpuid_regs cpuid_regs_t;
 #define run_cpuid(r) __cpuid(&(r).eax,&(r).ebx,&(r).ecx,&(r).edx);
+static inline unsigned int pmct_cpuid_edx(unsigned int op)
+{
+	return cpuid_edx(op);
+}
+
 #else
 typedef struct cpuid_regs {
 	uint32_t eax;
@@ -109,9 +136,35 @@ typedef struct cpuid_regs {
 	uint32_t ecx;
 } cpuid_regs_t;
 
+static inline unsigned int pmct_cpuid_edx(unsigned int op)
+{
+	cpuid_regs_t rv;
+
+	rv.eax=op;
+	rv.ecx=0;
+	run_cpuid(rv);
+
+	return rv.edx;
+}
 #define run_cpuid(rv) asm ("cpuid" : "=a" (rv.eax), "=b" (rv.ebx), "=c" (rv.ecx), "=d" (rv.edx): "a"  (rv.eax), "c" (rv.ecx));
 #endif
 
+#endif
+
+#if defined(CONFIG_PMC_CORE_2_DUO) || defined(CONFIG_PMC_AMD) || defined (CONFIG_PMC_CORE_I7) || defined (CONFIG_PMC_PERF_X86)
+
+#define X86_HYBRID_CPU_TYPE_ID_SHIFT	24
+#define PMCT_X86_HYBRID_BIG_CORE		0x40
+#define PMCT_X86_HYBRID_SMALL_CORE		0x20
+
+static inline u8 get_this_hybrid_cpu_type(void)
+{
+	cpuid_regs_t rv;
+
+	rv.eax=0x0000001a;
+	run_cpuid(rv);
+	return rv.eax >> X86_HYBRID_CPU_TYPE_ID_SHIFT;
+}
 #endif
 
 /* (int,string) pair that identifies a given processor model */
@@ -130,6 +183,9 @@ extern pmu_props_t pmu_props_cputype[PMC_CORE_TYPES];
 
 extern int* coretype_cpu;
 extern int  nr_core_types;
+extern char* forced_small_cores;
+DECLARE_PER_CPU(unsigned char, cpu_is_small);
+extern unsigned char forced_amp_topology;
 
 #ifdef SCHED_AMP
 #include <linux/amp_core.h>

@@ -9,6 +9,7 @@
 #define offsetof(TYPE, MEMBER) ((size_t) &((TYPE *)0)->MEMBER)
 #endif
 
+
 typedef struct sized_list {
 	struct list_head list;
 	size_t size;
@@ -31,7 +32,7 @@ static inline void init_sized_list (sized_list_t* slist, size_t node_offset)
 
 static inline void  insert_sized_list_tail ( sized_list_t* slist, void* elem)
 {
-	struct list_head* link=((struct list_head*)(((char*)elem) +  slist->node_offset));
+	struct list_head* link=((struct list_head*)(((char*)elem) + slist->node_offset));
 	list_add_tail(link,&slist->list);
 	slist->size++;
 }
@@ -144,6 +145,14 @@ static inline int is_empty_sized_list (sized_list_t* slist)
 {
 	return slist->size==0;
 }
+
+static inline void remove_sized_list_all ( sized_list_t* slist)
+{
+	while (!is_empty_sized_list(slist)) {
+		remove_sized_list(slist,head_sized_list(slist));
+	}
+}
+
 
 #define CONFIG_LIST_SORT
 #ifdef CONFIG_LIST_SORT

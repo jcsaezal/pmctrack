@@ -48,6 +48,16 @@ enum {
 	CACHE_CLASS_SENSITIVE=2
 };
 
+/* Static properties for input file */
+struct benchmark_properties {
+	char *name;
+	unsigned char type;
+	int bizarre;
+	int* curve;
+	int* space_curve;
+};
+
+extern struct benchmark_properties foo_properties;
 
 #define MAX_CACHE_WAYS 20 /* Debussy setting */
 
@@ -68,12 +78,13 @@ typedef struct app {
 	struct list_head link_class;
 	struct list_head link_cluster;
 	int app_id; /* For debugging */
+	char app_comm[TASK_COMM_LEN];
 	int type; /* Application class ... */
 	int curve[MAX_CACHE_WAYS+1]; /* First item indicates the number of items in queue */
 	int space_curve[MAX_CACHE_WAYS+1];
-	int static_curve[MAX_CACHE_WAYS+1];
-	int static_scurve[MAX_CACHE_WAYS+1];
+	struct benchmark_properties* sprops;
 	int static_type;
+	int force_class; /* For debugging */
 	int sensitive_id; /* WATCH OUT: Id for pair_clustering (internal naming!) */
 	struct task_struct* process; /* For debugging with stap */
 	struct task_struct* master_thread; /* For basic support for MT apps */
@@ -97,13 +108,13 @@ typedef struct cache_part_set {
 } cache_part_set_t;
 
 
-/* Static properties for input file */
-struct benchmark_properties {
-	char *name;
-	unsigned char type;
-	int bizarre;
-	int* curve;
-	int* space_curve;
+/* Per-CPU structure to implement IPI-based partition migrations */
+struct clos_cpu {
+	int cpu;
+	unsigned int cos_id;
+	unsigned int rmid;
+	unsigned char used;
+	struct list_head link;
 };
 
 /* Operations on individual partitions */
@@ -162,5 +173,24 @@ static inline intel_cat_support_t* get_cat_support(cache_part_set_t* pset)
 {
 	return pset->cat_support;
 }
+
+
+#ifdef CONFIG_X86
+/* To simplify implementation of IPI-based COS update operations */
+struct clos_cpu* get_clos_pool_cpu(int cpu);
+void initialize_clos_cpu_pool(void);
+/* Update CLOS-related registers of those entries stored in the list */
+void update_clos_app_unlocked(sized_list_t* clos_cpu_list);
+void release_clos_cpu_list(sized_list_t* clos_cpu_list);
+#else
+static inline struct clos_cpu* get_clos_pool_cpu(int cpu)
+{
+	return NULL;
+}
+static inline void initialize_clos_cpu_pool(void) { }
+static inline void update_clos_app_unlocked(sized_list_t* clos_cpu_list) { }
+static inline void release_clos_cpu_list(sized_list_t* clos_cpu_list) { }
+#endif
+
 #endif
 

@@ -21,6 +21,7 @@
 #include <sys/types.h>
 #endif
 #include <linux/ktime.h>
+#include <linux/cpu.h>
 
 #ifdef CONFIG_PMC_PERF
 #include <linux/workqueue.h>
@@ -166,7 +167,7 @@ void do_count_on_overflow(struct pt_regs *reg, unsigned int overflow_mask);
  * Transform an array of platform-agnostic PMC counter configurations (pmc_cfg)
  * into a low level structure that holds the necessary data to configure hardware counters.
  */
-int do_setup_pmcs(pmc_usrcfg_t* pmc_cfg, int used_pmcs_msk,core_experiment_t* exp, int cpu, int exp_idx, struct task_struct* p
+int do_setup_pmcs(pmc_config_set_t* cconfig, int used_pmcs_msk,core_experiment_t* exp, int cpu, int exp_idx, struct task_struct* p
                  );
 
 /*
@@ -443,6 +444,26 @@ static inline int clone_core_experiment_set_t_noalloc(core_experiment_set_t* dst
 	return 0;
 }
 
+static inline void print_experiment_set_info(core_experiment_set_t* set, int nr_coretypes, char* buf)
+{
+	int i,j;
+	char* dest=buf;
+
+	for (i=0; i<nr_coretypes; i++) {
+		core_experiment_set_t* cset=&set[i];
+		dest+=sprintf(dest,"CORETYPE %d: nr_exps is %d, cur_exp is %d\n",i,cset->nr_exps,cset->cur_exp);
+		for (j=0; j<AMP_MAX_EXP_CORETYPE; j++) {
+			core_experiment_t* exp=cset->exps[j];
+			if (!exp) {
+				dest+=sprintf(dest,"CORETYPE %d: exp[%d] is NULL\n",i,j);
+				continue;
+			}
+
+			dest+=sprintf(dest,"CORETYPE %d: exp[%d] with size=%d,used_mask=0x%x,ebs_idx=%d,need_setup=%hu,exp_idx=%d\n",i,j,exp->size,exp->used_pmcs,exp->ebs_idx,exp->need_setup,exp->exp_idx);
+		}
+	}
+
+}
 
 /**** Operations on a PMC sample buffer ****/
 
@@ -536,12 +557,42 @@ static inline void push_sample_cbuffer(pmon_prof_t* prof,pmc_sample_t* sample)
 }
 
 
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5,14,0)
+static inline long get_task_state(struct task_struct *p)
+{
+	return p->state;
+}
+#else
+static inline unsigned int get_task_state(struct task_struct *p)
+{
+	return READ_ONCE(p->__state);
+}
+#endif
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5,14,0)
+#define task_is_running(task)		(READ_ONCE((task)->state) == TASK_RUNNING)
+#endif
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,15,0)
+/* Recover legacy wrappers removed by this patch
+* https://lore.kernel.org/all/20210803141621.780504-39-bigeasy@linutronix.de/
+*/
+static inline void get_online_cpus(void)
+{
+	cpus_read_lock();
+}
+static inline void put_online_cpus(void)
+{
+	cpus_read_unlock();
+}
+#endif
+
+
 /* Get the CPU where the task ran last */
 static inline int task_cpu_safe(struct task_struct *p)
 {
-
-
-#if !defined(CONFIG_THREAD_INFO_IN_TASK)
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5,16,0)) || !defined(CONFIG_THREAD_INFO_IN_TASK)
 	struct thread_info* ti=task_thread_info(p);
 
 	if (ti)
@@ -608,7 +659,7 @@ static inline pmon_prof_t* get_prof(struct task_struct* p)
 	if (list_empty(&(p->perf_event_list))) {
 		/* It could be a dead task ... */
 		/* Look in global list*/
-		if ((p->state & TASK_DEAD) != 0)
+		if ((get_task_state(p) & TASK_DEAD) != 0)
 			return get_prof_exited_task(p);
 		else
 			return NULL;
@@ -697,10 +748,11 @@ typedef struct file_operations pmctrack_proc_ops_t;
 #define PMCT_PROC_OPEN open
 #define PMCT_PROC_READ read
 #define PMCT_PROC_WRITE write
-#define PMCT_PROC_LSEEK lseek
+#define PMCT_PROC_LSEEK llseek
 #define PMCT_PROC_RELEASE release
 #define PMCT_PROC_IOCTL ioctl
 #define PMCT_PROC_MMAP mmap
 #endif
+
 
 #endif

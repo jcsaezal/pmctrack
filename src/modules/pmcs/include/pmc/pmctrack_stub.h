@@ -62,9 +62,9 @@ void pmcs_exec_thread(struct task_struct* tsk);
 void pmcs_free_per_thread_data(struct task_struct* tsk);
 void pmcs_exit_thread(struct task_struct* tsk);
 
+#endif
 /* PMCTrack module setup */
 int pmctrack_init(void);
 void pmctrack_exit(void);
 
-#endif
 #endif

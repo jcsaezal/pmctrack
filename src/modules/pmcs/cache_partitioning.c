@@ -11,6 +11,7 @@
 
 
 #include <pmc/cache_partitioning.h>
+#include <linux/vmalloc.h>
 
 #define MAX(x, y) (((x) > (y)) ? (x) : (y))
 #define MIN(x, y) (((x) < (y)) ? (x) : (y))
@@ -29,15 +30,6 @@ typedef struct cluster_info {
 	struct list_head link_cluster;
 	int* curve; /* For max slowdown distance curve (point to right item of the big matrix) */
 } cluster_info_t ;
-
-
-struct cluster_set {
-
-	cluster_info_t pool[MAX_CLUSTERS];
-	sized_list_t clusters;
-	int nr_clusters;
-	unsigned int default_cluster; /* Index of unkown applications */
-};
 
 
 /* Both matrix cell and "Cluster object" */
@@ -79,11 +71,52 @@ typedef struct distance1w_node {
 } distance1w_node_t;
 
 
+struct cluster_set {
+
+	cluster_info_t pool[MAX_CLUSTERS];
+	sized_list_t clusters;
+	int nr_clusters;
+	unsigned int default_cluster; /* Index of unkown applications */
+	/*** Auxiliary global data for space savings ***/
+	clustering_solution_t solutions[MAX_CLUSTERS]; /* As many solutions as the number of clusters we can create*/
+	int distance_matrix[MAX_APPS][MAX_APPS];
+	/* Full matrix for now
+		* Items in the diagonal are considered as single-app clusters (optimization)
+	*/
+	candidate_cluster_t curves[MAX_APPS][MAX_APPS];
+	distance1w_node_t dnode_pool[66]; /* 66=C_12,2 (Combinations) max platform */
+	char buf[256];
+};
+
 /* ################################## */
 /* Functions for cluster manipulation */
 /* ################################## */
 
-void init_cluster_set(cluster_set_t* set)
+
+cluster_set_t* get_global_cluster_set(void)
+{
+	static cluster_set_t set;
+	return &set;
+}
+
+cluster_set_t* get_group_specific_cluster_set(cluster_set_t* sets, int idx)
+{
+	return &sets[idx];
+}
+
+/* Allocate structures to play around with partitioning algorithms */
+cluster_set_t* allocate_cluster_sets(int nr_sets)
+{
+	return vmalloc(sizeof(cluster_set_t)*nr_sets);
+}
+
+void free_up_cluster_sets(cluster_set_t* sets)
+{
+	if (sets)
+		return vfree(sets);
+}
+
+static void init_cluster_set(cluster_set_t* set)
 {
 	int i=0;
 
@@ -107,7 +140,7 @@ void init_cluster_set(cluster_set_t* set)
 
 }
 
-cluster_info_t* allocate_new_cluster(cluster_set_t* set)
+static cluster_info_t* allocate_new_cluster(cluster_set_t* set)
 {
 	cluster_info_t * cluster=&set->pool[set->nr_clusters];
 
@@ -350,7 +383,7 @@ void lookahead_algorithm(app_t** apps, int nr_apps,  int nr_ways, int* solution)
 	}
 }
 
-int* cost_way_stealing(app_t** workload,
+void cost_way_stealing(app_t** workload,
                        int nr_apps,
                        int idx_app,
                        unsigned long unmerged,
@@ -359,7 +392,7 @@ int* cost_way_stealing(app_t** workload,
                        int* min_idx)
 {
 
-	static int slowdown_red[MAX_APPS];
+	/* static */ int slowdown_red[MAX_APPS];
 	app_t *app=workload[idx_app];
 	app_t *that_app;
 	int app_assigned_ways=ways_assigned[idx_app];
@@ -398,7 +431,7 @@ int* cost_way_stealing(app_t** workload,
 	(*min_cost)=min_val;
 	(*min_idx)=min_index;
 
-	return slowdown_red;
+	//return slowdown_red;
 }
 
 
@@ -406,7 +439,7 @@ int* cost_way_stealing(app_t** workload,
 void ucp_unfairness(app_t** apps, int nr_apps,  int nr_ways, int* solution)
 {
 
-	static int slowdown_vector[MAX_APPS];
+	int slowdown_vector[MAX_APPS];
 	int i=0,j;
 	unsigned long unmerged=(1<<nr_apps)-1;
 	int max_idx,min_idx,min_cost,max_slowdown;
@@ -685,9 +718,9 @@ void cluster_ucp(clustering_solution_t* solution, int nr_ways)
 }
 
 
-int* get_sorted_slowdowns(clustering_solution_t* cur_solution)
+void get_sorted_slowdowns(clustering_solution_t* cur_solution, int* index_vector)
 {
-	static int  index_vector[MAX_APPS];
+	//static int  index_vector[MAX_APPS];
 	unsigned long sel_bitmask=0; /* Just enabled for 64 bits */
 	int i,j;
 	int max_slowdown=0;
@@ -717,20 +750,15 @@ int* get_sorted_slowdowns(clustering_solution_t* cur_solution)
 		index_vector[i]=idx_max; /* point to app */
 	}
 
-	return index_vector;
+	//return index_vector;
 }
 
 
 clustering_solution_t*  pair_clustering_core(sized_list_t* apps, int nr_apps, int nr_ways, cluster_set_t* clusters)
 {
-	static clustering_solution_t solutions[MAX_CLUSTERS]; /* As many solutions as the number of clusters we can create*/
-	static int distance_matrix[MAX_APPS][MAX_APPS];
-	/* A lo bruto for now, full matrix
-		* Items in the diagonal are considered as single-app clusters (optimization)
-	*/
-	static candidate_cluster_t curves[MAX_APPS][MAX_APPS];
+	cluster_set_t* cg=clusters; /* Create alias pointer for simplicity */
 	/* List of apps is crucial */
-	static app_t* app_vector[MAX_APPS];
+	/*static */  app_t* app_vector[MAX_APPS];
 	app_t* cur_app;
 	candidate_cluster_t* cur_cluster;
 	int i,j;
@@ -740,19 +768,20 @@ clustering_solution_t*  pair_clustering_core(sized_list_t* apps, int nr_apps, in
 	clustering_solution_t *cur_solution,*new_solution,*best_solution;
 	unsigned long unmerged;
 	int nr_clusters;
-	int* sorted_indexes;
+	//int* sorted_indexes;
 	int best_unfairness;
+	int  sorted_indexes[MAX_APPS];
 
 	/* Initialize distance matrix to infinite */
 	for (i=0; i<nr_apps; i++) {
-		distance_matrix[i][i]=INT_MAX;
+		cg->distance_matrix[i][i]=INT_MAX;
 		for (j=i+1; j<nr_apps; j++)
-			distance_matrix[i][j]=distance_matrix[j][i]=INT_MAX;
+			cg->distance_matrix[i][j]=cg->distance_matrix[j][i]=INT_MAX;
 	}
 
 	/* Initial clustering solution */
 	/* Point to solution "object" */
-	cur_solution=&solutions[nr_solutions];
+	cur_solution=&cg->solutions[nr_solutions];
 	init_sized_list(&cur_solution->cluster_list, offsetof(candidate_cluster_t,link[nr_solutions]));
 	nr_solutions++;
 
@@ -763,7 +792,7 @@ clustering_solution_t*  pair_clustering_core(sized_list_t* apps, int nr_apps, in
 	memset(cur_solution->slowdown_per_app,0,sizeof(cur_solution->slowdown_per_app));
 
 	for (i=0, cur_app=head_sized_list(apps); i<nr_apps; i++,cur_app=next_sized_list(apps,cur_app)) {
-		cur_cluster=&curves[i][i];	 /* Memory diagonal line of the big matrix ! */
+		cur_cluster=&cg->curves[i][i];	 /* Memory diagonal line of the big matrix ! */
 		/* initialize app vector */
 		app_vector[i]=cur_app;
 
@@ -809,7 +838,7 @@ clustering_solution_t*  pair_clustering_core(sized_list_t* apps, int nr_apps, in
 		for (j=i+1; j<nr_apps; j++) {
 			app_t* app1=app_vector[j];
 			int distance;
-			cur_cluster=&curves[i][j];
+			cur_cluster=&cg->curves[i][j];
 			idx_j=app1->sensitive_id;
 
 			/* Initialize cluster*/
@@ -822,8 +851,8 @@ clustering_solution_t*  pair_clustering_core(sized_list_t* apps, int nr_apps, in
 			/* Calculate distance and store in matrix */
 			/* candidate_cluster_t (cell curve matrix) stores it all ! */
 			distance=calculate_slowdown_distance(cur_cluster,nr_ways);
-			distance_matrix[idx_i][idx_j]=distance;
-			distance_matrix[idx_j][idx_i]=distance;
+			cg->distance_matrix[idx_i][idx_j]=distance;
+			cg->distance_matrix[idx_j][idx_i]=distance;
 		}
 	}
 
@@ -840,7 +869,7 @@ clustering_solution_t*  pair_clustering_core(sized_list_t* apps, int nr_apps, in
 
 
 	/* Get sorted indexes in descending order by slowdown */
-	sorted_indexes=get_sorted_slowdowns(cur_solution);
+	get_sorted_slowdowns(cur_solution,sorted_indexes);
 
 
 	for (i=0; i<nr_apps && unmerged ; i++) {
@@ -856,7 +885,7 @@ clustering_solution_t*  pair_clustering_core(sized_list_t* apps, int nr_apps, in
 
 		/* Step 1: find closest cluster in terms of distance and do not merge if distance >=0 */
 		for (j=0; j<nr_apps; j++) {
-			int this_distance=distance_matrix[idxc][j];
+			int this_distance=cg->distance_matrix[idxc][j];
 
 			if (this_distance<min_distance) {
 				min_distance=this_distance;
@@ -868,7 +897,7 @@ clustering_solution_t*  pair_clustering_core(sized_list_t* apps, int nr_apps, in
 		if (min_distance>=0) {
 			/* If merging is not possible (make sure this app will not be considered for merging) */
 			unmerged&=~(1<<idxc);
-			clear_distance_in_matrix(distance_matrix,idxc,nr_apps);
+			clear_distance_in_matrix(cg->distance_matrix,idxc,nr_apps);
 			continue;
 		}
 
@@ -884,19 +913,19 @@ clustering_solution_t*  pair_clustering_core(sized_list_t* apps, int nr_apps, in
 		}
 
 		/* This is the combined cluster already completed (pre merged) */
-		cur_cluster=&curves[min_i][min_j];
+		cur_cluster=&cg->curves[min_i][min_j];
 
 		/* Indicate they are merged */
 		unmerged&=~(1<<min_i);
 		unmerged&=~(1<<min_j);
 
 		/* Clear items from distance matrix (all infinite) */
-		clear_distance_in_matrix(distance_matrix,min_i,nr_apps);
-		clear_distance_in_matrix(distance_matrix,min_j,nr_apps);
+		clear_distance_in_matrix(cg->distance_matrix,min_i,nr_apps);
+		clear_distance_in_matrix(cg->distance_matrix,min_j,nr_apps);
 
 
 		/* Build new solution */
-		new_solution=&solutions[nr_solutions];
+		new_solution=&cg->solutions[nr_solutions];
 		init_sized_list(&new_solution->cluster_list, offsetof(candidate_cluster_t,link[nr_solutions]));
 		nr_solutions++;
 
@@ -939,15 +968,15 @@ clustering_solution_t*  pair_clustering_core(sized_list_t* apps, int nr_apps, in
 	return best_solution;
 }
 
-int* determine_slowdown_reductions(app_t** workload,
-                                   int nr_apps,
-                                   int max_ways,
-                                   int idx_app,
-                                   unsigned long unmerged,
-                                   candidate_cluster_t curves[MAX_APPS][MAX_APPS],
-                                   int* ways_assigned)
+int determine_slowdown_reductions(app_t** workload,
+                                  int nr_apps,
+                                  int max_ways,
+                                  int idx_app,
+                                  unsigned long unmerged,
+                                  candidate_cluster_t curves[MAX_APPS][MAX_APPS],
+                                  int* ways_assigned,
+                                  int* slowdown_red)
 {
-	static int slowdown_red[MAX_APPS];
 	int app_assigned_ways=ways_assigned[idx_app];
 	int i=0;
 	int min_i, min_j;
@@ -959,6 +988,15 @@ int* determine_slowdown_reductions(app_t** workload,
 
 	for (i=0; i<nr_apps; i++) {
 		app=workload[i];
+
+		/* Check for null pointers */
+		if (!app || !app->curve) {
+			trace_printk("app: %p | curve: %p | i: %d | nr_apps: %d\n",
+			             app, (app==NULL? NULL: app->curve),
+			             i, nr_apps);
+			return -EINVAL;
+		}
+
 
 		if (unmerged & 1<<i) {
 
@@ -993,9 +1031,7 @@ int* determine_slowdown_reductions(app_t** workload,
 			slowdown_red[i]=INT_MAX;
 
 	}
-
-	return slowdown_red;
-
+	return 0;
 }
 
 distance1w_node_t* get_min_distance_in_list(sized_list_t* distance_list, int filter_idx)
@@ -1175,13 +1211,11 @@ void evaluate_new_solution(clustering_solution_t* new_solution,
 
 clustering_solution_t*  pair_clustering_core2(sized_list_t* apps, int nr_apps, int nr_ways, cluster_set_t* clusters)
 {
-	static clustering_solution_t solutions[MAX_CLUSTERS]; /* As many solutions as the number of clusters we can create*/
-	static distance1w_node_t dnode_pool[66]; /* 66=C_12,2 (Combinations) max platform */
+	cluster_set_t* cg=clusters; /* Create alias pointer for simplicity */
 	sized_list_t distance_list; /* List of distances */
 	int node_pool_index=0;
-	static candidate_cluster_t curves[MAX_APPS][MAX_APPS];
 	/* List of apps is crucial */
-	static app_t* app_vector[MAX_APPS];
+	app_t* app_vector[MAX_APPS];
 	app_t* cur_app;
 	candidate_cluster_t* cur_cluster;
 	int i,j;
@@ -1191,15 +1225,18 @@ clustering_solution_t*  pair_clustering_core2(sized_list_t* apps, int nr_apps, i
 	clustering_solution_t *cur_solution,*new_solution,*best_solution;
 	unsigned long unmerged;
 	int nr_clusters;
-	int* sorted_indexes;
+	//int* sorted_indexes;
 	int best_unfairness;
 	int ways_assigned[MAX_APPS];
+	int  sorted_indexes[MAX_APPS];
+	int slowdown_reductions[MAX_APPS];
+	int error=0;
 
 	init_sized_list(&distance_list,offsetof(distance1w_node_t,link));
 
 	/* Initial clustering solution */
 	/* Point to solution "object" */
-	cur_solution=&solutions[nr_solutions];
+	cur_solution=&cg->solutions[nr_solutions];
 	init_sized_list(&cur_solution->cluster_list, offsetof(candidate_cluster_t,link[nr_solutions]));
 	nr_solutions++;
 
@@ -1210,7 +1247,7 @@ clustering_solution_t*  pair_clustering_core2(sized_list_t* apps, int nr_apps, i
 	memset(cur_solution->slowdown_per_app,0,sizeof(cur_solution->slowdown_per_app));
 
 	for (i=0, cur_app=head_sized_list(apps); i<nr_apps; i++,cur_app=next_sized_list(apps,cur_app)) {
-		cur_cluster=&curves[i][i];	 /* Memory diagonal line of the big matrix ! */
+		cur_cluster=&cg->curves[i][i];	 /* Memory diagonal line of the big matrix ! */
 		/* initialize app vector */
 		app_vector[i]=cur_app;
 
@@ -1267,7 +1304,7 @@ clustering_solution_t*  pair_clustering_core2(sized_list_t* apps, int nr_apps, i
 
 		for (j=i+1; j<nr_apps; j++) {
 			app_t* app1=app_vector[j];
-			cur_cluster=&curves[i][j];
+			cur_cluster=&cg->curves[i][j];
 			idx_j=app1->sensitive_id;
 
 			/* Initialize cluster*/
@@ -1284,7 +1321,7 @@ clustering_solution_t*  pair_clustering_core2(sized_list_t* apps, int nr_apps, i
 			if ((ways_assigned[i]+ways_assigned[j])==2) {
 				int slowdown_partitioned=app0->curve[1]+app1->curve[1];
 				int slowdown_combined=cur_cluster->sum_slowdown[1];
-				distance1w_node_t* dnode=&dnode_pool[node_pool_index++];
+				distance1w_node_t* dnode=&cg->dnode_pool[node_pool_index++];
 
 				dnode->app_i=i;
 				dnode->app_j=j;
@@ -1310,14 +1347,13 @@ clustering_solution_t*  pair_clustering_core2(sized_list_t* apps, int nr_apps, i
 
 
 	/* Get sorted indexes in descending order by slowdown */
-	sorted_indexes=get_sorted_slowdowns(cur_solution);
+	get_sorted_slowdowns(cur_solution,sorted_indexes);
 
 
 	for (i=0; i<nr_apps && unmerged ; i++) {
 		int idxc=sorted_indexes[i];
 		int idx_min, min_reduction;
 		int  min_i,min_j;
-		int* slowdown_reductions;
 		distance1w_node_t* min_distance_node;
 
 		if (!(unmerged & (1<<idxc)))
@@ -1327,7 +1363,10 @@ clustering_solution_t*  pair_clustering_core2(sized_list_t* apps, int nr_apps, i
 		new_solution=NULL;
 
 
-		slowdown_reductions=determine_slowdown_reductions(app_vector,nr_apps,nr_ways,idxc,unmerged,curves,ways_assigned);
+		error=determine_slowdown_reductions(app_vector,nr_apps,nr_ways,idxc,unmerged,cg->curves,ways_assigned,slowdown_reductions);
+
+		if (error)
+			return NULL;
 
 		min_distance_node=get_min_distance_in_list(&distance_list,idxc);
 
@@ -1363,13 +1402,13 @@ clustering_solution_t*  pair_clustering_core2(sized_list_t* apps, int nr_apps, i
 			delete_distances(&distance_list,min_j);
 
 			/* This is the combined cluster already completed (pre merged) */
-			cur_cluster=&curves[min_i][min_j];
+			cur_cluster=&cg->curves[min_i][min_j];
 			/* Not really necessary ... */
 			ways_assigned[min_i]=ways_assigned[min_j]=1;
 			ways_assigned[idxc]=ways_assigned[idxc]+1; /* Move the way */
 
 			/* Build new solution */
-			new_solution=&solutions[nr_solutions];
+			new_solution=&cg->solutions[nr_solutions];
 			init_sized_list(&new_solution->cluster_list, offsetof(candidate_cluster_t,link[nr_solutions]));
 			nr_solutions++;
 
@@ -1428,12 +1467,12 @@ clustering_solution_t*  pair_clustering_core2(sized_list_t* apps, int nr_apps, i
 				delete_distances(&distance_list,min_j);
 
 			/* This is the combined cluster already completed (pre merged) */
-			cur_cluster=&curves[min_i][min_j];
+			cur_cluster=&cg->curves[min_i][min_j];
 
 			ways_assigned[min_i]+=ways_assigned[min_j]; /* Join ways */
 
 			/* Build new solution */
-			new_solution=&solutions[nr_solutions];
+			new_solution=&cg->solutions[nr_solutions];
 			init_sized_list(&new_solution->cluster_list, offsetof(candidate_cluster_t,link[nr_solutions]));
 			nr_solutions++;
 
@@ -1484,9 +1523,8 @@ clustering_solution_t*  pair_clustering_core2(sized_list_t* apps, int nr_apps, i
 /* ########################################### */
 
 
-cluster_set_t*  lfoc_list(sized_list_t* apps, int nr_apps,  int nr_ways, int max_streaming, int use_pair_clustering, int max_nr_ways_streaming_part, int collide_streaming_parts)
+int  lfoc_list(cluster_set_t* clusters, sized_list_t* apps, int nr_apps,  int nr_ways, int max_streaming, int use_pair_clustering, int max_nr_ways_streaming_part, int collide_streaming_parts)
 {
-	static cluster_set_t clusters;
 #define LIGHT_PER_STREAMING 2
 #define MAX_WAYS_STREAMING 2
 	const int streaming_part_size=max_nr_ways_streaming_part;
@@ -1504,11 +1542,13 @@ cluster_set_t*  lfoc_list(sized_list_t* apps, int nr_apps,  int nr_ways, int max
 	int min_ways_ucp=1000*nr_ways;
 	int nr_sensitive_apps=0;
 	int nr_streaming_partitions=0;
+	int nr_unkown=0;
+	int nr_actual_streaming=0;
 	cluster_info_t*  cur;
 
 	nr_light_sharing=nr_clusters=nr_sensitive=nr_streaming=0;
 
-	init_cluster_set(&clusters);
+	init_cluster_set(clusters);
 
 	/* Initialize class lists */
 	init_sized_list (&light_sharing_apps,
@@ -1540,19 +1580,26 @@ cluster_set_t*  lfoc_list(sized_list_t* apps, int nr_apps,  int nr_ways, int max
 				/* Streaming is 1 or any other (including unkown) */
 				insert_sized_list_tail(&streaming_apps,app);
 				nr_streaming++;
+				if (classification==CACHE_CLASS_STREAMING)
+					nr_actual_streaming++;
+				else
+					nr_unkown++;
 			}
 		}
 	} /* End for */
 
-	/* TODO: FIX If too many ways (assert) */
-	if (nr_clusters>nr_ways)
-		return NULL;
+
+#define TRACE_AND_FAIL
+#ifdef TRACE_AND_FAIL
+	if (nr_unkown)
+		return -EINVAL;
+#endif
 
 	/* Special corner case (1): NO sensitive apps: Create a single cluster for everyone */
 	if (nr_sensitive_apps==0) {
-		cur=allocate_new_cluster(&clusters);
+		cur=allocate_new_cluster(clusters);
 		cur->nr_ways=nr_ways;
-		clusters.default_cluster=0;
+		clusters->default_cluster=0;
 
 		for (app=head_sized_list(apps); app!=NULL; app=next_sized_list(apps,app))
 			add_app_to_cluster(cur,app);
@@ -1577,7 +1624,12 @@ cluster_set_t*  lfoc_list(sized_list_t* apps, int nr_apps,  int nr_ways, int max
 
 	if (use_pair_clustering && nr_sensitive_apps>1) {
 		/* Invoke pair_clustering for sensitive */
-		cs=pair_clustering_core2(&sensitive_apps,sized_list_length(&sensitive_apps),nr_ways-nr_reserved_ways,&clusters);
+		cs=pair_clustering_core2(&sensitive_apps,sized_list_length(&sensitive_apps),nr_ways-nr_reserved_ways,clusters);
+
+		/* Check error case (corner case) */
+		if (!cs)
+			return -ENOSPC;
+
 		/* Increment cluster count */
 		nr_clusters+=cs->nr_clusters;
 		/* Number of sensitive clusters ... */
@@ -1586,8 +1638,8 @@ cluster_set_t*  lfoc_list(sized_list_t* apps, int nr_apps,  int nr_ways, int max
 		/* Determine cluster with fewer ways and update
 			pos_sensitive array
 		*/
-		for (i=0; i<clusters.nr_clusters; i++) {
-			cluster_info_t* cluster=cluster_by_idx(&clusters,i);
+		for (i=0; i<clusters->nr_clusters; i++) {
+			cluster_info_t* cluster=cluster_by_idx(clusters,i);
 			pos_sensitive[i]=i;
 
 			if (min_ways_ucp>cluster->nr_ways) {
@@ -1599,7 +1651,7 @@ cluster_set_t*  lfoc_list(sized_list_t* apps, int nr_apps,  int nr_ways, int max
 
 		/* Add sensitive clusters right here */
 		for (i=0, app=head_sized_list(&sensitive_apps); app!=NULL; i++,app=next_sized_list(&sensitive_apps,app)) {
-			cur=allocate_new_cluster(&clusters);
+			cur=allocate_new_cluster(clusters);
 			add_app_to_cluster(cur,app);
 			pos_sensitive[nr_sensitive]=nr_sensitive;
 			nr_sensitive++;
@@ -1607,13 +1659,14 @@ cluster_set_t*  lfoc_list(sized_list_t* apps, int nr_apps,  int nr_ways, int max
 		}
 
 		/* TODO: FIX If too many ways (assert) */
-		BUG_ON(nr_clusters>nr_ways);
+		if (nr_clusters>nr_ways)
+			return -ENOSPC;
 
 		/** Apply UCP to set of sensitive benchmarks **/
 		lookahead_algorithm_list(&sensitive_apps, nr_sensitive, nr_ways-nr_reserved_ways, ucp_solution,0);
 
-		for (i=0; i<clusters.nr_clusters; i++) {
-			cluster_info_t* cluster=cluster_by_idx(&clusters,i);
+		for (i=0; i<clusters->nr_clusters; i++) {
+			cluster_info_t* cluster=cluster_by_idx(clusters,i);
 			cluster->nr_ways=ucp_solution[i];
 
 			if (min_ways_ucp>cluster->nr_ways) {
@@ -1625,14 +1678,14 @@ cluster_set_t*  lfoc_list(sized_list_t* apps, int nr_apps,  int nr_ways, int max
 	}
 
 	/* Default cluster is cluster with fewer ways */
-	clusters.default_cluster=fewer_ways_cluster;
+	clusters->default_cluster=fewer_ways_cluster;
 
 	/* Assign streaming benchmarks */
 	if (nr_reserved_ways) {
 		app_t* cur_app=head_sized_list(&streaming_apps);
 
 		if (collide_streaming_parts) {
-			cluster_info_t* cluster=allocate_new_cluster(&clusters);
+			cluster_info_t* cluster=allocate_new_cluster(clusters);
 			cluster->nr_ways=nr_reserved_ways;
 
 			for (j=0; j<nr_streaming; j++,cur_app=next_sized_list(&streaming_apps,cur_app))
@@ -1640,7 +1693,7 @@ cluster_set_t*  lfoc_list(sized_list_t* apps, int nr_apps,  int nr_ways, int max
 
 			/* Keep track of clusters */
 			/* Default cluster is now the last streaming cluster */
-			clusters.default_cluster=nr_clusters;
+			clusters->default_cluster=nr_clusters;
 			pos_streaming[0]=nr_clusters;
 			nr_streaming_partitions=1;
 		} else {
@@ -1655,7 +1708,7 @@ cluster_set_t*  lfoc_list(sized_list_t* apps, int nr_apps,  int nr_ways, int max
 			/* For each streaming way ... */
 			for (i=0; i<nr_reserved_ways && remaining_streaming>0; i++) {
 				/* Create new cluster */
-				cluster_info_t* cluster=allocate_new_cluster(&clusters);
+				cluster_info_t* cluster=allocate_new_cluster(clusters);
 				cluster->nr_ways=streaming_part_size;
 				stream_to_assign=MIN(proportional_streaming,remaining_streaming);
 
@@ -1666,7 +1719,7 @@ cluster_set_t*  lfoc_list(sized_list_t* apps, int nr_apps,  int nr_ways, int max
 
 				/* Keep track of clusters */
 				/* Default cluster is now the last streaming cluster */
-				clusters.default_cluster=nr_clusters+i;
+				clusters->default_cluster=nr_clusters+i;
 				pos_streaming[i]=nr_clusters+i;
 				stream_to_assign=MIN(streaming_per_part,remaining_streaming);
 			}
@@ -1683,7 +1736,7 @@ cluster_set_t*  lfoc_list(sized_list_t* apps, int nr_apps,  int nr_ways, int max
 			int idx_stream=0;
 
 			while  ((nr_light_sharing>0) && (idx_stream<nr_streaming_partitions)) {
-				cluster_info_t* cluster=cluster_by_idx(&clusters,pos_streaming[idx_stream]);
+				cluster_info_t* cluster=cluster_by_idx(clusters,pos_streaming[idx_stream]);
 				/* Determine how many we can actually fit in here */
 				int room=(max_streaming*cluster->nr_ways)-cluster->nr_apps+1; /* Make at least one gap */
 
@@ -1706,7 +1759,7 @@ cluster_set_t*  lfoc_list(sized_list_t* apps, int nr_apps,  int nr_ways, int max
 		i=0;
 
 		while (nr_light_sharing>0) {
-			cluster_info_t* cluster=cluster_by_idx(&clusters,pos_sensitive[i%nr_sensitive]);
+			cluster_info_t* cluster=cluster_by_idx(clusters,pos_sensitive[i%nr_sensitive]);
 			app_t* app=head_sized_list(&light_sharing_apps);
 			remove_sized_list(&light_sharing_apps,app);
 			add_app_to_cluster(cluster,app);
@@ -1716,7 +1769,8 @@ cluster_set_t*  lfoc_list(sized_list_t* apps, int nr_apps,  int nr_ways, int max
 
 	}
 end_of_story:
-	return &clusters;
+	//return &clusters;
+	return 0;
 }
 
 void noinline trace_clustering_solution(char* msg)
@@ -1732,13 +1786,15 @@ void noinline trace_clustering_solution(char* msg)
 void print_clustering_solution(cluster_set_t* clusters,int nr_apps)
 {
 	int per_app_clustering[MAX_APPS];
+	app_t* app_vector[MAX_APPS];
 	int per_cluster_ways[MAX_CLUSTERS];
-	static char buf[256]= {'\0'};
+	char* buf=clusters->buf;
 	char* dest=buf;
 
 	/* Traverse clusters to determine each app cluster  */
 	int i;
 	app_t* app;
+	dest[0]='\0';
 
 	for (i=0; i<clusters->nr_clusters; i++) {
 		cluster_info_t* cluster=cluster_by_idx(clusters,i);
@@ -1749,12 +1805,13 @@ void print_clustering_solution(cluster_set_t* clusters,int nr_apps)
 		     app!=NULL;
 		     app=next_sized_list(&cluster->apps,app)) {
 			per_app_clustering[app->app_id]=i;
+			app_vector[app->app_id]=app;
 		}
 	}
 
 	/* Print applications and then masks */
 	for (i=0; i<nr_apps; i++)
-		dest+=sprintf(dest,"%d ",per_app_clustering[i]);
+		dest+=sprintf(dest,"%.5s(%d) ",app_vector[i]->app_comm,per_app_clustering[i]);
 
 	dest+=sprintf(dest,";");
 
@@ -1775,22 +1832,19 @@ void noinline trace_app_assignment(unsigned long timestamp, app_t* app, cat_cach
 }
 
 
-cluster_set_t* trivial_part(sized_list_t* apps, int nr_apps,  int nr_ways)
+void trivial_part(cluster_set_t* clusters, sized_list_t* apps, int nr_apps,  int nr_ways)
 {
-	static cluster_set_t clusters;
 	cluster_info_t*  cur;
 	app_t* app;
 
-	init_cluster_set(&clusters);
+	init_cluster_set(clusters);
 
-	cur=allocate_new_cluster(&clusters);
+	cur=allocate_new_cluster(clusters);
 	cur->nr_ways=nr_ways;
-	clusters.default_cluster=0;
+	clusters->default_cluster=0;
 
 	for (app=head_sized_list(apps); app!=NULL; app=next_sized_list(apps,app))
 		add_app_to_cluster(cur,app);
-
-	return &clusters;
 }
 
 /* Map specific clustering approach to actual HW partitions */

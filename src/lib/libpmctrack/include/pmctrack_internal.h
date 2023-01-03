@@ -303,7 +303,7 @@ int pmct_syswide_start_counting( void );
 #define FILE_LINE_SIZE 100
 #define PATH_CSV_SIZE 100
 #define MAX_NR_EVENTS_CFG 30
-#define ROW_CFG_SIZE 150
+#define ROW_CFG_SIZE 200
 
 /* A key-value pair */
 typedef struct {

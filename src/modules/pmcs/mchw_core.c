@@ -19,6 +19,7 @@
  */
 
 #include <linux/module.h>
+#include <linux/moduleparam.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
 #include <linux/proc_fs.h>
@@ -52,6 +53,7 @@
 #include <asm/siginfo.h>
 #include <linux/pid_namespace.h>
 #include <linux/pid.h>
+#include <linux/delay.h>
 
 #ifdef CONFIG_PMC_PERF
 #include <linux/workqueue.h>
@@ -59,7 +61,12 @@
 
 #define BUF_LEN_PMC_SAMPLES_EBS_KERNEL (((PAGE_SIZE)/sizeof(pmc_sample_t))*sizeof(pmc_sample_t))
 
-
+char* forced_small_cores="";
+module_param(forced_small_cores, charp, 0000);
+MODULE_PARM_DESC(forced_small_cores, "A set of CPUs that will be considered as small cores (range with comma-separated format)");
+unsigned char forced_amp_topology;
+DEFINE_PER_CPU(unsigned char, cpu_is_small);
+volatile unsigned int pmctrack_initializing = 1;
 /*
  * Different scenarios where performance samples
  * are generated.
@@ -147,6 +154,7 @@ static const pmctrack_proc_ops_t proc_pmc_config_fops = {
 	.PMCT_PROC_WRITE = proc_pmc_config_write,
 	.PMCT_PROC_OPEN = proc_generic_open,
 	.PMCT_PROC_RELEASE = proc_generic_close,
+	.PMCT_PROC_LSEEK = default_llseek
 };
 
 /* /proc/pmc/enable */
@@ -158,6 +166,7 @@ static const pmctrack_proc_ops_t proc_pmc_enable_fops = {
 	.PMCT_PROC_WRITE = proc_pmc_enable_write,
 	.PMCT_PROC_OPEN = proc_generic_open,
 	.PMCT_PROC_RELEASE = proc_generic_close,
+	.PMCT_PROC_LSEEK = default_llseek
 };
 
 /* /proc/pmc/properties */
@@ -169,6 +178,7 @@ static const pmctrack_proc_ops_t proc_pmc_properties_fops = {
 	.PMCT_PROC_WRITE = proc_pmc_properties_write,
 	.PMCT_PROC_OPEN = proc_generic_open,
 	.PMCT_PROC_RELEASE = proc_generic_close,
+	.PMCT_PROC_LSEEK = default_llseek
 };
 
 /* /proc/pmc/info */
@@ -178,6 +188,7 @@ static const pmctrack_proc_ops_t proc_pmc_info_fops = {
 	.PMCT_PROC_READ = proc_pmc_info_read,
 	.PMCT_PROC_OPEN = proc_generic_open,
 	.PMCT_PROC_RELEASE = proc_generic_close,
+	.PMCT_PROC_LSEEK = default_llseek
 };
 
 /* /proc/pmc/monitor */
@@ -191,6 +202,7 @@ static const pmctrack_proc_ops_t proc_monitor_pmcs_fops = {
 	.PMCT_PROC_MMAP=proc_monitor_pmcs_mmap,
 	.PMCT_PROC_OPEN = proc_generic_open,
 	.PMCT_PROC_RELEASE = proc_generic_close,
+	.PMCT_PROC_LSEEK = default_llseek
 };
 
 /*
@@ -397,6 +409,9 @@ static int mod_alloc_per_thread_data(unsigned long clone_flags, struct task_stru
 	int ret;
 	pmon_prof_t* prof;
 	pmon_prof_t* par_prof;
+
+	if (pmctrack_initializing || !current->mm)
+		return -ENOTSUPP;
 
 	/* Allocate memory for pmon_prof_t structure */
 	prof = (pmon_prof_t*) kmalloc(sizeof(pmon_prof_t), GFP_KERNEL);
@@ -850,6 +865,10 @@ static void mod_save_callback_gen(void* v_prof, int cpu, int lock)
 		return;
 
 	mm_on_switch_out(prof);
+
+	/* Update last CPU if it's not the first time */
+	if (prof->last_cpu!=-1)
+		prof->last_cpu=cpu;
 }
 #else
 static void mod_save_callback_gen(void* v_prof, int cpu, int lock)
@@ -921,6 +940,13 @@ static inline void mod_restore_callback_gen(void* v_prof, int cpu, int lock)
 		return;
 
 	mm_on_switch_in(prof);
+
+	if (prof->last_cpu!=cpu)
+		mm_on_migrate(prof, prof->last_cpu, cpu);
+
+	/* Update last context switch timestamp */
+	prof->context_switch_timestamp=jiffies;
+	prof->last_cpu=cpu; /* Update CPU */
 }
 #else
 static inline void mod_restore_callback_gen(void* v_prof, int cpu, int lock)
@@ -1107,7 +1133,7 @@ static void pmct_remote_function(void *data)
 	struct task_struct *p = tfc->p;
 	int cpu_task=task_cpu_safe(p);
 
-	if ( (cpu_task==-1 || p->state!=TASK_RUNNING)  /* Sleeping (there is no problem then) */
+	if ( (cpu_task==-1 || !task_is_running(p))  /* Sleeping (there is no problem then) */
 	     || (current==p) /* Is the current task */
 	     || (cpu_task == smp_processor_id()) ) { /* Is runnable on the current CPU */
 		tfc->ret=tfc->func(tfc->info);
@@ -1186,7 +1212,7 @@ static void tbs_mode_fire_timer(struct timer_list *t)
 
 #ifdef CONFIG_PMC_PERF
 	get_task_struct(p);
-	if (cpu_task==-1 || p->state!=TASK_RUNNING)
+	if (cpu_task==-1 || !task_is_running(p))
 		schedule_work(&prof->read_counters_task);
 	else if (cpu_task==this_cpu) {
 		/*  Optimistic case read_counters on the same CPU */
@@ -1201,7 +1227,7 @@ static void tbs_mode_fire_timer(struct timer_list *t)
 	 * Obtain CPU safely. Invoke the function to read HW counters
 	 * on the CPU where the task runs.
 	 */
-	if (cpu_task==-1 || p->state!=TASK_RUNNING) {
+	if (cpu_task==-1 || !task_is_running(p)) {
 		sample_counters_user_tbs_task(prof);
 	} else {
 		const int max_nr_tries=3;
@@ -1730,6 +1756,7 @@ static int pmctrack_pid_attach(pid_t pid)
 		return -EINVAL;
 
 	rcu_read_lock();
+
 	target = pmctrack_find_process_by_pid(pid);
 
 	if(!target || !(monitored = get_prof(target))) {
@@ -1835,7 +1862,7 @@ static int pmctrack_pid_attach(pid_t pid)
 	 * Obtain CPU safely. Invoke the function to read HW counters
 	 * on the CPU where the task runs.
 	 */
-	if (cpu_task==-1 || target->state!=TASK_RUNNING) {
+	if (cpu_task==-1 || !task_is_running(target)) {
 		set_up_monitoring_task(&arg);
 	} else {
 		/*
@@ -2025,7 +2052,7 @@ static noinline int pmctrack_pid_detach(pid_t pid)
 	 * Obtain CPU safely. Invoke the function to read HW counters
 	 * on the CPU where the task runs.
 	 */
-	if (cpu_task==-1 || target->state!=TASK_RUNNING) {
+	if (cpu_task==-1 || !task_is_running(target)) {
 		disable_monitoring_task(&arg);
 	} else {
 		/*
@@ -2093,7 +2120,7 @@ static noinline int pmctrack_task_detach_force(struct task_struct* target, pid_t
 	 * Obtain CPU safely. Invoke the function to read HW counters
 	 * on the CPU where the task runs.
 	 */
-	if (cpu_task==-1 || target->state!=TASK_RUNNING) {
+	if (cpu_task==-1 || !task_is_running(target)) {
 		disable_monitoring_task(&arg);
 	} else {
 		/*
@@ -2432,6 +2459,10 @@ static int proc_monitor_pmcs_mmap(struct file *filp, struct vm_area_struct *vma)
 	return 0;
 }
 
+#ifdef DEBUG_PMC_CONFIG_INTEGRITY
+static char log[512];
+#endif
+
 /* Write callback for /proc/pmc/enable */
 static ssize_t proc_pmc_enable_write(struct file *filp, const char __user *buff, size_t len, loff_t *off)
 {
@@ -2447,7 +2478,11 @@ static ssize_t proc_pmc_enable_write(struct file *filp, const char __user *buff,
 	kbuf[len]='\0';
 
 	if (strcmp(kbuf,"ON")==0 && prof!=NULL) {
-
+#ifdef DEBUG_PMC_CONFIG_INTEGRITY
+		print_experiment_set_info(prof->pmcs_multiplex_cfg,2,log);
+		trace_printk("%s\n",log);
+		return -EINVAL;
+#endif
 		/* Allocate memory for the buffer sample if necessary */
 		if (!prof->pmc_samples_buffer) {
 			pmc_buf=allocate_pmc_samples_buffer(prof->kernel_buffer_size);
@@ -2755,7 +2790,7 @@ static int configure_performance_counters_thread(const char *buf,struct task_str
 		}
 
 		/*  Initialize structure for just one coretype */
-		if ((error=do_setup_pmcs(cfg_set.pmc_cfg,cfg_set.used_pmcs,exp[0],cpu,0,p))) {
+		if ((error=do_setup_pmcs(&cfg_set,cfg_set.used_pmcs,exp[0],cpu,0,p))) {
 			kfree(exp[0]);
 			exp[0]=NULL;
 			put_pmc_samples_buffer(pmc_buf);
@@ -2782,7 +2817,7 @@ static int configure_performance_counters_thread(const char *buf,struct task_str
 		/* CRITICAL: THIS CODE DOES NOT GET INVOKED FOR NOW, AS IT IS NOT TESTED!!!*/
 		for (i=0; i<AMP_MAX_CORETYPES; i++) {
 			/*  Initialize structure for just one coretype */
-			error=do_setup_pmcs(cfg_set.pmc_cfg,cfg_set.used_pmcs,exp[i],get_any_cpu_coretype(i),i,p);
+			error=do_setup_pmcs(&cfg_set,cfg_set.used_pmcs,exp[i],get_any_cpu_coretype(i),i,p);
 
 			if (error) {
 				printk(KERN_INFO "Error detected in PMC configuration\n");
@@ -2802,7 +2837,7 @@ static int configure_performance_counters_thread(const char *buf,struct task_str
 		}
 #else
 		/*  Initialize structure for just one coretype */
-		if ((error=do_setup_pmcs(cfg_set.pmc_cfg,cfg_set.used_pmcs,exp[0],cpu,0,p))) {
+		if ((error=do_setup_pmcs(&cfg_set,cfg_set.used_pmcs,exp[0],cpu,0,p))) {
 			put_pmc_samples_buffer(pmc_buf);
 			return error;
 		}
@@ -2937,7 +2972,7 @@ int configure_performance_counters_set(const char* strconfig[], core_experiment_
 			}
 
 			/*  Initialize structure for just one coretype */
-			if ((error=do_setup_pmcs(cfg_set[i].pmc_cfg,cfg_set[i].used_pmcs,exp[j],get_any_cpu_coretype(j),0,NULL)))
+			if ((error=do_setup_pmcs(&cfg_set[i],cfg_set[i].used_pmcs,exp[j],get_any_cpu_coretype(j),0,NULL)))
 				return error;
 
 			/* Add to set */
@@ -2959,7 +2994,7 @@ int configure_performance_counters_set(const char* strconfig[], core_experiment_
 			}
 
 			/*  Initialize structure for just one coretype */
-			if ((error=do_setup_pmcs(cfg_set[i].pmc_cfg,cfg_set[i].used_pmcs,exp[0],get_any_cpu_coretype(0),0,NULL)))
+			if ((error=do_setup_pmcs(&cfg_set[i],cfg_set[i].used_pmcs,exp[0],get_any_cpu_coretype(0),0,NULL)))
 				return error;
 
 			/* Replicate for all */
@@ -2979,12 +3014,46 @@ int configure_performance_counters_set(const char* strconfig[], core_experiment_
 /* Initialize global parameters of the kernel module */
 void init_pmon_config_t(void)
 {
+	int cpu=0;
+	char* token;
+	char* buf;
+	int cpu_begin,cpu_end;
 #ifdef SCHED_AMP
 	pmcs_pmon_config.pmon_nticks = HZ/5; /* 200ms when the scheduler is using the counters */
 #else
 	pmcs_pmon_config.pmon_nticks = HZ; /* Set superhigh for testing purposes (one second) */
 #endif
 	pmcs_pmon_config.pmon_kernel_buffer_size=BUF_LEN_PMC_SAMPLES_EBS_KERNEL;
+
+	buf=forced_small_cores;
+	/* Initialization of cpu_is_small parameter */
+	forced_amp_topology=0;
+	for_each_cpu(cpu,cpu_online_mask) {
+		per_cpu(cpu_is_small, cpu)=0;
+	}
+
+	/* Parse user-provided parameter */
+	while((token = strsep(&buf, ","))!=NULL) {
+		if(sscanf(token,"%d-%d", &cpu_begin, &cpu_end)==2) {
+			/* Ignore empty ranges */
+			if (cpu_end<0 ||
+			    cpu_begin<0 ||
+			    cpu_begin>=cpu_end || cpu_end>=num_online_cpus())
+				continue;
+
+			forced_amp_topology=1;
+
+			for (cpu=cpu_begin; cpu<=cpu_end; cpu++)
+				per_cpu(cpu_is_small, cpu)=1;
+
+		} else if ( sscanf(token,"%d", &cpu)==1 ) {
+			if (cpu<0 || cpu>=num_online_cpus())
+				continue;
+
+			forced_amp_topology=1;
+			per_cpu(cpu_is_small, cpu)=1;
+		}
+	}
 }
 
 
@@ -3353,7 +3422,7 @@ void do_count_on_overflow(struct pt_regs *regs, unsigned int overflow_mask)
 		ebs_idx=core_exp->ebs_idx;
 
 		/* Make sure that the task is running */
-		if (prof && prof->this_tsk->state==TASK_RUNNING)
+		if (prof && task_is_running(prof->this_tsk))
 			mm_on_new_sample(prof,this_cpu,&sample,MM_TICK,regs);
 
 		spin_lock(&prof->pmc_samples_buffer->lock);
@@ -3489,9 +3558,12 @@ static int __init pmctrack_module_init(void)
 	int error_proc_entries=0;
 	unsigned char init_pmu_ok=0;
 	unsigned char register_pmc_module_ok=0;
-#ifndef CONFIG_PMCTRACK
 	unsigned char register_stubs_ok=0;
-#endif
+
+	pmctrack_initializing=1;
+
+	init_pmon_config_t();
+
 	if ((ret=init_pmu())!=0) {
 		printk("Can't Init PMU");
 		return ret;
@@ -3499,18 +3571,15 @@ static int __init pmctrack_module_init(void)
 
 	init_pmu_ok=1;
 
-	init_pmon_config_t();
 	init_percpu_structures();
 	init_prof_exited_tasks();
 
-#ifndef CONFIG_PMCTRACK
 	if((ret = pmctrack_init()) != 0) {
 		printk("Can't load pmctrack stub");
 		goto out_error;
 	}
 
 	register_stubs_ok=1;
-#endif
 
 	if((ret = register_pmc_module(&pmc_mc_prog,THIS_MODULE)) != 0) {
 		printk("Can't load pmc module");
@@ -3548,14 +3617,15 @@ static int __init pmctrack_module_init(void)
 		goto out_error;
 	}
 
+	msleep(10);
+	pmctrack_initializing=0;
+
 	printk(KERN_INFO "PMCTrack module loaded\n");
 	return 0;
 out_error:
 
-#ifndef CONFIG_PMCTRACK
 	if (register_stubs_ok)
 		pmctrack_exit();
-#endif
 	if (register_pmc_module_ok)
 		unregister_pmc_module(&pmc_mc_prog,THIS_MODULE);
 	if (init_pmu_ok)

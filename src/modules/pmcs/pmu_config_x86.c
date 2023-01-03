@@ -47,6 +47,7 @@ pmu_props_t pmu_props_cpu[NR_CPUS];
  */
 #if defined(CONFIG_PMC_CORE_2_DUO) || defined(CONFIG_PMC_CORE_I7)
 
+/* https://en.wikichip.org/wiki/intel/cpuid */
 /* Supported Intel Processors */
 static struct pmctrack_cpu_model cpu_models[]= {
 	{28,"atom"},{23,"core2"},{26,"nehalem"},
@@ -56,6 +57,10 @@ static struct pmctrack_cpu_model cpu_models[]= {
 	{79,"broadwell-ep"},
 	{86,"broadwell"},
 	{85,"skylake"},
+	{151,"alderlake"},
+	{152,"alderlake"},
+	{106,"icelake"},
+	{108,"icelake"},
 	{0,NULL} /* Marker */
 };
 
@@ -77,21 +82,25 @@ static void init_pmu_props_cpu(void* dummy)
 	int this_cpu=smp_processor_id();
 	int i=0;
 	pmu_props_t* props=&pmu_props_cpu[this_cpu];
+#if defined(CONFIG_PMC_AMD)
+	struct cpuinfo_x86 *cpudata = &cpu_data(this_cpu);
+#endif
 
 #if defined(CONFIG_PMC_CORE_2_DUO) || defined(CONFIG_PMC_CORE_I7)
 	cpuid_regs_t rv;
 	int nr_gp_pmcs;
 	unsigned int model=0;
+	u8 hw_coretype=0;
 
 	rv.eax=0x0A;
 	rv.ebx=rv.edx=rv.ecx=0x0;
 	run_cpuid(rv);
 	nr_gp_pmcs=(rv.eax&0xFF00)>>8;
-	props->processor_model=rv.eax&0xFF;
+	props->pmu_model=rv.eax&0xFF;
 #ifdef DEBUG
 	if (this_cpu==0) {
 		printk("*** PMU Info ***\n");
-		printk("Version Id:: 0x%x\n", rv.eax&0xFF);
+		printk("Version Id:: 0x%x\n", props->pmu_model);
 		printk("GP Counter per Logical Processor:: %d\n",nr_gp_pmcs);
 		printk("Bit width of the PMC:: %d\n", (rv.eax&0xFF0000)>>16);
 
@@ -114,21 +123,59 @@ static void init_pmu_props_cpu(void* dummy)
 	   arch/x86/kernel/cpu/microcode/intel_early.c
 	 */
 	model += ((rv.eax >> 16) & 0xf) << 4;
+	props->processor_model=model;
 	fill_model_string(model,props->arch_string);
 #elif defined(CONFIG_PMC_AMD)
-	props->nr_fixed_pmcs=0;
-	props->nr_gp_pmcs=4;
 	props->pmc_width=48; /* 48-bit wide */
-	/* Forced for now */
-	strcpy(props->arch_string,"x86_amd.opteron");
+	switch(cpudata->x86) {
+	case 0x17:
+	case 0x19:
+		props->nr_fixed_pmcs=2; /* Expose L3 counters as fixed */
+		props->nr_gp_pmcs=6;
+		strcpy(props->arch_string,"x86_amd.epyc");
+		break;
+	default:
+		props->nr_fixed_pmcs=0;
+		props->nr_gp_pmcs=4;
+		/* Forced for now */
+		strcpy(props->arch_string,"x86_amd.opteron");
+	}
 #endif
 	/* Mask */
 	props->pmc_width_mask=0;
 	for (i=0; i<props->pmc_width; i++)
 		props->pmc_width_mask|=(1ULL<<i);
 
+
+#if defined(CONFIG_PMC_AMD)
 	coretype_cpu_static[this_cpu]=0;
-	props->coretype=0; /* For now we do nothing fancy here*/
+	if (forced_amp_topology) {
+		coretype_cpu_static[this_cpu]=this_cpu_read(cpu_is_small)==1?0:1;
+	}
+	props->coretype=coretype_cpu_static[this_cpu];
+#else
+	switch(model) {
+	case 151:
+		/* Check hybrid CPU */
+		hw_coretype=get_this_hybrid_cpu_type();
+		if (hw_coretype==PMCT_X86_HYBRID_BIG_CORE) {
+			props->coretype=coretype_cpu_static[this_cpu]=1;
+		} else {
+			props->coretype=coretype_cpu_static[this_cpu]=0;
+		}
+		break;
+	default:
+		coretype_cpu_static[this_cpu]=0;
+		if (forced_amp_topology) {
+			coretype_cpu_static[this_cpu]=this_cpu_read(cpu_is_small)==1?0:1;
+		}
+
+		props->coretype=coretype_cpu_static[this_cpu];
+		break;
+	}
+
+#endif
+	props->initialized=1;
 	/* Reset this core's counters and msrs ... */
 	mc_clear_all_platform_counters(props);
 }
@@ -156,6 +203,7 @@ void init_pmu_props(void)
 	int model_cpu=0;
 	pmu_props_t* props;
 	int i=0;
+	unsigned char hybrid_cpu;
 	static pmu_flag_t pmu_flags[]= {
 #ifdef CONFIG_PMC_AMD
 		{"pmc",12,0},
@@ -178,10 +226,31 @@ void init_pmu_props(void)
 #define MAX_CORETYPES 2
 	int processor_model[MAX_CORETYPES];
 #endif
-	on_each_cpu(init_pmu_props_cpu, NULL, 1);
 
-	for (cpu=0; cpu<nr_cpu_ids; cpu++) {
-		pmu_props_cpu[cpu].coretype=get_coretype_cpu(cpu);
+	for (cpu=0; cpu<num_present_cpus(); cpu++)
+		pmu_props_cpu[cpu].initialized=0;
+
+	on_each_cpu(init_pmu_props_cpu, NULL, 1);
+	/***
+	 * Add special treatment for two cases
+	 * 1) Intel Alder Lake CPUs, where as all cores
+	 *  are exposed with exactly the same model
+	 * 2) AMP topology forced by the user (testing purposes)
+	 **/
+	hybrid_cpu=(pmu_props_cpu[0].processor_model==151) || forced_amp_topology;
+
+	if (hybrid_cpu) {
+		/* For now do nothing fancy here */
+		for (cpu=0; cpu<num_present_cpus(); cpu++)
+			coretype_cpu[cpu]=pmu_props_cpu[cpu].coretype;
+		nr_core_types=2;
+#if !defined(SCHED_AMP) && !defined(PMCTRACK_QUICKIA)
+		processor_model[0]=processor_model[1]=pmu_props_cpu[0].processor_model;
+#endif
+	} else {
+		for (cpu=0; cpu<num_present_cpus(); cpu++) {
+			pmu_props_cpu[cpu].coretype=pmu_props_cpu[cpu].coretype;
+		}
 	}
 
 #ifdef DEBUG
@@ -198,12 +267,20 @@ void init_pmu_props(void)
 		pmu_props_cpu[cpu].coretype=get_coretype_cpu(cpu);
 	}
 #else
+
+	if (hybrid_cpu)
+		goto print_pmu_info;
+
 	nr_core_types=0;
 	//nr_cpu_ids
 	//num_online_cpus()
 	for (cpu=0; cpu<num_present_cpus(); cpu++) {
 		model_cpu=pmu_props_cpu[cpu].processor_model;
 		coretype=0;
+
+		if (!pmu_props_cpu[cpu].initialized)
+			continue;
+
 		// Search model type in the list
 		while (coretype<nr_core_types && model_cpu!=processor_model[coretype])
 			coretype++;
@@ -219,9 +296,8 @@ void init_pmu_props(void)
 			pmu_props_cpu[cpu].coretype=coretype;
 		}
 	}
-
 #endif
-
+print_pmu_info:
 	printk("*** PMU Info ***\n");
 	printk("Number of core types detected:: %d\n",nr_core_types);
 
@@ -241,7 +317,7 @@ void init_pmu_props(void)
 			props->nr_flags++;
 		}
 		printk("[PMU coretype%d]\n",coretype);
-		printk(KERN_INFO "Version Id:: 0x%lx\n", props->processor_model);
+		printk(KERN_INFO "Version Id:: 0x%x\n", props->pmu_model);
 		printk("GP Counter per Logical Processor:: %d\n",props->nr_gp_pmcs);
 		printk("Number of fixed func. counters:: %d\n", props->nr_fixed_pmcs);
 		printk("Bit width of the PMC:: %d\n", props->pmc_width);
@@ -253,23 +329,31 @@ void init_pmu_props(void)
  * Transform an array of platform-agnostic PMC counter configurations (pmc_cfg)
  * into a low level structure that holds the necessary data to configure hardware counters.
  */
-int do_setup_pmcs(pmc_usrcfg_t* pmc_cfg, int used_pmcs_msk,core_experiment_t* exp, int cpu, int exp_idx, struct task_struct* p)
+int do_setup_pmcs(pmc_config_set_t* cconfig, int used_pmcs_msk,core_experiment_t* exp, int cpu, int exp_idx, struct task_struct* p)
 {
+	pmc_usrcfg_t* pmc_cfg=cconfig->pmc_cfg;
 	int i;
 	int gppmc_id=0;
 	low_level_exp* lle;
 	pmu_props_t* props_cpu=get_pmu_props_cpu(cpu);
 	uint64_t reset_value=0;
-
+	int nr_fixed_pmcs_used=0;
+	simple_exp* se;
 #ifndef CONFIG_PMC_AMD
 	struct hw_event* llex;
-	int nr_fixed_pmcs_used=0;
 	msr_perf_fixed_ctr_ctrl fixed_ctrl;
 	fixed_count_exp *fce;
 
 	/* Configure fixed function counter here */
 	init_msr_perf_fixed_ctr_ctrl(&fixed_ctrl);
+#else
+	unsigned int fixed_evtsel[]= {AMD17_L3_MISSES_EVTSEL,AMD17_L3_ACCESSES_EVTSEL};
+	unsigned int fixed_umask[]= {AMD17_L3_MISSES_UMASK,AMD17_L3_ACCESSES_UMASK};
+	unsigned int fixed_l3pmc[]= {0, 4};
+	struct cpuinfo_x86 *cpudata = &cpu_data(cpu);
+	unsigned int processor_model_id=cpudata->x86;
 #endif
+
 	init_core_experiment_t(exp, exp_idx);
 	/* Set mask of used pmcs !! */
 	exp->used_pmcs=used_pmcs_msk;
@@ -279,12 +363,11 @@ int do_setup_pmcs(pmc_usrcfg_t* pmc_cfg, int used_pmcs_msk,core_experiment_t* ex
 		if ( used_pmcs_msk & (0x1<<i)) {
 			/* Clear reset value */
 			reset_value=0;
-#ifndef CONFIG_PMC_AMD
 			/* Determine if this is a fixed function counter or not */
 			if (props_cpu->nr_fixed_pmcs>0 && i<props_cpu->nr_fixed_pmcs) {
 				int fixed_counter_id=i;
 				/* Enable user-mode count for all the available fixed-function PMCs*/
-
+#ifndef CONFIG_PMC_AMD
 				/* Setup enable 2=user 1=os 3=all !! */
 				set_bit_field(&fixed_ctrl.m_enable[fixed_counter_id],(pmc_cfg[i].cfg_usr << 1)|(pmc_cfg[i].cfg_os));
 
@@ -306,12 +389,29 @@ int do_setup_pmcs(pmc_usrcfg_t* pmc_cfg, int used_pmcs_msk,core_experiment_t* ex
 
 				fce=&llex->g_event.f_exp;
 				init_fixed_count_exp(fce,MSR_PERF_FIXED_CTR0+fixed_counter_id,fixed_ctrl.m_value,reset_value);
+#else
+				l3evtsel_msr l3evtsel;
+				lle=&exp->array[exp->size++];
+				init_hw_event(&lle->event,_SIMPLE);
+				se=&lle->event.g_event.s_exp;
 
-				nr_fixed_pmcs_used++;
-			} else
+				init_low_level_exp_id(lle,"fixed-count",i);
+				init_l3evtsel_msr(&l3evtsel);
+				set_bit_field(&l3evtsel.m_evtsel, fixed_evtsel[fixed_counter_id]);
+				set_bit_field(&l3evtsel.m_umask, fixed_umask[fixed_counter_id]);
+				set_bit_field(&l3evtsel.m_en, 1);
+				set_bit_field(&l3evtsel.m_slice_mask, 0xf); /* 4 slices active */
+				set_bit_field(&l3evtsel.m_thread_mask, 0xff); /* 8 threads active (to be changed dynamically) */
+				init_simple_exp (se, /* Simple exp */
+				                 L3_PERF_PMC_MSR0+fixed_l3pmc[fixed_counter_id]*L3_PERF_PMC_MSR_INCR,
+				                 L3_PERF_PMC_RDPMC0+fixed_l3pmc[fixed_counter_id], /* Assigned PMC ID */
+				                 L3_PERF_EVTSEL0+fixed_l3pmc[fixed_counter_id]*L3_PERF_EVTSEL_INCR,
+				                 l3evtsel.m_value,
+				                 0
+				                );
 #endif
-			{
-				simple_exp* se;
+				nr_fixed_pmcs_used++;
+			} else {
 				evtsel_msr evtsel;
 				init_evtsel_msr(&evtsel);
 				gppmc_id=i-props_cpu->nr_fixed_pmcs;
@@ -358,7 +458,15 @@ int do_setup_pmcs(pmc_usrcfg_t* pmc_cfg, int used_pmcs_msk,core_experiment_t* ex
 				init_low_level_exp_id(lle,"gp-pmc",i);
 				init_hw_event(&lle->event,_SIMPLE);
 				se=&lle->event.g_event.s_exp;
-
+#ifdef CONFIG_PMC_AMD
+				init_simple_exp (se, 				/* Simple exp */
+				                 get_amd_pmc_addr(processor_model_id,gppmc_id), /* MSR address of the PMC */
+				                 gppmc_id, 				/* Assigned PMC ID */
+				                 get_amd_evtsel_addr(processor_model_id,gppmc_id),	/* MSR address of the associated evtsel */
+				                 evtsel.m_value,
+				                 reset_value
+				                );
+#else
 				init_simple_exp (se, 				/* Simple exp */
 				                 PMC_MSR_INITIAL_ADDRESS+gppmc_id, 	/* MSR address of the PMC */
 				                 gppmc_id, 				/* Assigned PMC ID */
@@ -366,6 +474,7 @@ int do_setup_pmcs(pmc_usrcfg_t* pmc_cfg, int used_pmcs_msk,core_experiment_t* ex
 				                 evtsel.m_value,
 				                 reset_value
 				                );
+#endif
 			}
 
 			/* Add metainfo in the core experiment */
@@ -374,10 +483,16 @@ int do_setup_pmcs(pmc_usrcfg_t* pmc_cfg, int used_pmcs_msk,core_experiment_t* ex
 		}
 	}
 #ifndef CONFIG_PMC_AMD
-	/* Make sure that all fixed-count events have the same value for the ctrl_msr
-		(the last one was configured okay but the others did not) */
-	for (i=1; i<nr_fixed_pmcs_used; i++) {
-		lle=&exp->array[exp->size-(i+1)];
+	/* Hack: For alderlake enable 4th fixed PMC. Interrupt is disabled */
+	if ((props_cpu->processor_model==151 ||
+	     props_cpu->processor_model==152) &&
+	    cconfig->coretype==1 /* Big-core only */)
+		fixed_ctrl.m_value|=0x2ULL<<12;
+	/* Make sure that all fixed-count events have the same value for the ctrl_msr */
+	for (i=0; i<nr_fixed_pmcs_used; i++) {
+		lle=&exp->array[i]; //exp->size-(i+1)];
+		if (lle->event.type!=_FIXED)
+			continue;
 		fce=&lle->event.g_event.f_exp;
 		fce->evtsel.new_value=fixed_ctrl.m_value;
 	}
@@ -544,12 +659,25 @@ void mc_clear_all_platform_counters(pmu_props_t* props_cpu)
 	_msr_t msr;
 	int cnt=0;
 	uint64_t  gp_counter_mask=0;
-#ifndef CONFIG_PMC_AMD
+#ifdef CONFIG_PMC_AMD
+	unsigned int processor_model_id=boot_cpu_data.x86;
+#else
 	_msr_t fixed_count_msr;
 #endif
 	_pmc_t pmc;
 
-
+#ifdef CONFIG_PMC_AMD
+	for (i=0; i<props_cpu->nr_gp_pmcs; i++,cnt++) {
+		msr.address= get_amd_evtsel_addr(processor_model_id,i);
+		msr.reset_value=0;
+		pmc.pmc_address=i;
+		pmc.msr.address=get_amd_pmc_addr(processor_model_id,i);
+		pmc.msr.reset_value=0;
+		resetMSR(&msr);
+		resetMSR(&pmc.msr);
+		gp_counter_mask|=1<<i;
+	}
+#else
 	for (i=0; i<props_cpu->nr_gp_pmcs; i++,cnt++) {
 		msr.address=EVTSEL_MSR_INITIAL_ADDRESS+i;
 		msr.reset_value=0;
@@ -562,7 +690,6 @@ void mc_clear_all_platform_counters(pmu_props_t* props_cpu)
 	}
 
 
-#ifndef CONFIG_PMC_AMD
 	for (i=0; i<props_cpu->nr_fixed_pmcs; i++,cnt++) {
 		msr.address=MSR_PERF_FIXED_CTR_CTRL;
 		msr.reset_value=0;
@@ -581,7 +708,6 @@ void mc_clear_all_platform_counters(pmu_props_t* props_cpu)
 	msr.address=MSR_PERF_GLOBAL_CTRL;
 	msr.reset_value=(gp_counter_mask) | (0x7ULL << 32ULL) ;
 	resetMSR(&msr);
-
 #endif
 
 }

@@ -4,6 +4,7 @@
 # Object files
 *.o
 *.ko
+*.mo
 *.obj
 *.elf
 
@@ -50,3 +51,8 @@ modules.order
 Module.symvers
 Mkfile.old
 dkms.conf
+
+# Logs
+*.log
+
+

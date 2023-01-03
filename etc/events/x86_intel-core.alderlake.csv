@@ -15,8 +15,9 @@ branch_instr_retired,-,0xc4,-,-,
 branch_misses_retired,-,0xc5,-,-,
 l2_references,-,0x24,-,umask=0xff,
 l2_misses,-,0x24,-,umask=0x3f,
-l2_lines_in,-,0xf1,-,umask=0x07,
-l1d,replacement,0x51,-,umask=0x1
-l2_lines_in,all,0xf1,-,umask=0x7
-cycle_activity_stalls,l2_miss,0xa3,-,umask=0x5
-cycle_activity_stalls,l3_miss,0xa3,-,umask=0x6
+l2_lines_in,all,0x25,-,umask=0x1f,
+topdown_slots,-,0xa4,-,umask=0x1,
+e_topdown_bad_spec,all,0x73,-,umask=0x0,
+e_topdown_be_bound,all,0x74,-,umask=0x0,
+e_topdown_fe_bound,all,0x71,-,umask=0x0,
+e_topdown_retiring,all,0xc2,-,umask=0x0,

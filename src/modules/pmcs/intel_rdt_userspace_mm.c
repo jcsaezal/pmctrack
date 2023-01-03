@@ -102,6 +102,7 @@ extern struct proc_dir_entry *pmc_dir;
 static const pmctrack_proc_ops_t fops = {
 	.PMCT_PROC_READ = rdt_proc_read,
 	.PMCT_PROC_WRITE = rdt_proc_write,
+	.PMCT_PROC_LSEEK = default_llseek
 };
 
 /* Return the capabilities/properties of this monitoring module */
@@ -701,7 +702,7 @@ static ssize_t rdt_proc_write(struct file *filp, const char __user *buf, size_t 
 		/* Go to remote CPU to make the change right away if pid is a runnable process */
 		cpu_task=task_cpu_safe(target);
 
-		if (cpu_task!=-1 && target->state==TASK_RUNNING) {
+		if (cpu_task!=-1 && task_is_running(target)) {
 			/*
 			 * Note that the task may go to sleep or be migrated in the meantime. That is not a big deal
 			 * since the save callback is invoked in that case. That callback already updates

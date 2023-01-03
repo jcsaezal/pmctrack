@@ -30,6 +30,7 @@
 #include <linux/ctype.h>
 #include <pmc/data_str/cbuffer.h>
 #include <pmc/smart_power.h>
+#include <pmc/mc_experiments.h>
 #include <linux/rwlock.h>
 
 MODULE_LICENSE("GPL");
@@ -146,9 +147,15 @@ resubmit:
 
 
 /* Function invoked when the timer expires (fires) */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,15,0)
 static void spower_fire_timer(unsigned long data)
 {
 	struct spower_ctl* ctl=(struct spower_ctl*)	data;
+#else
+static void spower_fire_timer(struct timer_list *t)
+{
+	struct spower_ctl* ctl=container_of(t, struct spower_ctl, timer);
+#endif
 	unsigned long flags;
 
 	write_lock_irqsave(&spower_gbl.lock,flags);
@@ -608,6 +615,7 @@ static const pmctrack_proc_ops_t spower_fops = {
 	.PMCT_PROC_READ =		spower_read,
 	.PMCT_PROC_OPEN =		spower_open,			/* open() operation on the file */
 	.PMCT_PROC_RELEASE =	spower_release, 		/* close() operation on the file */
+	.PMCT_PROC_LSEEK = default_llseek
 };
 
 /*
@@ -839,11 +847,15 @@ int spower_register_driver(void)
 	if (!spower_gbl.cbuffer)
 		return -ENOMEM;
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,15,0)
 	/* Timer initialization */
 	init_timer(&spower_gbl.timer);
 	spower_gbl.timer.data=(unsigned long)&spower_gbl;
 	spower_gbl.timer.function=spower_fire_timer;
 	spower_gbl.timer.expires=jiffies;  /* It does not matter for now */
+#else
+	timer_setup(&spower_gbl.timer, spower_fire_timer, 0);
+#endif
 	spower_gbl.timer_period=(HZ*SPOWER_DEFAULT_TIMER_PERIOD)/1000;
 	spower_gbl.started=0;
 	spower_gbl.cummulative_energy=0;

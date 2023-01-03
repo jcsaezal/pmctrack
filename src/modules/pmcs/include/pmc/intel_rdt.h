@@ -14,10 +14,16 @@
 #define RMID_VAL_ERROR		(1ULL << 63)
 #define RMID_VAL_UNAVAIL	(1ULL << 62)
 #define RMID_MAX_LLCS		32	/* Max number of processor "chips" in the machine */
-#define CMT_MAX_EVENTS		3 	/* L3_USAGE, L3_TOTAL_BW, L3_LOCAL_BW */
 #define L3_OCCUPANCY_EVENT_ID	0x01
 #define L3_TOTAL_BW_EVENT_ID	0x02
 #define L3_LOCAL_BW_EVENT_ID	0x03
+
+enum {
+	L3_USAGE=0,
+	L3_TOTAL_BW,
+	L3_LOCAL_BW,
+	CMT_MAX_EVENTS
+};
 
 /*
  * Memory bandwith cumulative counters
@@ -79,7 +85,7 @@ typedef enum {
 }
 rmid_allocation_policy_t;
 
-extern const char* rmid_allocation_policy_str[NR_RMID_ALLOC_POLICIES];
+static __attribute__ ((unused)) const char* rmid_allocation_policy_str[NR_RMID_ALLOC_POLICIES]= {"FIFO","LIFO","RANDOM"};
 
 static inline void initialize_cmt_thread_struct(intel_cmt_thread_struct_t* data)
 {
@@ -96,9 +102,10 @@ static inline void initialize_cmt_thread_struct(intel_cmt_thread_struct_t* data)
 
 }
 
-
+#if defined(CONFIG_PMC_PERF_X86) || defined(CONFIG_PMC_CORE_I7) || defined(CONFIG_PMC_AMD)
 int intel_cmt_probe(void);
 int amd_qos_probe(void);
+int qos_extensions_probe(void);
 
 int intel_cmt_initialize(intel_cmt_support_t* cmt_support);
 int intel_cat_initialize(intel_cat_support_t* cat_support);
@@ -118,6 +125,12 @@ int intel_cat_print_capacity_bitmasks_cpu(char* str, intel_cat_support_t* cat_su
 
 int intel_cat_set_capacity_bitmask_cpu(intel_cat_support_t* cat_support, unsigned int idx, unsigned int mask, int cpu);
 
+/**
+ * Functions to enable user-space management of
+ *  Intel RDT features
+ */
+int res_qos_create_proc_entries(void);
+void res_qos_remove_proc_entries(void);
 
 
 int intel_mba_print_delay_values(char* str, intel_mba_support_t* mba_support);
@@ -181,5 +194,102 @@ int get_cat_cbm(unsigned long* mask, intel_cat_support_t* cat_support, unsigned 
 
 int get_mba_setting(unsigned long* val, intel_mba_support_t* mba_support, unsigned int clos, int cpu);
 
+#else
+static inline int intel_cmt_probe(void)
+{
+	return -ENOTSUPP;
+}
+static inline int amd_qos_probe(void)
+{
+	return -ENOTSUPP;
+}
+static inline int qos_extensions_probe(void)
+{
+	return -ENOTSUPP;
+}
+static inline int intel_cmt_initialize(intel_cmt_support_t* cmt_support)
+{
+	return -ENOTSUPP;
+}
+static inline int intel_cat_initialize(intel_cat_support_t* cat_support)
+{
+	return -ENOTSUPP;
+}
+static inline int intel_mba_initialize(intel_mba_support_t* mba_support)
+{
+	return -ENOTSUPP;
+}
+static inline int intel_cmt_release(intel_cmt_support_t* cmt_support)
+{
+	return -ENOTSUPP;
+}
+static inline int intel_cat_release(intel_cat_support_t* cat_support)
+{
+	return -ENOTSUPP;
+}
+static inline int intel_mba_release(intel_mba_support_t* mba_support)
+{
+	return -ENOTSUPP;
+}
+static inline int intel_cat_print_capacity_bitmasks(char* str, intel_cat_support_t* cat_support)
+{
+	return -ENOTSUPP;
+}
+static inline int intel_cat_set_capacity_bitmask(intel_cat_support_t* cat_support, unsigned int idx, unsigned int mask)
+{
+	return -ENOTSUPP;
+}
+static inline int intel_cat_print_capacity_bitmasks_cpu(char* str, intel_cat_support_t* cat_support, int cpu)
+{
+	return -ENOTSUPP;
+}
+static inline int intel_cat_set_capacity_bitmask_cpu(intel_cat_support_t* cat_support, unsigned int idx, unsigned int mask, int cpu)
+{
+	return -ENOTSUPP;
+}
+static inline int intel_mba_print_delay_values(char* str, intel_mba_support_t* mba_support)
+{
+	return -ENOTSUPP;
+}
+static inline int intel_mba_set_delay_values(intel_mba_support_t* mba_support, unsigned int idx, unsigned int val)
+{
+	return -ENOTSUPP;
+}
+static inline void intel_cmt_update_supported_events(intel_cmt_support_t* cmt_support,intel_cmt_thread_struct_t* data, unsigned int llc_id) {}
+static inline intel_rdt_event_t* intel_rdt_syswide_read_localbw(intel_cmt_support_t* cmt_support, unsigned int llc_id, unsigned int* count, uint64_t* aggregate_count)
+{
+	return NULL;
+}
+static inline unsigned int get_rmid(void)
+{
+	return 0;
+}
+static inline void put_rmid(uint_t rmid) { }
+static inline void use_rmid(unsigned int rmid) { }
+static inline rmid_allocation_policy_t get_cmt_policy(void)
+{
+	return 0;
+}
+static inline void set_cmt_policy(rmid_allocation_policy_t new_policy) {}
+static inline u64 __rmid_read(unsigned long rmid, unsigned int event)
+{
+	return 0;
+}
+static inline void __set_rmid_and_cos(unsigned int rmid, unsigned int cosid) {  }
+static inline void __unset_rmid(void) {}
+static inline int get_cat_cbm(unsigned long* mask, intel_cat_support_t* cat_support, unsigned int clos, int cpu)
+{
+	return 0;
+}
+static inline int get_mba_setting(unsigned long* val, intel_mba_support_t* mba_support, unsigned int clos, int cpu)
+{
+	return 0;
+}
+static inline int res_qos_create_proc_entries(void)
+{
+	return -ENOTSUPP;
+}
+static inline void res_qos_remove_proc_entries(void) { }
+#endif
 
 #endif

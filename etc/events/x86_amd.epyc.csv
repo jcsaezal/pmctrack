@@ -13,8 +13,12 @@ stalled_cycles_frontend,-,0x87,-,umask=0x02
 stalled_cycles_backend,-,0x87,-,umask=0x01
 l2_cache_accesses,dc_misses,0x60,-,umask=0xc8
 l2_cache_misses,dc_misses,0x64,-,umask=0xc8
+l2_cache_misses,all_misses,0x64,-,umask=0x9
+l2_pf_hit_l2,-,0x70,-,umask=0x3f
 l2_pf_miss_l2_hit_l3,-,0x71,-,umask=0xff
 l2_pf_miss_l2_l3,-,0x72,-,umask=0xff
+llc_misses,-,-,-,type=fixed;pmc=0,
+llc_accesses,-,-,-,type=fixed;pmc=1,
 l3_misses_core0,-,0x030f000000000106,-,pmu=9;systemwide
 l3_misses_core1,-,0x0c0f000000000106,-,pmu=9;systemwide
 l3_misses_core2,-,0x300f000000000106,-,pmu=9;systemwide

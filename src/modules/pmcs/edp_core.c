@@ -1,3 +1,4 @@
+#ifndef CONFIG_PMC_AMD
 #include <pmc/edp.h>
 
 #if defined(CONFIG_PMC_ARM) ||   defined(CONFIG_PMC_ARM) 
@@ -279,6 +280,6 @@ intel_rapl_support_t* get_global_rapl_handler(void){
 
 
 #endif
-
+#endif
 
 

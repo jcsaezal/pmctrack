@@ -30,6 +30,10 @@
  *  2015-12-20  Support to attach to process by pid
  */
 
+#define _GNU_SOURCE
+
+#include <sched.h>
+#include <sys/resource.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -38,7 +42,6 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <wait.h>
-#include <sys/resource.h>
 #include <err.h>
 #include <unistd.h>
 #include <errno.h>
@@ -46,7 +49,6 @@
 #include <semaphore.h>
 #include <sys/ipc.h>
 #include <sys/shm.h>
-#include <sched.h>
 #include <inttypes.h>
 #include <pmc_user.h> /*For the data type */
 #include <sys/time.h> /* For setitimer */
@@ -56,6 +58,9 @@
 #ifndef  _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
+
+
+
 
 #ifndef NO_CPU_BINDING
 #define NO_CPU_BINDING 0xffffffff
@@ -91,7 +96,11 @@ struct options {
 	int max_samples;
 	int max_ebs_samples;
 	int kernel_buffer_size;
+#ifdef OLD_CPUMASK
 	unsigned long cpumask;
+#else
+	cpu_set_t cpumask;
+#endif
 	int optind;
 	char** argv;
 	unsigned long flags;
@@ -174,6 +183,7 @@ static void init_posix_semaphore(sem_t** sem, int value)
 }
 #endif
 
+#ifdef OLD_CPUMASK
 /* Included due to an issue with header files in some Linux distributions */
 extern int sched_setaffinity(pid_t pid, unsigned int len, unsigned long *mask);
 
@@ -191,12 +201,41 @@ static unsigned long str_to_cpumask(const char* str)
 		return 0x1<<val;
 	}
 }
+#endif
 
+static void str_to_cpuset(const char* str,cpu_set_t* cpu_set)
+{
+	long int val=0;
+	unsigned long int uval;
+	int i;
+
+	CPU_ZERO(cpu_set);
+
+	if (strncmp(str,"0x",2)==0) {
+		/* Remove the 0x preffix and convert to the mask directly */
+		val=strtol(str+2,NULL,16);
+		uval=(unsigned long) val;
+		for (i=0; uval && i<sizeof(unsigned long)<<3; i++) {
+			if (uval & 1<<i) {
+				uval&=~(1<<i);
+				CPU_SET(i,cpu_set);
+			}
+		}
+
+	} else {
+		/* Assume just a CPU number in decimal format */
+		i=strtol(str,NULL,10);
+		CPU_SET(i,cpu_set);
+	}
+}
+
+
+#ifdef OLD_CPUMASK
 /* Wrapper for sched_setaffinity */
 static inline void bind_process_cpumask(int pid, unsigned long cpumask)
 {
 	if ((cpumask!=NO_CPU_BINDING) && sched_setaffinity(pid, sizeof(unsigned long),&cpumask)!=0) {
-		warnx("Error when binding process to cpumask 0x%lu",cpumask);
+		warnx("Error when binding process to cpuset",cpumask);
 		exit(1);
 	}
 }
@@ -210,6 +249,32 @@ static int try_to_bind_process_cpumask(int pid, unsigned long cpumask)
 	return 0;
 }
 
+#else
+static inline void bind_process_cpuset(int pid, cpu_set_t* cpu_set)
+{
+	if (!cpu_set || CPU_COUNT(cpu_set)==0)
+		return;
+
+	if (sched_setaffinity(pid, CPU_ALLOC_SIZE(128),cpu_set)!=0) {
+		perror("Error when binding process to cpuset\n");
+		exit(1);
+	}
+}
+
+
+
+static int try_to_bind_process_cpuset(int pid, cpu_set_t* cpu_set)
+{
+	if (!cpu_set || CPU_COUNT(cpu_set)==0)
+		return 0;
+
+	if (sched_setaffinity(pid, sizeof(cpu_set_t),cpu_set)!=0) {
+		warnx("Cannot bind process to cpuset %p",cpu_set);
+		return 1;
+	}
+	return 0;
+}
+#endif
 
 /*
  * When using vfork(), it is strongly advisable to use _exit() rather than exit()
@@ -503,8 +568,11 @@ static void monitoring_counters(struct options* opts,int optind,char** argv)
 			exit(1);
 
 		/* Bind first */
+#ifdef OLD_CPUMASK
 		bind_process_cpumask(getpid(),opts->cpumask);
-
+#else
+		bind_process_cpuset(getpid(),&opts->cpumask);
+#endif
 		/* Set up kernel buffer size */
 		if (opts->kernel_buffer_size!=-1 && pmct_set_kernel_buffer_size(opts->kernel_buffer_size))
 			pmctrack_exit(1);
@@ -650,7 +718,11 @@ void monitoring_counters_syswide(struct options* opts,int optind,char** argv)
 			exit(1);
 
 		/* Bind first */
+#ifdef OLD_CPUMASK
 		bind_process_cpumask(getpid(),opts->cpumask);
+#else
+		bind_process_cpuset(getpid(),&opts->cpumask);
+#endif
 
 #ifndef USE_VFORK
 		/* Notify the parent that the configuration is done */
@@ -769,7 +841,13 @@ return_free_pidlist:
  * Returns the number of pids that could not be attached
  * The PID of the master thread must be attached for this to succeed
  */
-static int attach_pid_set(pid_set_t* set,int pid, unsigned long cpumask)
+static int attach_pid_set(pid_set_t* set,int pid,
+#ifdef OLD_CPUMASK
+                          unsigned long cpumask
+#else
+                          cpu_set_t* cpumask
+#endif
+                         )
 {
 	int i=0;
 	int nr_attached=0;
@@ -778,9 +856,11 @@ static int attach_pid_set(pid_set_t* set,int pid, unsigned long cpumask)
 		warnx("Can't attach to process with PID %d\n",pid);
 		return -1;
 	}
-
+#ifdef OLD_CPUMASK
 	try_to_bind_process_cpumask(pid,cpumask);
-
+#else
+	try_to_bind_process_cpuset(pid,cpumask);
+#endif
 	nr_attached=1;
 
 	for (i = 0; i < set->nr_pids; i++) {
@@ -797,7 +877,11 @@ static int attach_pid_set(pid_set_t* set,int pid, unsigned long cpumask)
 		} else {
 			set->pid_status[i].attached=1;
 			nr_attached++;
+#ifdef OLD_CPUMASK
 			try_to_bind_process_cpumask(cur_pid,cpumask);
+#else
+			try_to_bind_process_cpuset(cur_pid,cpumask);
+#endif
 		}
 	}
 
@@ -907,7 +991,12 @@ static void monitoring_counters_attach(struct options* opts,int optind,char** ar
 	/* Keep track of start time */
 	gettimeofday(&start_time, NULL);
 
-	if (attach_pid_set(set,opts->target_pid,opts->cpumask)<0) {
+#ifdef OLD_CPUMASK
+	if (attach_pid_set(set,opts->target_pid,opts->cpumask)<0)
+#else
+	if (attach_pid_set(set,opts->target_pid,&opts->cpumask)<0)
+#endif
+	{
 		exit_val=1;
 		goto free_up_pid_set;
 	}
@@ -1124,7 +1213,11 @@ void init_options( struct options* opts)
 	for (i = 0; i<MAX_COUNTER_CONFIGS; ++i)
 		opts->user_cfg_str[i]=NULL;
 
-	opts->cpumask = NO_CPU_BINDING;
+#ifdef OLD_CPUMASK
+	opts->cpumask=NO_CPU_BINDING;
+#else
+	CPU_ZERO(&opts->cpumask);
+#endif
 	opts->max_samples = -1;
 	opts->max_ebs_samples= -1;
 	opts->flags=0;
@@ -1305,10 +1398,11 @@ int main(int argc, char *argv[])
 			opts.msecs = (int)1000.0*atof(optarg);
 			break;
 		case 'b':
-			opts.cpumask=str_to_cpumask(optarg);
+			str_to_cpuset(optarg,&opts.cpumask);
 			break;
 		case 'B':
-			bind_process_cpumask(getpid(),str_to_cpumask(optarg));
+			str_to_cpuset(optarg,&opts.cpumask);
+			bind_process_cpuset(getpid(),&opts.cpumask);
 			break;
 		case 'n':
 			opts.max_samples=atoi(optarg);

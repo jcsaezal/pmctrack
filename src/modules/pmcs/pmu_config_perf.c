@@ -66,6 +66,7 @@ static struct pmctrack_cpu_model cpu_models[]= {
 	{79,"broadwell-ep"},
 	{86,"broadwell"},
 	{85,"skylake"},
+	{151,"alderlake"},
 	{0,NULL} /* Marker */
 };
 
@@ -152,6 +153,7 @@ static void init_pmu_props_cpu(void* dummy)
 		model=(cpuid >> 4) & 0xfff;
 	}
 	fill_model_string(model,props->arch_string);
+	props->initialized=1;
 }
 
 #ifdef DEBUG
@@ -189,6 +191,9 @@ void init_pmu_props(void)
 #define MAX_CORETYPES 2
 	int processor_model[MAX_CORETYPES];
 
+	for (cpu=0; cpu<num_present_cpus(); cpu++)
+		pmu_props_cpu[cpu].initialized=0;
+
 	on_each_cpu(init_pmu_props_cpu, NULL, 1);
 
 	nr_core_types=0;
@@ -196,6 +201,10 @@ void init_pmu_props(void)
 	for (cpu=0; cpu<num_present_cpus(); cpu++) {
 		model_cpu=pmu_props_cpu[cpu].processor_model;
 		coretype=0;
+
+		if (!pmu_props_cpu[cpu].initialized)
+			continue;
+
 		// Search model type in the list
 		while (coretype<nr_core_types && model_cpu!=processor_model[coretype])
 			coretype++;
@@ -250,17 +259,18 @@ static void init_pmu_props_cpu(void* dummy)
 	cpuid_regs_t rv;
 	int nr_gp_pmcs;
 	unsigned int model=0;
+	u8 hw_coretype=0;
 
 	if (cpudata->x86_vendor == X86_VENDOR_INTEL) {
 		rv.eax=0x0A;
 		rv.ebx=rv.edx=rv.ecx=0x0;
 		run_cpuid(rv);
 		nr_gp_pmcs=(rv.eax&0xFF00)>>8;
-		props->processor_model=rv.eax&0xFF;
+		props->pmu_model=rv.eax&0xFF;
 #ifdef DEBUG
 		if (this_cpu==0) {
 			printk("*** PMU Info ***\n");
-			printk("Version Id:: 0x%x\n", rv.eax&0xFF);
+			printk("Version Id:: 0x%x\n", props->pmu_model);
 			printk("GP Counter per Logical Processor:: %d\n",nr_gp_pmcs);
 			printk("Bit width of the PMC:: %d\n", (rv.eax&0xFF0000)>>16);
 
@@ -283,11 +293,12 @@ static void init_pmu_props_cpu(void* dummy)
 		   arch/x86/kernel/cpu/microcode/intel_early.c
 		 */
 		model += ((rv.eax >> 16) & 0xf) << 4;
+		props->processor_model=model;
 		fill_model_string(model,props->arch_string);
 	}   else {
 		props->nr_fixed_pmcs=0;
 		props->pmc_width=48; /* 48-bit wide */
-
+		props->pmu_model=cpudata->x86;
 		switch(cpudata->x86) {
 		case 0x17:
 		case 0x19:
@@ -306,8 +317,28 @@ static void init_pmu_props_cpu(void* dummy)
 	for (i=0; i<props->pmc_width; i++)
 		props->pmc_width_mask|=(1ULL<<i);
 
-	coretype_cpu_static[this_cpu]=0;
+#if defined(CONFIG_PMC_AMD)
 	props->coretype=0; /* For now we do nothing fancy here*/
+	coretype_cpu_static[this_cpu]=0;
+#else
+	switch(model) {
+	case 151:
+		/* Check hybrid CPU */
+		hw_coretype=get_this_hybrid_cpu_type();
+		if (hw_coretype==PMCT_X86_HYBRID_BIG_CORE) {
+			props->coretype=coretype_cpu_static[this_cpu]=1;
+		} else {
+			props->coretype=coretype_cpu_static[this_cpu]=0;
+		}
+		break;
+	default:
+		props->coretype=0; /* For now we do nothing fancy here*/
+		coretype_cpu_static[this_cpu]=0;
+		break;
+	}
+
+#endif
+	props->initialized=1;
 }
 
 
@@ -317,7 +348,7 @@ static void print_pmu_info_cpu(int cpu)
 	pmu_props_t* props=&pmu_props_cpu[cpu];
 
 	printk("*** CPU %d***\n",cpu);
-	printk(KERN_INFO "Version Id:: 0x%lx\n", props->processor_model);
+	printk(KERN_INFO "Version Id:: 0x%lx\n", props->pmu_model);
 	printk("GP Counter per Logical Processor:: %d\n",props->nr_gp_pmcs);
 	printk("Number of fixed func. counters:: %d\n", props->nr_fixed_pmcs);
 	printk("Bit width of the PMC:: %d\n", props->pmc_width);
@@ -333,10 +364,11 @@ void init_pmu_props(void)
 	int model_cpu=0;
 	pmu_props_t* props;
 	int i=0;
-	int this_cpu=smp_processor_id();
+	int this_cpu=get_cpu();
 #define MAX_CORETYPES 2
 	int processor_model[MAX_CORETYPES];
 	struct cpuinfo_x86 *cpudata = &cpu_data(this_cpu);
+	unsigned char hybrid_cpu;
 	static pmu_flag_t pmu_flags[]= {
 		{"pmc",64,0},
 		{"usr",1,0},
@@ -355,14 +387,33 @@ void init_pmu_props(void)
 		{NULL,0,0}
 	};
 
+	put_cpu();
+
 	/* Patch bitwidth AMD */
 	if (cpudata->x86_vendor==X86_VENDOR_AMD)
 		pmu_flags[0].bitwidth=64;
 
+	for (cpu=0; cpu<num_present_cpus(); cpu++)
+		pmu_props_cpu[cpu].initialized=0;
+
 	on_each_cpu(init_pmu_props_cpu, NULL, 1);
 
-	for (cpu=0; cpu<nr_cpu_ids; cpu++) {
-		pmu_props_cpu[cpu].coretype=get_coretype_cpu(cpu);
+	/***
+	 * Add special treatment for Intel Alderlake CPUS
+	 * as all cores are exposed with exactly the same model
+	 **/
+	hybrid_cpu=(pmu_props_cpu[0].processor_model==151);
+
+	if (hybrid_cpu) {
+		/* For now do nothing fancy here */
+		for (cpu=0; cpu<num_present_cpus(); cpu++)
+			coretype_cpu[cpu]=pmu_props_cpu[cpu].coretype;
+		nr_core_types=2;
+		processor_model[0]=processor_model[1]=pmu_props_cpu[0].processor_model;
+	} else {
+		for (cpu=0; cpu<num_present_cpus(); cpu++) {
+			pmu_props_cpu[cpu].coretype=pmu_props_cpu[cpu].coretype;
+		}
 	}
 
 #ifdef DEBUG
@@ -370,12 +421,19 @@ void init_pmu_props(void)
 		print_pmu_info_cpu(cpu);
 #endif
 
+	if (hybrid_cpu)
+		goto print_pmu_info;
+
 	nr_core_types=0;
 	//nr_cpu_ids
 	//num_online_cpus()
 	for (cpu=0; cpu<num_present_cpus(); cpu++) {
 		model_cpu=pmu_props_cpu[cpu].processor_model;
 		coretype=0;
+
+		if (!pmu_props_cpu[cpu].initialized)
+			continue;
+
 		// Search model type in the list
 		while (coretype<nr_core_types && model_cpu!=processor_model[coretype])
 			coretype++;
@@ -392,6 +450,7 @@ void init_pmu_props(void)
 		}
 	}
 
+print_pmu_info:
 	printk("*** PMU Info ***\n");
 	printk("Number of core types detected:: %d\n",nr_core_types);
 
@@ -408,7 +467,7 @@ void init_pmu_props(void)
 			props->nr_flags++;
 		}
 		printk("[PMU coretype%d]\n",coretype);
-		printk(KERN_INFO "Version Id:: 0x%lx\n", props->processor_model);
+		printk(KERN_INFO "Version Id:: 0x%x\n", props->pmu_model);
 		printk("GP Counter per Logical Processor:: %d\n",props->nr_gp_pmcs);
 		printk("Number of fixed func. counters:: %d\n", props->nr_fixed_pmcs);
 		printk("Bit width of the PMC:: %d\n", props->pmc_width);
@@ -509,8 +568,9 @@ struct perf_event *init_counter(struct task_struct* task,int cpu,
  * Transform an array of platform-agnostic PMC counter configurations (pmc_cfg)
  * into a low level structure that holds the necessary data to configure hardware counters.
  */
-int do_setup_pmcs(pmc_usrcfg_t* pmc_cfg, int used_pmcs_msk,core_experiment_t* exp,int cpu, int exp_idx, struct task_struct *task)
+int do_setup_pmcs(pmc_config_set_t* cconfig, int used_pmcs_msk,core_experiment_t* exp,int cpu, int exp_idx, struct task_struct *task)
 {
+	pmc_usrcfg_t* pmc_cfg=cconfig->pmc_cfg;
 	int i,j;
 	low_level_exp* lle;
 	pmu_props_t* props_cpu=get_pmu_props_cpu(cpu);
@@ -590,8 +650,9 @@ free_up_err:
  * Transform an array of platform-agnostic PMC counter configurations (pmc_cfg)
  * into a low level structure that holds the necessary data to configure hardware counters.
  */
-int do_setup_pmcs(pmc_usrcfg_t* pmc_cfg, int used_pmcs_msk,core_experiment_t* exp,int cpu, int exp_idx, struct task_struct *task)
+int do_setup_pmcs(pmc_config_set_t* cconfig, int used_pmcs_msk,core_experiment_t* exp,int cpu, int exp_idx, struct task_struct *task)
 {
+	pmc_usrcfg_t* pmc_cfg=cconfig->pmc_cfg;
 	int i,j;
 	int gppmc_id=0;
 	low_level_exp* lle;

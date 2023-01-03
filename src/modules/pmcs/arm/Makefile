@@ -1,13 +1,15 @@
 MODULE_NAME=mchw_arm
 obj-m += $(MODULE_NAME).o 
+PMCSCHED-objs= 
 $(MODULE_NAME)-objs +=  mchw_core.o mc_experiments.o pmu_config_arm.o cbuffer.o monitoring_mod.o syswide.o ipc_sampling_sf_mm.o \
-				vexpress_sensors_core.o vexpress_sensors_mm.o edp_core.o pmctrack_stub.o
+				vexpress_sensors_core.o vexpress_sensors_mm.o edp_core.o pmctrack_stub.o $(PMCSCHED-objs)
+
 SYMLINKS=$(patsubst %.o,%.c,$($(MODULE_NAME)-objs))
 SOURCES=$(patsubst %.o,../%.c,$($(MODULE_NAME)-objs))
 
 USER_CFLAGS ?=
 #USER_CFLAGS ?= -ggdb -O0
-EXTRA_CFLAGS := $(USER_CFLAGS) -DCONFIG_PMC_ARM -I$(src)/../include -I$(src)/..
+EXTRA_CFLAGS += $(USER_CFLAGS) -DCONFIG_PMC_ARM -I$(src)/../include -I$(src)/..
 
 .PHONY: debug
 

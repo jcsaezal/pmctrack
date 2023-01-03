@@ -1,6 +1,8 @@
 #include <pmc/intel_rdt.h>
 #include <linux/random.h>
 #include <linux/spinlock.h>
+#include <linux/vmalloc.h>
+#include <linux/proc_fs.h>
 
 /* Basic node of the RMID pool (linked list) */
 typedef struct {
@@ -21,8 +23,8 @@ static uint_t* assigned_rmids;	/* For syswide MBM monitoring */
 static int nr_assigned_rmids;
 static intel_rdt_event_t* local_bandwidth_counts;
 
-const char* rmid_allocation_policy_str[NR_RMID_ALLOC_POLICIES]= {"FIFO","LIFO","RANDOM"};
 static intel_cmt_support_t* private_cmt_support=NULL;
+static intel_cat_support_t* private_cat_support=NULL;
 
 #ifdef DEBUG
 static void print_assigned_rmids(void)
@@ -288,7 +290,7 @@ intel_rdt_event_t* intel_rdt_syswide_read_localbw(intel_cmt_support_t* cmt_suppo
 	return local_bandwidth_counts;
 }
 
-static int qos_extensions_probe(void)
+int qos_extensions_probe(void)
 {
 	cpuid_regs_t cpuid_regs;
 
@@ -424,6 +426,7 @@ int intel_cat_initialize(intel_cat_support_t* cat_support)
 	for (i=0; i<cat_support->cat_nr_cos_available; i++)
 		wrmsr(IA32_LLC_MASK_0+i, cat_support->cat_cbm_mask, 0);
 
+	private_cat_support=cat_support;
 	return 0;
 }
 
@@ -436,7 +439,7 @@ int intel_cmt_release(intel_cmt_support_t* cmt_support)
 
 int intel_cat_release(intel_cat_support_t* cat_support)
 {
-
+	private_cat_support=NULL;
 	return 0;
 }
 
@@ -723,4 +726,202 @@ void intel_cmt_update_supported_events(intel_cmt_support_t* cmt_support,intel_cm
 		}
 	}
 
+}
+
+static struct proc_dir_entry *res_qos_dir=NULL;
+extern struct proc_dir_entry *pmc_dir;
+#define MAX_QOS_ENTRYNAME_LEN 32
+static char qos_proc_entry_name[RMID_MAX_LLCS][MAX_QOS_ENTRYNAME_LEN];
+static int nr_qos_proc_entries=0;
+static ssize_t res_qos_write(struct file *filp, const char __user *buf, size_t len, loff_t *off);
+static ssize_t res_qos_read(struct file *filp, char __user *buf, size_t len, loff_t *off);
+
+static const pmctrack_proc_ops_t res_qos_fops = {
+	.PMCT_PROC_READ = res_qos_read,
+	.PMCT_PROC_WRITE = res_qos_write,
+	.PMCT_PROC_LSEEK = default_llseek
+};
+
+
+
+
+static ssize_t res_qos_read(struct file *filp, char __user *buf, size_t len, loff_t *off)
+{
+	unsigned long base_cpu=(unsigned long)PDE_DATA(filp->f_inode);
+	int bytes_read=0;
+	char* kbuf;
+	char* dst;
+	int err=0;
+
+
+	if (*off>0)
+		return 0;
+
+	kbuf=vmalloc(PAGE_SIZE);
+
+	if (!kbuf)
+		return -ENOMEM;
+
+	dst=kbuf;
+	err=intel_cat_print_capacity_bitmasks_cpu(dst,private_cat_support,base_cpu+1);
+
+	if (err<0)
+		return err;
+
+	dst+=err;
+	bytes_read=dst-kbuf;
+
+	if (len<bytes_read) {
+		vfree(kbuf);
+		return -ENOSPC;
+	}
+
+	if (copy_to_user(buf,kbuf,bytes_read)) {
+		vfree(kbuf);
+		return -EFAULT;
+	}
+
+	(*off)+=bytes_read;
+
+	vfree(kbuf);
+	return bytes_read;
+}
+
+
+
+static ssize_t res_qos_write(struct file *filp, const char __user *buf, size_t len, loff_t *off)
+{
+	int val;
+	char *kbuf;
+	int ret=len;
+	unsigned int mask=0;
+	unsigned long base_cpu=(unsigned long)PDE_DATA(filp->f_inode);
+
+	if (*off>0)
+		return 0;
+
+	if ((kbuf=vmalloc(len+1))==NULL)
+		return -ENOMEM;
+
+	if (copy_from_user(kbuf,buf,len)) {
+		vfree(kbuf);
+		return -EFAULT;
+	}
+
+	kbuf[len]='\0';
+
+	/* Parse and change */
+	if (sscanf(kbuf,"llc_cbm%i 0x%x",&val,&mask)==2) {
+		intel_cat_set_capacity_bitmask_cpu(private_cat_support,val,mask,base_cpu+1);
+	} else
+		ret=-EINVAL;
+
+	if (ret>0)
+		(*off)+=ret;
+
+	vfree(kbuf);
+
+	return ret;
+
+}
+
+
+static inline int __rdt_get_x86_cpu_group_id(struct cpuinfo_x86 *cdata)
+{
+	unsigned char ccxs_present;
+
+	if (get_nr_coretypes()>1)
+		return get_coretype_cpu(cdata->cpu_index);
+
+	ccxs_present=(cdata->x86_vendor == X86_VENDOR_AMD) && (cdata->x86 == 0x17); // && cdata->x86_model <= 0x1F);
+
+	if (ccxs_present) {
+		return cdata->apicid>>3;
+	} else
+		return cdata->logical_die_id;
+
+}
+
+static int get_nr_qos_groups(void)
+{
+
+	struct cpuinfo_x86 *cdata=&boot_cpu_data;
+	unsigned long group_mask=0;
+	unsigned int nr_groups=0;
+	int i=0;
+	const int mask_bitwidth=sizeof(unsigned long)*8;
+	int nr_cpus=num_online_cpus();
+
+	for (i=0; i<nr_cpus; i++) {
+		cdata = &cpu_data(i);
+		group_mask|=(1<<__rdt_get_x86_cpu_group_id(cdata));
+	}
+
+	for (i=0; i<mask_bitwidth && group_mask; i++) {
+		if (group_mask & (1<<i)) {
+			nr_groups++;
+			group_mask&=~(1<<i);
+		}
+	}
+	return nr_groups;
+}
+
+int res_qos_create_proc_entries(void)
+{
+	int i=0,j;
+	int retval=0;
+	unsigned long base_cpu;
+	int cpus_per_group;
+	struct proc_dir_entry *res_qos_entry=NULL;
+
+	/* Create entry within /proc/pmc directory */
+	if ((res_qos_dir = proc_mkdir("res_qos", pmc_dir)) == NULL) {
+		printk(KERN_INFO "Couldn't create res_qos proc entry\n");
+		return -ENOMEM;
+	}
+
+	nr_qos_proc_entries = get_nr_qos_groups();
+
+	if (nr_qos_proc_entries==0) {
+		retval=-EINVAL;
+		goto out_error;
+	}
+
+	/* Important assumption. CPU IDs are consecutive in each group */
+	cpus_per_group=num_online_cpus()/nr_qos_proc_entries;
+
+	for (i = 0, base_cpu = 0; i < nr_qos_proc_entries; i++, base_cpu += cpus_per_group) {
+		sprintf(qos_proc_entry_name[i], "llc%lu-%lu", base_cpu, base_cpu + cpus_per_group-1);
+
+		res_qos_entry = proc_create_data(qos_proc_entry_name[i], 0666, res_qos_dir, &res_qos_fops, (void *)base_cpu);
+
+		if (res_qos_entry == NULL) {
+			printk(KERN_INFO "Couldn't create '%s' proc entry\n", qos_proc_entry_name[i]);
+			retval = -ENOMEM;
+			goto out_error;
+		}
+	}
+
+	return 0;
+out_error:
+	if (res_qos_dir) {
+		for (j=0; j<i; j++)
+			remove_proc_entry(qos_proc_entry_name[j],res_qos_dir);
+
+		remove_proc_entry("res_qos",pmc_dir);
+	}
+	return retval;
+}
+
+
+void res_qos_remove_proc_entries(void)
+{
+	int i;
+	if (res_qos_dir) {
+
+		for (i=0; i<nr_qos_proc_entries; i++)
+			remove_proc_entry(qos_proc_entry_name[i],res_qos_dir);
+
+		remove_proc_entry("res_qos",pmc_dir);
+	}
 }

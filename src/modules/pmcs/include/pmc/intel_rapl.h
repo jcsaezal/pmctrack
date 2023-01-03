@@ -31,6 +31,39 @@ typedef struct {
 } intel_rapl_sample_t;
 
 
+#if defined(CONFIG_PMC_AMD)
+
+static inline int intel_rapl_probe(void)
+{
+	return 0;
+}
+static inline int intel_rapl_initialize(intel_rapl_support_t* rapl_support, int use_timer)
+{
+	return 0;
+}
+static inline int intel_rapl_release(intel_rapl_support_t* rapl_support)
+{
+	return 0;
+}
+static inline int intel_rapl_print_energy_units(char* str, intel_rapl_support_t* rapl_support)
+{
+	return 0;
+}
+static inline void intel_rapl_update_energy_values(intel_rapl_support_t* rapl_support, int acum) {}
+static inline void intel_rapl_reset_energy_values(intel_rapl_support_t* rapl_support) {}
+static inline void intel_rapl_get_energy_sample(intel_rapl_support_t* rapl_support, intel_rapl_sample_t* sample) {};
+static inline intel_rapl_support_t* get_global_rapl_handler(void)
+{
+	return NULL;
+}
+static inline void intel_rapl_control_init(intel_rapl_control_t* rapl_control) {}
+static inline void intel_rapl_update_energy_values_thread(intel_rapl_support_t* rapl_support,
+        intel_rapl_control_t* rapl_control,
+        int acum) {}
+static inline void intel_rapl_get_energy_sample_thread(intel_rapl_support_t* rapl_support,
+        intel_rapl_control_t* rapl_control,
+        intel_rapl_sample_t* sample) {}
+#else
 /* Check if this processor does support Intel RAPL */
 int intel_rapl_probe(void);
 
@@ -58,5 +91,5 @@ void intel_rapl_update_energy_values_thread(intel_rapl_support_t* rapl_support,
 void intel_rapl_get_energy_sample_thread(intel_rapl_support_t* rapl_support,
         intel_rapl_control_t* rapl_control,
         intel_rapl_sample_t* sample);
-
+#endif
 #endif

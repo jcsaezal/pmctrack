@@ -1,3 +1,4 @@
+#ifndef CONFIG_PMC_AMD
 #include <pmc/intel_rapl.h>
 #include <linux/timer.h>
 #include <linux/spinlock.h>
@@ -407,3 +408,4 @@ void intel_rapl_get_energy_sample_thread(intel_rapl_support_t* rapl_support,
 	                                      sample,1);
 
 }
+#endif

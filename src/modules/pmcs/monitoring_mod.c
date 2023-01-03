@@ -92,7 +92,7 @@ static int dummy_enable_module(void)
 		printk("Can't configure global performance counters. This is too bad ... ");
 		return -EINVAL;
 	}
-	printk(KERN_ALERT "Dummy monitoring module has been loaded successfuly\n" );
+	printk(KERN_ALERT "Dummy monitoring module has been loaded successfully\n" );
 	return 0;
 }
 
@@ -275,6 +275,7 @@ static pmctrack_proc_ops_t proc_mm_manager_fops = {
 	.PMCT_PROC_WRITE = proc_mm_manager_write,
 	.PMCT_PROC_OPEN = proc_generic_open,
 	.PMCT_PROC_RELEASE = proc_generic_close,
+	.PMCT_PROC_LSEEK = default_llseek
 };
 
 
@@ -287,7 +288,7 @@ static pmctrack_proc_ops_t proc_mm_manager_fops = {
 /** @@ Architecture-specific monitoring modules @@ **/
 #if defined(CONFIG_PMC_CORE_2_DUO) || defined(CONFIG_PMC_AMD)
 extern monitoring_module_t ipc_sampling_sf_mm;
-#elif defined(CONFIG_PMC_CORE_I7) || defined(CONFIG_PMC_PERF_X86)
+#elif defined(CONFIG_PMC_CORE_I7) || defined(CONFIG_PMC_PERF_X86) || defined(CONFIG_PMC_AMD)
 extern monitoring_module_t ipc_sampling_sf_mm;
 extern monitoring_module_t intel_rdt_mm;
 extern monitoring_module_t intel_rapl_mm;
@@ -304,7 +305,9 @@ extern monitoring_module_t spower_mm;
 #ifdef CONFIG_SMART_POWER_2
 extern monitoring_module_t spower2_mm;
 #endif
-
+#if defined(CONFIG_PMC_CORE_I7) || defined(CONFIG_PMC_PERF_X86) || defined(CONFIG_PMC_AMD) || defined(CONFIG_PMC_ARM64) || defined (ODROID)
+extern monitoring_module_t pmcsched_mm;
+#endif
 
 /* Init monitoring module manager */
 int init_mm_manager(struct proc_dir_entry* pmc_dir)
@@ -351,7 +354,7 @@ int init_mm_manager(struct proc_dir_entry* pmc_dir)
 	/** @@ Architecture-specific monitoring modules @@ **/
 #if defined(CONFIG_PMC_CORE_2_DUO) || defined(CONFIG_PMC_AMD)
 	load_monitoring_module(&ipc_sampling_sf_mm);
-#elif defined(CONFIG_PMC_CORE_I7) || defined(CONFIG_PMC_PERF_X86)
+#elif defined(CONFIG_PMC_CORE_I7) || defined(CONFIG_PMC_PERF_X86) || defined(CONFIG_PMC_AMD)
 	load_monitoring_module(&ipc_sampling_sf_mm);
 	load_monitoring_module(&intel_rdt_mm);
 	load_monitoring_module(&intel_rapl_mm);

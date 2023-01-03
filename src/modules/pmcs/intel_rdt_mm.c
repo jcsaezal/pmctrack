@@ -72,17 +72,28 @@ static void intel_cmt_module_counter_usage(monitoring_module_counter_usage_t* us
 #ifdef CONFIG_PMC_CORE_I7
 	if (intel_cmt_config.use_rapl_counters) {
 		int i;
-		usage->hwpmc_mask=0;
+		if (intel_cmt_config.force_ebs_counters) {
+			usage->hwpmc_mask=0x3;
+			usage->nr_experiments=1;
+		} else {
+			usage->hwpmc_mask=0;
+			usage->nr_experiments=0;
+		}
 		usage->nr_virtual_counters=rapl_support->nr_available_power_domains; // Three domains energy usage
-		usage->nr_experiments=0;
+
 		for (i=0; i<usage->nr_virtual_counters; i++)
 			usage->vcounter_desc[i]=rapl_support->available_vcounters[i];
 	} else
 #endif
 	{
-		usage->hwpmc_mask=0;
+		if (intel_cmt_config.force_ebs_counters) {
+			usage->hwpmc_mask=0x3;
+			usage->nr_experiments=1;
+		} else {
+			usage->hwpmc_mask=0;
+			usage->nr_experiments=0;
+		}
 		usage->nr_virtual_counters=CMT_MAX_EVENTS; // L3_USAGE, L3_TOTAL_BW, L3_LOCAL_BW
-		usage->nr_experiments=0;
 		usage->vcounter_desc[0]="llc_usage";
 		usage->vcounter_desc[1]="total_llc_bw";
 		usage->vcounter_desc[2]="local_llc_bw";
@@ -93,7 +104,12 @@ static void intel_cmt_module_counter_usage(monitoring_module_counter_usage_t* us
 /* MM initialization function */
 static int intel_cmt_enable_module(void)
 {
+	int pmcs_ok=0;
+	int cmt_ok=0;
+	int cat_ok=0;
+	int mba_ok=0;
 	int retval=0;
+	int proc_entries_ok;
 
 	intel_cmt_config.rmid_allocation_policy=RMID_FIFO;
 	intel_cmt_config.use_rapl_counters=0;
@@ -108,31 +124,61 @@ static int intel_cmt_enable_module(void)
 	}
 #endif
 
+	pmcs_ok=1;
+
 	if ((retval=intel_cmt_initialize(&cmt_support)))
-		return retval;
+		goto out_error;
+
+	cmt_ok=1;
 
 	if ((retval=intel_cat_initialize(&cat_support))) {
-		intel_cmt_release(&cmt_support);
-		return retval;
+		goto out_error;
 	}
+
+	cat_ok=1;
+
+	intel_mba_initialize(&mba_support);
+
+	mba_ok=1;
+
+	if ((retval=res_qos_create_proc_entries()))
+		goto out_error;
+
+	proc_entries_ok=1;
 
 #ifdef  CONFIG_PMC_CORE_I7
 	if ((retval=edp_initialize_environment())) {
-		intel_cat_release(&cat_support);
-		intel_cmt_release(&cmt_support);
-		return retval;
+		goto out_error;
 	}
 
 	rapl_support=get_global_rapl_handler();
 #endif
-	intel_mba_initialize(&mba_support);
-
 	return 0;
+out_error:
+
+	if (proc_entries_ok)
+		res_qos_remove_proc_entries();
+
+	if (mba_ok)
+		intel_mba_release(&mba_support);
+
+	if (cat_ok)
+		intel_cat_release(&cat_support);
+
+	if (cmt_ok)
+		intel_cmt_release(&cmt_support);
+
+#ifdef  CONFIG_PMC_CORE_I7
+	if (pmcs_ok)
+		free_experiment_set(&ebs_sampling_pmc_configuration);
+#endif
+	return retval;
 }
 
 /* MM cleanup function */
 static void intel_cmt_disable_module(void)
 {
+	res_qos_remove_proc_entries();
 	intel_cmt_release(&cmt_support);
 	intel_cat_release(&cat_support);
 	intel_mba_release(&mba_support);
@@ -238,7 +284,7 @@ static void update_reset_value(core_experiment_t* core_exp, int reset_counters)
 	pmu_props_t* props_cpu=get_pmu_props_cpu(0);
 	uint64_t reset_value=0;
 
-	reset_value=(props_cpu->pmc_width_mask+1-intel_cmt_config.ebs_window*1000) & props_cpu->pmc_width_mask;
+	reset_value=(props_cpu->pmc_width_mask+1-intel_cmt_config.ebs_window*100000) & props_cpu->pmc_width_mask;
 
 	__set_reset_value(&core_exp->array[core_exp->ebs_idx],reset_value);
 
@@ -320,9 +366,11 @@ static int intel_cmt_on_new_sample(pmon_prof_t* prof,int cpu,pmc_sample_t* sampl
 	intel_cmt_thread_data_t* tdata=prof->monitoring_mod_priv_data;
 	uint_t llc_id=topology_physical_package_id(cpu),i=0;
 	int cnt_virt=0;
+#ifdef ENABLE_GLOBAL_MBM
 	intel_rdt_event_t* global_mbm_events;
 	uint64_t total_bw;
 	unsigned int rmid_count;
+#endif
 #ifdef CONFIG_PMC_CORE_I7
 	intel_rapl_sample_t rapl_sample;
 	int active_domains=0;
@@ -368,12 +416,13 @@ static int intel_cmt_on_new_sample(pmon_prof_t* prof,int cpu,pmc_sample_t* sampl
 
 		intel_cmt_update_supported_events(&cmt_support,&tdata->cmt_data,llc_id);
 
+#ifdef ENABLE_GLOBAL_MBM
 		/* Patch global data with actual aggregate counts if virt1 enabled */
 		if (prof->virt_counter_mask & 0x2) {
 			global_mbm_events=intel_rdt_syswide_read_localbw(&cmt_support,llc_id,&rmid_count,&total_bw);
 			tdata->cmt_data.last_llc_utilization[llc_id][1]=total_bw;
 		}
-
+#endif
 		/* Embed virtual counter information so that the user can see what's going on */
 		for(i=0; i<CMT_MAX_EVENTS; i++) {
 			if ((prof->virt_counter_mask & (1<<i) )) {

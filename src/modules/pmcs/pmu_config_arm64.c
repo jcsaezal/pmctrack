@@ -511,8 +511,9 @@ static void unregister_overflow_irq(void)
  * Transform an array of platform-agnostic PMC counter configurations (pmc_cfg)
  * into a low level structure that holds the necessary data to configure hardware counters.
  */
-int do_setup_pmcs(pmc_usrcfg_t* pmc_cfg, int used_pmcs_msk,core_experiment_t* exp, int cpu, int exp_idx, struct task_struct* p)
+int do_setup_pmcs(pmc_config_set_t* cconfig, int used_pmcs_msk,core_experiment_t* exp, int cpu, int exp_idx, struct task_struct* p)
 {
+	pmc_usrcfg_t* pmc_cfg=cconfig->pmc_cfg;
 	int i;
 	low_level_exp* lle;
 	pmu_props_t* props_cpu=get_pmu_props_cpu(cpu);

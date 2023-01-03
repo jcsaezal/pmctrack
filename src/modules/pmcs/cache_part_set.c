@@ -15,6 +15,75 @@
 
 #define determine_part_mask(part) ((1<<(part)->nr_ways)-1)<<(part)->low_way
 
+static int foo_curve[]= {0,1,1};
+
+struct benchmark_properties foo_properties = {
+	.name="foo-app",
+	.type=0,
+	.bizarre=0,
+	.curve=foo_curve,
+	.space_curve=foo_curve
+};
+
+static DEFINE_PER_CPU(struct clos_cpu, clos_pool);
+
+struct clos_cpu* get_clos_pool_cpu(int cpu)
+{
+	struct clos_cpu* clos_cpu=&per_cpu(clos_pool, cpu);
+	if (clos_cpu->used)
+		return NULL;
+	clos_cpu->used=1;
+	return clos_cpu;
+}
+
+static void set_clos_cpu_data(void* data)
+{
+
+	struct clos_cpu* clos_cpu=(struct clos_cpu*) data;
+	__set_rmid_and_cos(clos_cpu->rmid,clos_cpu->cos_id);
+}
+
+void initialize_clos_cpu_pool(void)
+{
+	int nr_cpus=num_online_cpus();
+	struct clos_cpu* clos_cpu;
+	int i;
+	for (i=0; i<nr_cpus; i++) {
+		clos_cpu=&per_cpu(clos_pool, i);
+		clos_cpu->used=0;
+	}
+}
+
+void update_clos_app_unlocked(sized_list_t* clos_cpu_list)
+{
+
+	struct clos_cpu* item;
+
+	if (!clos_cpu_list || is_empty_sized_list(clos_cpu_list)) {
+		return;
+	}
+
+	/* Update CLOS & RMID for each active thread, but do not remove from list */
+	for (item = head_sized_list(clos_cpu_list); item != NULL;
+	     item = next_sized_list(clos_cpu_list,item)) {
+		smp_call_function_single(item->cpu, set_clos_cpu_data, item, 0);
+	}
+}
+
+void release_clos_cpu_list(sized_list_t* clos_cpu_list)
+{
+	struct clos_cpu *item, *next;
+	item=head_sized_list(clos_cpu_list);
+	while (item!=NULL) {
+		next=next_sized_list(clos_cpu_list,item);
+		item->used=0;
+		remove_sized_list(clos_cpu_list,item);
+		item=next;
+	}
+
+}
+
+
 
 int init_cache_part_set(cache_part_set_t* part_set, intel_cat_support_t* cat_support )
 {
@@ -656,9 +725,15 @@ static noinline void trace_partition(cat_cache_part_t *part)
 	asm(" ");
 
 #ifdef DEBUG
+#ifdef PMCSCHED_DEBUG
+	if (part)
+		printk("Part=(%u-%u),#ways=%u,ID=%u,CLOS=%u,MASK=0x%x,NR_APPS=%u\n",
+		       part->low_way,part->high_way,part->nr_ways,part->part_id,part->clos_id,((1<<part->nr_ways)-1)<<part->low_way,part->nr_apps);
+#else
 	if (part)
 		trace_printk("Part=(%u-%u),#ways=%u,ID=%u,CLOS=%u,MASK=0x%x,NR_APPS=%u\n",
 		             part->low_way,part->high_way,part->nr_ways,part->part_id,part->clos_id,((1<<part->nr_ways)-1)<<part->low_way,part->nr_apps);
+#endif
 #endif
 }
 
@@ -673,7 +748,11 @@ void print_partition_info(cache_part_set_t* part_set)
 		return;
 
 #ifdef DEBUG
+#ifdef PMCSCHED_DEBUG
+	printk("************** PARTITION_INFO **************\n");
+#else
 	trace_printk("************** PARTITION_INFO **************\n");
+#endif
 #endif
 	trace_partition(NULL);
 
@@ -683,7 +762,11 @@ void print_partition_info(cache_part_set_t* part_set)
 
 	trace_partition(cur);
 #ifdef DEBUG
+#ifdef PMCSCHED_DEBUG
+	printk("************** PARTITION_INFO **************\n");
+#else
 	trace_printk("*****************************************\n");
+#endif
 #endif
 }
 

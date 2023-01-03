@@ -118,7 +118,7 @@ function update_compatible_modules(){
 		module_names=(mchw_intel_core mchw_core2 mchw_perf)
 	elif [ "$vendor_str" == "AMD" ]; then
 		compatible_modules=(amd perf)
-		module_names=(mchw_amd.ko mchw_perf)
+		module_names=(mchw_amd mchw_perf)
 	else # ARM
 		if [ $bitw -eq 32 ]; then
 			if [ "$ODROID" == "yes" ]; then

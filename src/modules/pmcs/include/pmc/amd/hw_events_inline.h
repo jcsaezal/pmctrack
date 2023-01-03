@@ -22,6 +22,7 @@
 #elif defined(__linux__)
 #include <linux/kernel.h>
 #include <linux/string.h>
+#include <linux/smp.h>
 #else	/* Solaris kernel */
 #include <sys/types.h>
 #include <sys/systm.h>
@@ -109,6 +110,28 @@ static inline   void init_hw_event ( struct hw_event* exp,ll_event_type type )
 }
 
 
+static inline void update_l3_evtsel(simple_exp *se)
+{
+	int cpu;
+	int ccx_core_id; /* Assuming SMT is disabled */
+
+	/* Do nothing for normal events */
+	if (se->pmc.pmc_address<L3_PERF_PMC_RDPMC0)
+		return;
+
+	cpu=smp_processor_id();
+	ccx_core_id=cpu%4;
+	if ((se->evtsel.new_value & 0xff)==AMD17_L3_MISSES_EVTSEL) {
+		se->pmc.pmc_address=L3_PERF_PMC_RDPMC0+ccx_core_id;
+		se->pmc.msr.address=L3_PERF_PMC_MSR0+ccx_core_id*L3_PERF_PMC_MSR_INCR;
+		se->evtsel.address =L3_PERF_EVTSEL0+ccx_core_id*L3_PERF_EVTSEL_INCR;
+	}
+	/* Clear and set right thread mask */
+	se->evtsel.new_value &=~(0xffULL<<56);
+	se->evtsel.new_value |=(0x3ULL<<(56+2*ccx_core_id));
+}
+
+
 
 /* This function starts the count of a HW event */
 static inline void  __start_count_hw_event ( struct hw_event* exp )
@@ -119,6 +142,7 @@ static inline void  __start_count_hw_event ( struct hw_event* exp )
 	switch ( exp->type ) {
 	case _SIMPLE:
 		s_exp=& ( exp->g_event.s_exp );
+		update_l3_evtsel( s_exp );
 		startCount_exp ( s_exp );
 		break;
 	default:
@@ -126,9 +150,8 @@ static inline void  __start_count_hw_event ( struct hw_event* exp )
 
 
 	}
-
-
 }
+
 
 /* This function starts the count of a HW event */
 static inline void  __restart_count_hw_event ( struct hw_event* exp )
@@ -139,6 +162,7 @@ static inline void  __restart_count_hw_event ( struct hw_event* exp )
 	switch ( exp->type ) {
 	case _SIMPLE:
 		s_exp=& ( exp->g_event.s_exp );
+		update_l3_evtsel( s_exp );
 		restartCount_exp ( s_exp );
 		break;
 	default:
@@ -199,13 +223,14 @@ static inline void __save_context_hw_event (struct hw_event* exp)
 	}
 }
 
-/* This function saves the context of a HW event */
+/* This function restores the context of a HW event */
 static inline void __restore_context_hw_event (struct hw_event* exp )
 {
 	simple_exp *s_exp=NULL;
 	switch ( exp->type ) {
 	case _SIMPLE:
 		s_exp=& ( exp->g_event.s_exp );
+		update_l3_evtsel( s_exp );
 		restoreContext_exp ( s_exp );
 		break;
 	default:
@@ -265,5 +290,21 @@ static inline uint64_t __get_reset_value_hw_event ( struct hw_event* exp )
 
 	return 0;
 }
+
+
+/* This function returns PMC's reset value */
+static inline void __set_reset_value_hw_event ( struct hw_event* exp, uint64_t reset_val)
+{
+	simple_exp *s_exp=NULL;
+	switch ( exp->type ) {
+	case _SIMPLE:
+		s_exp=& ( exp->g_event.s_exp );
+		s_exp->pmc.msr.reset_value=reset_val;
+		break;
+	default:
+		break;
+	}
+}
+
 
 #endif
