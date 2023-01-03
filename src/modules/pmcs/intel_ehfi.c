@@ -522,7 +522,7 @@ static inline void clear_update_table_bit(void)
 }
 
 
-#ifndef CONFIG_INTEL_THREAD_DIRECTOR
+#if !defined(CONFIG_INTEL_THREAD_DIRECTOR) && defined(ENABLE_TIMER)
 /* Function invoked when timer expires (fires) */
 static void ehfi_test_timer(struct timer_list *timer)
 {
