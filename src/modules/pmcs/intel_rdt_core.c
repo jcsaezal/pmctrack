@@ -100,7 +100,7 @@ int initialize_rmid_pool(void)
 	INIT_LIST_HEAD(&available_rmids);
 
 	/* Generate pseudo-randomly at first */
-	starting_item=(get_random_int()%nr_available_rmids);
+	starting_item=(get_random_long()%nr_available_rmids);
 
 	/* Allocate from the beginning */
 	for (i=starting_item; i<nr_available_rmids; i++) {
@@ -151,7 +151,7 @@ uint_t get_rmid(void)
 		rmid_node=list_entry(available_rmids.prev,rmid_node_t,links); /* list_last_entry */
 		break;
 	case RMID_RANDOM:
-		random_item=(get_random_int()%nr_available_rmids);
+		random_item=(get_random_long()%nr_available_rmids);
 		list_for_each_entry_safe(rmid_node, aux, &available_rmids, links) {
 			if ((random_item--)==0)
 				break;
@@ -747,7 +747,7 @@ static const pmctrack_proc_ops_t res_qos_fops = {
 
 static ssize_t res_qos_read(struct file *filp, char __user *buf, size_t len, loff_t *off)
 {
-	unsigned long base_cpu=(unsigned long)PDE_DATA(filp->f_inode);
+	unsigned long base_cpu=(unsigned long)PMCT_PDE_DATA(filp->f_inode);
 	int bytes_read=0;
 	char* kbuf;
 	char* dst;
@@ -795,7 +795,7 @@ static ssize_t res_qos_write(struct file *filp, const char __user *buf, size_t l
 	char *kbuf;
 	int ret=len;
 	unsigned int mask=0;
-	unsigned long base_cpu=(unsigned long)PDE_DATA(filp->f_inode);
+	unsigned long base_cpu=(unsigned long)PMCT_PDE_DATA(filp->f_inode);
 
 	if (*off>0)
 		return 0;

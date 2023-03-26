@@ -167,7 +167,7 @@ static inline int suitable_place_for_insertion(cache_part_set_t* pset, unsigned 
 	/* Check whether partitions are perfectly balanced or not */
 	if (nr_remaining_ways==0) {
 		/** Pick one randomly **/
-		hint_id=(get_random_int()%(nr_old_partitions-1));
+		hint_id=(get_random_long()%(nr_old_partitions-1));
 		hint_id++; /* Normalize gap */
 	} else {
 		max_val=-1;

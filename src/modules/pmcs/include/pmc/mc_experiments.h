@@ -754,5 +754,10 @@ typedef struct file_operations pmctrack_proc_ops_t;
 #define PMCT_PROC_MMAP mmap
 #endif
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,17,0)
+#define PMCT_PDE_DATA(inode) pde_data(inode)
+#else
+#define PMCT_PDE_DATA(inode) PDE_DATA(inode)
+#endif
 
 #endif

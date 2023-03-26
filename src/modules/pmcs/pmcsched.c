@@ -1533,6 +1533,7 @@ static int schedctl_proc_open(struct inode *inode, struct file *filp)
 	}
 
 	pdata->schedctl=handler->schedctl;
+
 #ifdef SCHEDCTL_DEBUG
 	trace_printk("Schedctl kernel pointer=0x%p\n",pdata->schedctl);
 #endif
@@ -1678,7 +1679,7 @@ noinline void trace_mt_path(pmon_prof_t* par_prof,pmcsched_thread_data_t* par_da
 
 static int pmcsched_on_fork(unsigned long clone_flags, pmon_prof_t* prof) {
 	pmcsched_thread_data_t*  data;
-	int j=0,k=0;
+	int i=0,j=0,k=0;
 	unsigned int nr_coretypes=active_scheduler->flags&PMCSCHED_AMP_SCHED?get_nr_coretypes():1;
 	int error=0;
 	pmon_prof_t *pprof = get_prof(current);
@@ -1740,6 +1741,9 @@ static int pmcsched_on_fork(unsigned long clone_flags, pmon_prof_t* prof) {
 	data->migration_data.state=MIGRATION_COMPLETED;
 
 	data->force_per_thread = 0;
+
+	for (i=0;i<MAX_SOCKETS_PLATFORM;i++)
+		data->ticks_per_socket[i]=0;
 
 #ifdef TASKLET_SIGNALS_PMCSCHED
 	/* Init tasklet, pass data = signal_tasklet */
@@ -2812,5 +2816,14 @@ noinline void trace_td_thread_exit(struct task_struct* p,
                                    unsigned long class1,
                                    unsigned long class2,
                                    unsigned long class3) {
+	asm(" ");
+}
+
+noinline void trace_sockets_stats(struct task_struct* p,
+                          unsigned int tid,
+						  unsigned long ticks_socket_0,
+						  unsigned long ticks_socket_1,
+						  unsigned long ticks_socket_2,
+		   				  unsigned long ticks_socket_3){
 	asm(" ");
 }

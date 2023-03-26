@@ -131,7 +131,7 @@ sched_timer_periodic_group (void)
 
 			/* Generate random group id */
 			do {
-				target_group=get_random_int()%cpu_group_count;
+				target_group=get_random_long()%cpu_group_count;
 			} while (target_group==llc_id);
 
 

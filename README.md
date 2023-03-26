@@ -2,18 +2,16 @@ PMCTrack is an open-source OS-oriented performance monitoring tool for GNU/Linux
 
 Despite being an OS-oriented tool, PMCTrack still allows the gathering of PMC values from user space, enabling kernel developers to carry out the necessary offline analysis and debugging to assist them during the OS-level design process. In addition, the tool provides both the OS and the userspace PMCTrack components with other insightful metrics available in modern processors that are not directly exposed as PMCs, such as cache occupancy or energy consumption. 
 
-[![Analytics](https://ga-beacon.appspot.com/UA-76163836-1/github-pmctrack/readme)](http://pmctrack.dacya.ucm.es)
-
 ## Project Contributors
 
 * Juan Carlos Saez Alcaide (<jcsaezal@ucm.es>) - Creator of PMCTrack and main maintainer 
-* Adrián García García (aka [@Mizadri](https://github.com/mizadri))
+* Carlos Bilbao (aka [@Zildj1an](https://github.com/Zildj1an))
 * Lazaro Clemen Palafox (aka [@lz-palafox](https://github.com/lz-palafox))
 * Jaime Sáez de Buruaga Brouns (aka [@jaimesaez97](https://github.com/jaimesaez97))
-* Carlos Bilbao (aka [@Zildj1an](https://github.com/Zildj1an))
 
 ## Past Contributors
 
+* Adrián García García (aka [@Mizadri](https://github.com/mizadri))
 * Jorge Casas Hernan 
 * Abel Serrano Juste (aka [@Akronix](https://github.com/Akronix))
 * Germán Franco Dorca
@@ -30,9 +28,18 @@ Despite being an OS-oriented tool, PMCTrack still allows the gathering of PMC va
 
 ## System requirements
 
-Starting from version v2.0, PMCTrack works with vanilla Linux kernels, and, in this case, Linux kernel v5.9.x and above are highly recommended to enjoy the full functionality of the tool. For earlier versions of PMCTrack, a patched Linux kernel must be installed on the machine. A number of kernel patches for various Linux versions can be found in the `src/kernel-patches` directory. The name of each patch file encodes the Linux kernel version where the patch must be applied to as well as the processor architecture supported. The format is as follows: 
+Starting from PMCTrack's v2.0, and thanks to the development efforts behind the [PMCSched](https://pmctrack-linux.github.io/pmcsched/) project, PMCTrack now works with vanilla Linux kernels. Specifically, Linux kernel v5.9.x and above are highly recommended to enjoy the full functionality of the tool, including the new [PMCSched subsystem](https://pmctrack-linux.github.io/pmcsched/). 
+
+For platforms not officially supporting kernel versions newer than v5.8.x (such as the Odroid-XU4 board), a patched Linux kernel must be installed on the machine.
+
+#### Patching the kernel  (legacy systems and older PMCTrack versions)
+
+A number of kernel patches for various Linux versions can be found in the `src/kernel-patches` directory. The name of each patch file encodes the Linux kernel version where the patch must be applied to as well as the processor architecture supported. The format is as follows: 
 
 	pmctrack_linux-<kernel_version>_<architecture>.patch 
+
+
+If a patch is not available for the desired kernel version, a custom patch can be easily created with git. More information on this can be found in this [tutorial](https://pmctrack-linux.github.io//migrating-patches). 
 
 To apply the patch run the following command from the root directory of the kernel sources:
 
@@ -45,7 +52,9 @@ To build the kernel for PMCTrack, the following option must be enabled when conf
 	CONFIG_PMCTRACK=y
 
 
-The kernel headers for the patched Linux version must be installed on the system as well. This is necessary for a successful out-of-tree build of PMCTrack's kernel module. An out-of-tree-ready Makefile can be found in the sources for the different flavors of the kernel module.
+#### Additional requirements 
+
+The kernel headers for the current Linux version must be installed on the system as well. This is necessary for a successful out-of-tree build of PMCTrack's kernel module. An out-of-tree-ready Makefile can be found in the sources for the different flavors of the kernel module.
 
 Most PMCTrack user-level components are written in C, and do not depend on any external library, (beyond the libc, of course). A separate Makefile is provided for _libpmctrack_ as well as for the various command-line tools. As such, it should be straightforward to build these software components on most Linux distributions.	
 
@@ -163,7 +172,7 @@ Now kernel-level and user-level components can be easily built with the `pmctrac
 	*** BUILD PROCESS COMPLETED SUCCESSFULLY ***
 
 
-The `pmctrack-manager` retrieves key information from the system and builds the command-line tools as well as the different flavors of the PMCTrack kernel module compatible with the current platform. If the build fails, build errors can be found in the `build.log` file created in the current directory.
+The `pmctrack-manager` command retrieves key information from the system and builds the command-line tools as well as the different flavors of the PMCTrack kernel module compatible with the current platform. If the build fails, build errors can be found in the `build.log` file created in the current directory.
 
 
 ## Building PMCTrack from source for the Intel Xeon Phi
@@ -428,7 +437,7 @@ The `pmc-events` command can be used to list the virtual counters exported by th
 
 ## Using PMCTrack from the OS scheduler
 
-PMCTrack allows any scheduling algorithm in the Linux kernel (i.e., scheduling class) to collect per-thread monitoring data, thus making it possible to drive scheduling decisions based on tasks' memory behavior or other microarchitectural properties. Turning on this mode for a particular thread from the scheduler's code boils down to activating the `prof_enabled` flag in the thread's descriptor. This flag is added to Linux's task structure when applying PMCTrack's kernel patch. 
+PMCTrack allows any scheduling algorithm in the Linux kernel (i.e., scheduling class) to collect per-thread monitoring data, thus making it possible to drive scheduling decisions based on tasks' memory behavior or other microarchitectural properties. Turning on this mode for a particular thread from the scheduler's code boils down to activating the `prof_enabled` flag in the thread's descriptor. 
 
 To ensure that the implementation of the scheduling algorithm that benefits from this feature remains architecture independent, the scheduler itself (implemented in the kernel) does not configure nor deals with performance counters directly. Instead, the active monitoring module in PMCTrack is in charge of feeding the scheduling policy with the necessary high-level performance monitoring metrics, such as a task's instruction per cycle ratio or its last-level-cache miss rate.
 

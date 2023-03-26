@@ -227,6 +227,7 @@ typedef struct migration_data {
 	int dst_group;
 	int dst_cpu;
 	cpumask_t dst_cpumask;
+	unsigned long start_time;
 	volatile migration_state_t state;
 } migration_data_t;
 
@@ -305,8 +306,9 @@ typedef struct pmcsched_thread_data {
 	memory_label_t memory_profile;
 
 	schedctl_t* schedctl;
-	/* Plugin specific fields */
+	unsigned long ticks_per_socket[MAX_SOCKETS_PLATFORM];
 
+	/* Plugin specific fields */
 } pmcsched_thread_data_t;
 
 extern intel_cmt_support_t pmcs_cmt_support;
@@ -537,13 +539,21 @@ static inline struct app_pmcsched *get_app_pmcsched(app_t *app)
 void populate_clos_to_update_list(sched_thread_group_t* group, cache_part_set_t* part_set);
 
 /*
- * Static trace points for AMP systems
+ * Static tracepoints 
  */
 void trace_amp_exit(struct task_struct* p, unsigned int tid, unsigned long ticks_big, unsigned long ticks_small);
+
 void trace_td_thread_exit(struct task_struct* p,
                           unsigned long noclass,
                           unsigned long class0,
                           unsigned long class1,
                           unsigned long class2,
                           unsigned long class3);
+
+void trace_sockets_stats(struct task_struct* p,
+                          unsigned int tid,
+						  unsigned long ticks_socket_0,
+						  unsigned long ticks_socket_1,
+						  unsigned long ticks_socket_2,
+		   				  unsigned long ticks_socket_3);
 #endif /* SCHED_PROTO_H */
