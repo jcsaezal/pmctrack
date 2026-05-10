@@ -26,6 +26,10 @@
 #define DELAY_KTHREAD  (pmcsched_config.sched_period_normal)
 #define DELAY_KTHREAD_PROFILING (pmcsched_config.sched_period_profiling)
 
+
+#define MIN(a, b) ((a) < (b) ? (a) : (b))
+#define MAX(a, b) ((a) > (b) ? (a) : (b))
+
 /* /proc/kallsyms */
 //unsigned long (*exp_wait_task_inactive)
 //          (struct task_struct *t, long match_state) = (void*)0xffffffffadca42e0;
@@ -64,7 +68,6 @@ typedef enum {
 
 #define MAX_CACHE_WAYS 20 /* Intel Broadwell-EP Setting */
 
-
 #define sched_plugin_highest (&dummy)
 
 /* Supported Scheduling policies */
@@ -84,7 +87,7 @@ extern struct sched_ops busybcs_plugin;
 static __attribute__ ((unused)) struct sched_ops* available_schedulers[NUM_SCHEDULERS]= {
 	&dummy_plugin,
 	&group_plugin,
-	&busybcs_plugin,
+	&busybcs_plugin
 };
 
 #define EBIT(nr)         (UL(1) << (nr))
@@ -92,15 +95,20 @@ static __attribute__ ((unused)) struct sched_ops* available_schedulers[NUM_SCHED
 #define PMCSCHED_CPUGROUP_LOCK    EBIT(1)
 #define PMCSCHED_CUSTOM_LOCK      EBIT(2)
 #define PMCSCHED_AMP_SCHED        EBIT(3)
-
 /*
  * Highly encouraged to not use if don't need it, to speed up things.
  */
 #define PMCSCHED_COSCHED_PLUGIN   EBIT(4)
+#define PMCSCHED_PER_THREAD_QOS_HANDLING	EBIT(5)
+
 
 /* Per-thread flags (t->flags) */
 #define PMCSCHEDT_MIGRATION_COMPLETED EBIT(0)
 #define PMCSCHEDT_IN_MIGRATION_LIST   EBIT(1)
+#define PMCSCHED_MIGRATION_DETECTED   EBIT(2)
+#define PMCSCHED_NEW_TS_IN_CONTAINER  EBIT(3)
+#define PMCSCHEDT_THREAD_EXITING	  EBIT(4)
+
 
 /* Profiling mode alters certain aspects, such as the delay in the periodic
 * kthread, avoiding overhead and other code paths.
@@ -111,7 +119,9 @@ typedef enum {
 } scheduling_mode_t;
 
 struct sched_app;
+struct app_pmcsched;
 struct pmcsched_thread_data;
+struct sched_thread_group;
 
 #define AMP_CORE_TYPES 2
 
@@ -120,6 +130,7 @@ typedef struct app_pmcsched {
 
 	sized_list_t app_active_threads;
 	struct list_head link_active_apps;
+	struct list_head link_migrating_apps;
 	/* atomic_t ref_counter; */
 
 	/* --------------------------------------------------------------------
@@ -131,18 +142,99 @@ typedef struct app_pmcsched {
 
 	sized_list_t app_stopped_threads;
 	struct list_head link_stopped_apps;
-
+	int app_runnable_threads; /***
+							   * To be maintained by those plugins that
+							   * actually need to track thread counts in a per group fashion.
+							   * It should be protected with a per-group lock.
+							   **/
 	struct sched_app* sa; /* Backwards pointer */
 	/* -- Intel CAT fields -- */
 	app_t app_cache;
 	/******** Definition of plugin-specific per-group per-app data here ****/
 } app_t_pmcsched;
 
+
+typedef enum {
+	BEST_EFFORT_CONTAINER=0,
+	HPC_CONTAINER=0,
+	QOS_CONSTRAINED_CONTAINER,
+	NR_CONTAINER_TYPES,
+} container_type_t;
+
+
+typedef enum {
+	LEQ_THAN=0,
+	GEQ_THAN,
+	NR_COMPARE_MODES
+} qos_compare_mode_t;
+
+/**
+ * Structure to keep track of user defined
+ * container properties
+ */
+typedef struct container_props {
+	int clos_id;	/* User-defined Class of Service. Default is 0 */
+	int container_group; /* -1 if it does not belong to any group */
+	/** field to
+	 * identify different types of
+	 * containers: Latency-Sensitive, HPC, best-effort
+	 *
+	 * Default is 0
+	 */
+	int container_type;
+	/**
+	 *  Qos related properties
+	 **/
+	/* Flag to enable qos at the container level */
+	unsigned char qos_control_enabled;
+	/* Timestamp reporting last qos sample  */
+	ktime_t time_last_qos_sample;
+	unsigned long qos_target;
+	unsigned long current_qos_value;
+	unsigned int cmp_mode;
+	/* to be explored */
+	unsigned long threshold;
+	int container_cache_class; /* Static */
+} container_properties_t;
+
+
+/**
+ *  To access per-llc and per-socket HW events in a convenient fashion
+ *  This is necessary among other things to measure system-wide memory bandwidth
+ *  using Intel or AMD HW support
+ **/
+typedef struct app_socket_stats {
+	uint64_t rdt_event_values[RMID_MAX_LLCS][CMT_MAX_EVENTS];
+	unsigned char valid_stats[RMID_MAX_LLCS];
+} app_socket_stats_t;
+
+
+typedef struct schedctl_notifier {
+	unsigned char is_active;
+	spinlock_t lock;
+	struct semaphore queue;
+	unsigned long last_update;
+	unsigned long last_check;
+	int tasks_waiting;
+} schedctl_notifier_t;
+
 typedef struct sched_app {
 	atomic_t ref_counter;
 	rwlock_t app_lock; /* For global app fields */
 	app_t_pmcsched pmc_sched_apps[MAX_GROUPS_PLATFORM];
 	unsigned char is_multithreaded;
+	schedctl_t* master_shared; /* Shared memory region master thread */
+	schedctl_notifier_t master_notifier;
+	struct task_struct* schedctl_signal_recipient;
+	pid_t pid; /* To keep track of the process ID */
+	struct task_struct* leader; /* This may be NULL when using containers */
+	struct css_set* cgroups; /**
+							  * To point to container
+							  * (if this is representing one )
+							  **/
+	struct list_head cgroup_node; /* Linkage for container list */
+	container_properties_t cprops;
+	app_socket_stats_t socket_stats[MAX_SOCKETS_PLATFORM];
 	/******** Definition of plugin-specific global per-app data here ****/
 } sched_app_t;
 
@@ -172,6 +264,9 @@ typedef struct sched_thread_group {
 	/* Threads to be migrated to a remote group or CPU */
 	sized_list_t migration_list;
 
+	/* Apps (app_t_pmcsched) to be migrated to a remote group or CPU */
+	sized_list_t app_migration_list;
+
 	/* Per-group list to update COS after cache-partition reconfiguration */
 	sized_list_t clos_to_update;
 
@@ -182,6 +277,8 @@ typedef struct sched_thread_group {
 	struct timer_list timer;    /* Per-Group periodic scheduler activation */
 
 	unsigned char activate_kthread;
+
+	unsigned char force_activate_timer;
 
 	int timer_period; /* To be controlled by the scheduling plugin */
 
@@ -211,9 +308,6 @@ typedef struct {
 
 extern pmcsched_config_t pmcsched_config;
 
-
-
-
 typedef enum  {
 	MIGRATION_COMPLETED=0,    /* Thread is not in migration list */
 	MIGRATION_REQUESTED,    /* The thread has been added to a migration list,
@@ -230,6 +324,11 @@ typedef struct migration_data {
 	unsigned long start_time;
 	volatile migration_state_t state;
 } migration_data_t;
+
+typedef struct running_avg_metrics {
+	unsigned long value[MAX_MULTIPLEX_EXP_PER_CORETYPE];
+	unsigned int count; /* Total sample count */
+} running_avg_metrics_t;
 
 typedef struct pmcsched_thread_data {
 
@@ -280,7 +379,7 @@ typedef struct pmcsched_thread_data {
 	unsigned int first_time;
 	intel_cmt_thread_struct_t *cmt_data; /* Pointer to per-app data */
 	intel_cmt_thread_struct_t cmt_monitoring_data; /* For per-thread handling */
-
+	unsigned int thread_cos; /* Just for scheduling plugins that perform thread-level partitioning */
 
 	struct list_head link_all_threads; /* Used in memory-aware plugin */
 	struct list_head link_dino_threads; /*TODO do you need it ?*/
@@ -290,6 +389,10 @@ typedef struct pmcsched_thread_data {
 	int pending_signal;
 
 	unsigned char force_per_thread;
+	/* To keep track of the time that a thread is asleep/active */
+	ktime_t last_time_active;
+	ktime_t last_time_inactive;
+	ktime_t time_per_state[2];
 
 #ifdef TASKLET_SIGNALS_PMCSCHED
 	struct tasklet_struct signal_tasklet;
@@ -308,13 +411,16 @@ typedef struct pmcsched_thread_data {
 	schedctl_t* schedctl;
 	unsigned long ticks_per_socket[MAX_SOCKETS_PLATFORM];
 
+	running_avg_metrics_t running_avg[AMP_CORE_TYPES];
 	/* Plugin specific fields */
 } pmcsched_thread_data_t;
 
 extern intel_cmt_support_t pmcs_cmt_support;
 extern intel_cat_support_t pmcs_cat_support;
+extern intel_mba_support_t pmcs_mba_support;
 extern unsigned char pmcsched_rdt_capable;
 extern unsigned char pmcsched_ehfi_capable;
+extern unsigned char pmcsched_mba_capable;
 
 /*
  * =========================================================
@@ -390,6 +496,15 @@ typedef struct sched_ops {
 	void (*on_migrate_thread)(pmcsched_thread_data_t* t, int prev_cpu, int new_cpu);
 
 	void (*on_tick_thread)(pmcsched_thread_data_t* t, int cpu);
+
+	/**
+	 * Two callbacks added to manage
+	 * container and plugin specific memory
+	 * (e.g. a container is registered or its last
+	 * active process or thread terminates)
+	 **/
+	int (*on_new_container)(sched_app_t* capp, struct task_struct* container_parent);
+	void (*on_free_container)(sched_app_t* capp);
 
 	/**
 	 * Specific callbacks for the plugins relying
@@ -523,7 +638,7 @@ static inline int is_part_of_multithreaded_program(pmcsched_thread_data_t* t)
 	return t->sched_app->is_multithreaded;
 }
 
-/* For LFOC-Multi*/
+/* For LFOC-Multi */
 void set_group_timer_expiration(sched_thread_group_t* group, unsigned long new_period);
 
 /* Retrieve pmcsched_app from a pointer to cache-related app */
@@ -538,22 +653,59 @@ static inline struct app_pmcsched *get_app_pmcsched(app_t *app)
  */
 void populate_clos_to_update_list(sched_thread_group_t* group, cache_part_set_t* part_set);
 
-/*
- * Static tracepoints 
+/**
+ * Function to update per-thread counters and timestamps to keep track
+ * of time in inactive/active states
  */
-void trace_amp_exit(struct task_struct* p, unsigned int tid, unsigned long ticks_big, unsigned long ticks_small);
+void update_time_state_info(pmcsched_thread_data_t *t, unsigned char is_active, ktime_t now);
 
-void trace_td_thread_exit(struct task_struct* p,
-                          unsigned long noclass,
-                          unsigned long class0,
-                          unsigned long class1,
-                          unsigned long class2,
-                          unsigned long class3);
 
-void trace_sockets_stats(struct task_struct* p,
-                          unsigned int tid,
-						  unsigned long ticks_socket_0,
-						  unsigned long ticks_socket_1,
-						  unsigned long ticks_socket_2,
-		   				  unsigned long ticks_socket_3);
+/**
+ * Function to change an application's cos ID system-wide
+ * (it does not write to architectural registers though)
+*/
+void set_sched_app_cos_id(sched_app_t* gapp, unsigned int cos_id);
+
+
+static inline int pmct_calculate_running_average(int cur_value, int last_avg, int new_factor, unsigned int upper_bound)
+{
+	/**
+	*  Formula: old_avg+  ((factor)*(current-old_avg) / 100)
+	*  Added 99 (100-1) to round up the result
+	*/
+
+	int running_avg=last_avg;
+
+	running_avg+=(new_factor*(cur_value-last_avg) + 99)/100;
+
+	if (running_avg<0)
+		return 0;
+	else if (upper_bound>0) /* Apply upper bound */
+		return MIN(upper_bound, running_avg);
+	else
+		return running_avg;
+}
+
+void pmct_update_running_avg_metrics(
+    metric_experiment_t* metric_set,
+    running_avg_metrics_t* running_avgs,
+    int new_factor
+);
+
+/*
+ * Static tracepoints
+ */
+
+enum {
+	SLOT_OCCUPANCY_DEBUG_TAG=0,
+	BW_CONSUMPTION_DEBUG_TAG,
+	SLOT_LIST_DEBUG_TAG,
+	SIGNALING_DEBUG_TAG,
+	MIGRATION_DEBUG_TAG,
+	NR_DEBUG_TAGS
+};
+
+void trace_generic_pmcsched(int tag, char* message);
+
+
 #endif /* SCHED_PROTO_H */

@@ -364,7 +364,8 @@ static void intel_cmt_on_exec(pmon_prof_t* prof) { }
 static int intel_cmt_on_new_sample(pmon_prof_t* prof,int cpu,pmc_sample_t* sample,int flags,void* data)
 {
 	intel_cmt_thread_data_t* tdata=prof->monitoring_mod_priv_data;
-	uint_t llc_id=topology_physical_package_id(cpu),i=0;
+	//uint_t llc_id=topology_physical_package_id(cpu);
+	uint_t i=0;
 	int cnt_virt=0;
 #ifdef ENABLE_GLOBAL_MBM
 	intel_rdt_event_t* global_mbm_events;
@@ -414,13 +415,13 @@ static int intel_cmt_on_new_sample(pmon_prof_t* prof,int cpu,pmc_sample_t* sampl
 		if (tdata->first_time)
 			return 0;
 
-		intel_cmt_update_supported_events(&cmt_support,&tdata->cmt_data,llc_id);
+		intel_cmt_update_supported_events(&cmt_support,&tdata->cmt_data);
 
 #ifdef ENABLE_GLOBAL_MBM
 		/* Patch global data with actual aggregate counts if virt1 enabled */
 		if (prof->virt_counter_mask & 0x2) {
-			global_mbm_events=intel_rdt_syswide_read_localbw(&cmt_support,llc_id,&rmid_count,&total_bw);
-			tdata->cmt_data.last_llc_utilization[llc_id][1]=total_bw;
+			global_mbm_events=intel_rdt_syswide_read_localbw(&cmt_support,&rmid_count,&total_bw);
+			tdata->cmt_data.last_llc_utilization[1]=total_bw;
 		}
 #endif
 		/* Embed virtual counter information so that the user can see what's going on */
@@ -428,7 +429,7 @@ static int intel_cmt_on_new_sample(pmon_prof_t* prof,int cpu,pmc_sample_t* sampl
 			if ((prof->virt_counter_mask & (1<<i) )) {
 				sample->virt_mask|=(1<<i);
 				sample->nr_virt_counts++;
-				sample->virtual_counts[cnt_virt]=tdata->cmt_data.last_llc_utilization[llc_id][i];
+				sample->virtual_counts[cnt_virt]=tdata->cmt_data.last_llc_utilization[i];
 				cnt_virt++;
 			}
 		}
@@ -482,8 +483,7 @@ static void intel_cmt_on_switch_in(pmon_prof_t* prof)
 	__set_rmid_and_cos(data->cmt_data.rmid,data->cmt_data.cos_id);
 
 	if (was_first_time) {
-		uint_t llc_id=topology_physical_package_id(smp_processor_id());
-		intel_cmt_update_supported_events(&cmt_support,&data->cmt_data,llc_id);
+		intel_cmt_update_supported_events(&cmt_support,&data->cmt_data);
 	}
 
 #ifdef CONFIG_PMC_CORE_I7

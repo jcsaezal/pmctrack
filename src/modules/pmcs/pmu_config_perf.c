@@ -67,6 +67,8 @@ static struct pmctrack_cpu_model cpu_models[]= {
 	{86,"broadwell"},
 	{85,"skylake"},
 	{151,"alderlake"},
+	{152,"alderlake"},
+	{183,"raptorlake"},
 	{0,NULL} /* Marker */
 };
 
@@ -319,10 +321,15 @@ static void init_pmu_props_cpu(void* dummy)
 
 #if defined(CONFIG_PMC_AMD)
 	props->coretype=0; /* For now we do nothing fancy here*/
-	coretype_cpu_static[this_cpu]=0;
+	if (forced_amp_topology) {
+		coretype_cpu_static[this_cpu]=this_cpu_read(cpu_is_small)==1?0:1;
+	}
+	props->coretype=coretype_cpu_static[this_cpu];
 #else
 	switch(model) {
 	case 151:
+	case 152:
+	case 183:
 		/* Check hybrid CPU */
 		hw_coretype=get_this_hybrid_cpu_type();
 		if (hw_coretype==PMCT_X86_HYBRID_BIG_CORE) {
@@ -332,9 +339,11 @@ static void init_pmu_props_cpu(void* dummy)
 		}
 		break;
 	default:
-		props->coretype=0; /* For now we do nothing fancy here*/
 		coretype_cpu_static[this_cpu]=0;
-		break;
+		if (forced_amp_topology) {
+			coretype_cpu_static[this_cpu]=this_cpu_read(cpu_is_small)==1?0:1;
+		}
+		props->coretype=coretype_cpu_static[this_cpu];
 	}
 
 #endif
@@ -399,10 +408,12 @@ void init_pmu_props(void)
 	on_each_cpu(init_pmu_props_cpu, NULL, 1);
 
 	/***
-	 * Add special treatment for Intel Alderlake CPUS
-	 * as all cores are exposed with exactly the same model
+	 * Add special treatment for two cases
+	 * 1) Intel Alder/Raptor Lake CPUs, where as all cores
+	 *  are exposed with exactly the same model
+	 * 2) AMP topology forced by the user (testing purposes)
 	 **/
-	hybrid_cpu=(pmu_props_cpu[0].processor_model==151);
+	hybrid_cpu=is_intel_hybrid_processor(pmu_props_cpu[0].processor_model) || forced_amp_topology;
 
 	if (hybrid_cpu) {
 		/* For now do nothing fancy here */

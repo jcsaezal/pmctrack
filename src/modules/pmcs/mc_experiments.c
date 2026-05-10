@@ -249,7 +249,7 @@ free_allocated_experiments:
 }
 #endif
 
-#ifndef CONFIG_PMCTRACK
+#if !defined(CONFIG_PMCTRACK) && !defined(CONFIG_MINIMAL_PMCTRACK)
 DEFINE_RWLOCK(gone_tasks_lock);
 LIST_HEAD(gone_tasks);
 

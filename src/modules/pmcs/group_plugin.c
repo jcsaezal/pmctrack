@@ -103,8 +103,8 @@ sched_timer_periodic_group (void)
 		first=head_sized_list(&cur->app_active_threads);
 		app=&cur->app_cache;
 
-		intel_cmt_update_supported_events(&pmcs_cmt_support,&app->app_cmt_data,llc_id);
-		cache_usage=app->app_cmt_data.last_llc_utilization[llc_id][0];
+		intel_cmt_update_supported_events(&pmcs_cmt_support,&app->app_cmt_data);
+		cache_usage=app->app_cmt_data.last_llc_utilization[0];
 		/* Retrieve command from path */
 		// get_task_comm(comm,first->prof->this_tsk);
 		dest+=sprintf(dest,"%d(%d - %llu - %zuT) ",app->process->tgid,app->app_cmt_data.rmid,cache_usage,sized_list_length(&cur->app_active_threads));

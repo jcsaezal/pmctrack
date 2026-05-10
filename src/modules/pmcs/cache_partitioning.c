@@ -1522,13 +1522,19 @@ clustering_solution_t*  pair_clustering_core2(sized_list_t* apps, int nr_apps, i
 /* LFOC and LFOC+ cache-clustering algorithms  */
 /* ########################################### */
 
+static inline unsigned int streaming_is_special(app_t* app)
+{
+	return (app->flags & ISOLATED_STREAMING);
+}
 
-int  lfoc_list(cluster_set_t* clusters, sized_list_t* apps, int nr_apps,  int nr_ways, int max_streaming, int use_pair_clustering, int max_nr_ways_streaming_part, int collide_streaming_parts)
+
+int  lfoc_gen(cluster_set_t* clusters, sized_list_t* apps, int nr_apps,  int nr_ways, int max_streaming, lfoc_mode_t mode, int max_nr_ways_streaming_part, int collide_streaming_parts, int use_full_cache_light)
 {
 #define LIGHT_PER_STREAMING 2
-#define MAX_WAYS_STREAMING 2
+#define MAX_WAYS_STREAMING 4 /* Changed from 2 to 4 ways */
 	const int streaming_part_size=max_nr_ways_streaming_part;
 	app_t* app;
+	app_t* next;
 	clustering_solution_t* cs;
 	int streaming_per_part,nr_reserved_ways;
 	int nr_light_sharing=0,nr_clusters=0,nr_sensitive=0,nr_streaming=0;
@@ -1544,9 +1550,15 @@ int  lfoc_list(cluster_set_t* clusters, sized_list_t* apps, int nr_apps,  int nr
 	int nr_streaming_partitions=0;
 	int nr_unkown=0;
 	int nr_actual_streaming=0;
-	cluster_info_t*  cur;
+	cluster_info_t *cur,*shared_cluster;
+	int remaining_ways,nr_fair_ways,nr_remaining_apps;
+	unsigned long total_weight = 0;
+	unsigned long min_weight = 0;
+	unsigned int mildly_sensitive_apps = 0;
+	unsigned int nr_special_streaming;
+	unsigned int nr_regular_streaming  = 0;
 
-	nr_light_sharing=nr_clusters=nr_sensitive=nr_streaming=0;
+	nr_light_sharing=nr_clusters=nr_sensitive=nr_streaming=nr_special_streaming=0;
 
 	init_cluster_set(clusters);
 
@@ -1572,6 +1584,7 @@ int  lfoc_list(cluster_set_t* clusters, sized_list_t* apps, int nr_apps,  int nr
 		if (classification==CACHE_CLASS_SENSITIVE) {
 			insert_sized_list_tail(&sensitive_apps,app);
 			nr_sensitive_apps++;
+			total_weight+=app->sensitivity; // for LFOC-S
 		} else {
 			if (classification==CACHE_CLASS_LIGHT) {
 				insert_sized_list_tail(&light_sharing_apps,app);
@@ -1580,9 +1593,12 @@ int  lfoc_list(cluster_set_t* clusters, sized_list_t* apps, int nr_apps,  int nr
 				/* Streaming is 1 or any other (including unkown) */
 				insert_sized_list_tail(&streaming_apps,app);
 				nr_streaming++;
-				if (classification==CACHE_CLASS_STREAMING)
+				if (classification==CACHE_CLASS_STREAMING) {
 					nr_actual_streaming++;
-				else
+					if (streaming_is_special(app)) {
+						nr_special_streaming++;
+					}
+				} else
 					nr_unkown++;
 			}
 		}
@@ -1610,10 +1626,11 @@ int  lfoc_list(cluster_set_t* clusters, sized_list_t* apps, int nr_apps,  int nr
 	if (nr_streaming>0) {
 		/* Calculate number of ways reserved for streaming */
 		streaming_per_part=max_streaming;
-		nr_reserved_ways=((nr_streaming+streaming_per_part-1)*streaming_part_size)/streaming_per_part;  /* Round up */
+		nr_regular_streaming=nr_streaming-nr_special_streaming;
 
+		nr_reserved_ways=nr_special_streaming*streaming_part_size+ ((nr_regular_streaming+streaming_per_part-1)*streaming_part_size)/streaming_per_part;  /* Round up */
 
-		if (nr_reserved_ways>MAX_WAYS_STREAMING) {
+		if (nr_special_streaming==0 && nr_reserved_ways>MAX_WAYS_STREAMING) {
 			nr_reserved_ways=MAX_WAYS_STREAMING;
 			/* Raise cap */
 			streaming_per_part=(nr_streaming+nr_reserved_ways-1)/(nr_reserved_ways/streaming_part_size);
@@ -1622,7 +1639,7 @@ int  lfoc_list(cluster_set_t* clusters, sized_list_t* apps, int nr_apps,  int nr
 		nr_reserved_ways=0;
 	}
 
-	if (use_pair_clustering && nr_sensitive_apps>1) {
+	if (mode==LFOC_PLUS_MD && nr_sensitive_apps>1) {
 		/* Invoke pair_clustering for sensitive */
 		cs=pair_clustering_core2(&sensitive_apps,sized_list_length(&sensitive_apps),nr_ways-nr_reserved_ways,clusters);
 
@@ -1649,34 +1666,135 @@ int  lfoc_list(cluster_set_t* clusters, sized_list_t* apps, int nr_apps,  int nr
 		}
 	} else {
 
-		/* Add sensitive clusters right here */
-		for (i=0, app=head_sized_list(&sensitive_apps); app!=NULL; i++,app=next_sized_list(&sensitive_apps,app)) {
-			cur=allocate_new_cluster(clusters);
-			add_app_to_cluster(cur,app);
-			pos_sensitive[nr_sensitive]=nr_sensitive;
-			nr_sensitive++;
-			nr_clusters++;
-		}
+		switch (mode) {
+		case LFOC_LEGACY_MD:
+		case LFOC_PLUS_MD:
 
-		/* TODO: FIX If too many ways (assert) */
-		if (nr_clusters>nr_ways)
-			return -ENOSPC;
+			/* TODO: FIX If too many ways (assert) */
+			if (sized_list_length(&sensitive_apps)>nr_ways)
+				goto use_single_sensitive_partition;
 
-		/** Apply UCP to set of sensitive benchmarks **/
-		lookahead_algorithm_list(&sensitive_apps, nr_sensitive, nr_ways-nr_reserved_ways, ucp_solution,0);
+			/* Add sensitive clusters right here */
+			for (i=0, app=head_sized_list(&sensitive_apps); app!=NULL; i++,app=next_sized_list(&sensitive_apps,app)) {
+				cur=allocate_new_cluster(clusters);
+				add_app_to_cluster(cur,app);
+				pos_sensitive[nr_sensitive]=nr_sensitive;
+				nr_sensitive++;
+				nr_clusters++;
+			}
 
-		for (i=0; i<clusters->nr_clusters; i++) {
-			cluster_info_t* cluster=cluster_by_idx(clusters,i);
-			cluster->nr_ways=ucp_solution[i];
+			/** Apply UCP to set of sensitive benchmarks **/
+			lookahead_algorithm_list(&sensitive_apps, nr_sensitive, nr_ways-nr_reserved_ways, ucp_solution,0);
 
-			if (min_ways_ucp>cluster->nr_ways) {
-				min_ways_ucp=cluster->nr_ways;
+			for (i=0; i<clusters->nr_clusters; i++) {
+				cluster_info_t* cluster=cluster_by_idx(clusters,i);
+				cluster->nr_ways=ucp_solution[i];
+
+				if (min_ways_ucp>cluster->nr_ways) {
+					min_ways_ucp=cluster->nr_ways;
+					fewer_ways_cluster=i;
+				}
+			}
+
+			break;
+		case LFOC_EVEN_SENSITIVE_MD:
+			nr_sensitive=sized_list_length(&sensitive_apps);
+			nr_remaining_apps=nr_sensitive;
+			remaining_ways=nr_ways-nr_reserved_ways;
+
+			for (i=0, app=head_sized_list(&sensitive_apps); app!=NULL && nr_remaining_apps>0; i++,app=next_sized_list(&sensitive_apps,app)) {
+				nr_fair_ways=(remaining_ways+(nr_remaining_apps-1))/nr_remaining_apps;
+
+				cur=allocate_new_cluster(clusters);
+				nr_clusters++;
+				cur->nr_ways=nr_fair_ways;
+				add_app_to_cluster(cur,app);
+
+				pos_sensitive[i]=i;
+				remaining_ways-=nr_fair_ways;
+				nr_remaining_apps--;
+				/* keep the last one as default */
 				fewer_ways_cluster=i;
 			}
+
+			break;
+		case LFOC_NOPART_SENSITIVE_MD:
+use_single_sensitive_partition:
+			nr_sensitive=sized_list_length(&sensitive_apps);
+			cur=allocate_new_cluster(clusters);
+			nr_clusters++;
+			cur->nr_ways=nr_ways-nr_reserved_ways;
+			fewer_ways_cluster=0;
+
+			for (i=0, app=head_sized_list(&sensitive_apps); app!=NULL; i++,app=next_sized_list(&sensitive_apps,app)) {
+				add_app_to_cluster(cur,app);
+				pos_sensitive[i]=0;
+			}
+			break;
+		case LFOC_S_MD:
+			/* Force parameter */
+			use_full_cache_light=1;
+			/* Step 1: determine min_weight */
+			remaining_ways=nr_ways-nr_reserved_ways;
+			min_weight=total_weight/remaining_ways;
+			fewer_ways_cluster=0; // Not 100% sure of this
+
+			/**
+			 * Determine applications with small sensitivity
+			 * (to be added to single shared partition )
+			**/
+			mildly_sensitive_apps = 0;
+
+			for (app=head_sized_list(&sensitive_apps); app!=NULL; app=next) {
+				/* keep track of next (in case we remove it) */
+				next=next_sized_list(&sensitive_apps,app);
+
+				if (app->sensitivity<=min_weight) {
+					mildly_sensitive_apps++;
+
+					/* first app: allocate empty cluster  */
+					if (mildly_sensitive_apps==1) {
+						shared_cluster=allocate_new_cluster(clusters);
+						shared_cluster->nr_ways=0;
+						nr_clusters++;
+					}
+
+					add_app_to_cluster(shared_cluster,app);
+					shared_cluster->nr_ways++;
+					remaining_ways--;
+					total_weight-=app->sensitivity;
+
+					// remove app from sensitive list
+					remove_sized_list(&sensitive_apps,app);
+				}
+			}
+
+			/**
+			 * Step 2: assign remaining ways among truly sensitive
+			 * applications
+			 */
+			for (app=head_sized_list(&sensitive_apps); app!=NULL;
+			     app=next_sized_list(&sensitive_apps,app)) {
+				nr_fair_ways=((remaining_ways*app->sensitivity)+(total_weight-1))/total_weight;
+
+				if (nr_fair_ways<1)
+					nr_fair_ways=1;
+
+				cur=allocate_new_cluster(clusters);
+				nr_clusters++;
+				add_app_to_cluster(cur,app);
+				cur->nr_ways=nr_fair_ways;
+
+				remaining_ways-=nr_fair_ways;
+				total_weight-=app->sensitivity;
+			}
+
+			break;
+		default:
+			break;
 		}
 
 	}
-
 	/* Default cluster is cluster with fewer ways */
 	clusters->default_cluster=fewer_ways_cluster;
 
@@ -1684,18 +1802,30 @@ int  lfoc_list(cluster_set_t* clusters, sized_list_t* apps, int nr_apps,  int nr
 	if (nr_reserved_ways) {
 		app_t* cur_app=head_sized_list(&streaming_apps);
 
-		if (collide_streaming_parts) {
-			cluster_info_t* cluster=allocate_new_cluster(clusters);
-			cluster->nr_ways=nr_reserved_ways;
+		if (collide_streaming_parts || nr_special_streaming>0) {
+			cluster_info_t *common_cluster,*isolated_cluster;
+			int nr_ways_normal_streaming=nr_reserved_ways-nr_special_streaming*streaming_part_size;
 
-			for (j=0; j<nr_streaming; j++,cur_app=next_sized_list(&streaming_apps,cur_app))
-				add_app_to_cluster(cluster,cur_app);
+			if (nr_ways_normal_streaming>0) {
+				common_cluster=allocate_new_cluster(clusters);
+				common_cluster->nr_ways=nr_ways_normal_streaming;
+				/* Default cluster is the shared streaming cluster */
+				clusters->default_cluster=nr_clusters;
+				pos_streaming[nr_streaming_partitions]=nr_clusters++;
+				nr_streaming_partitions++;
+			}
 
-			/* Keep track of clusters */
-			/* Default cluster is now the last streaming cluster */
-			clusters->default_cluster=nr_clusters;
-			pos_streaming[0]=nr_clusters;
-			nr_streaming_partitions=1;
+			for (j=0; j<nr_streaming; j++,cur_app=next_sized_list(&streaming_apps,cur_app)) {
+				if (streaming_is_special(cur_app)) {
+					isolated_cluster=allocate_new_cluster(clusters);
+					isolated_cluster->nr_ways=streaming_part_size;
+					add_app_to_cluster(isolated_cluster,cur_app);
+					pos_streaming[nr_streaming_partitions]=nr_clusters++;
+					nr_streaming_partitions++;
+				} else {
+					add_app_to_cluster(common_cluster,cur_app);
+				}
+			}
 		} else {
 			int remaining_streaming=nr_streaming;
 			int proportional_streaming;
@@ -1731,8 +1861,24 @@ int  lfoc_list(cluster_set_t* clusters, sized_list_t* apps, int nr_apps,  int nr
 	Traverse streaming first ... [Require sorted stuff] **/
 
 	if (nr_light_sharing>0) {
+		if (use_full_cache_light) {
+			/** NOTE: The code that enters here ensures
+			 * that nr_light_sharing==0, so the loop at the
+			 * end of the function has no effect.
+			 */
 
-		if (nr_reserved_ways>0) {
+			/* Create additional partition sharing all cache ways  */
+			cur=allocate_new_cluster(clusters);
+			cur->nr_ways=nr_ways;
+
+			/* Assign all light sharing apps to this partition */
+			while (nr_light_sharing>0) {
+				app_t* app=head_sized_list(&light_sharing_apps);
+				remove_sized_list(&light_sharing_apps,app);
+				add_app_to_cluster(cur,app);
+				nr_light_sharing--;
+			}
+		} else if (nr_reserved_ways>0) {
 			int idx_stream=0;
 
 			while  ((nr_light_sharing>0) && (idx_stream<nr_streaming_partitions)) {
@@ -1780,6 +1926,16 @@ void noinline trace_clustering_solution(char* msg)
 #ifdef DEBUG
 	trace_printk("%s\n",msg);
 #endif
+}
+
+int  lfoc_list(cluster_set_t* clusters, sized_list_t* apps, int nr_apps,  int nr_ways, int max_streaming, int use_pair_clustering, int max_nr_ways_streaming_part, int collide_streaming_parts)
+{
+	lfoc_mode_t mode=use_pair_clustering? LFOC_PLUS_MD: LFOC_LEGACY_MD;
+
+	return lfoc_gen(clusters, apps, nr_apps,  nr_ways,
+	                max_streaming, mode,
+	                max_nr_ways_streaming_part,
+	                collide_streaming_parts, 0 /* do not use all cache for light sharing */);
 }
 
 /* Debugging function to trace_print_k resulting clustering solution */
@@ -1847,8 +2003,120 @@ void trivial_part(cluster_set_t* clusters, sized_list_t* apps, int nr_apps,  int
 		add_app_to_cluster(cur,app);
 }
 
+void equal_part(cluster_set_t* clusters, sized_list_t* apps, int nr_apps,  int nr_ways)
+{
+	cluster_info_t*  cur;
+	app_t* app;
+	int remaining_ways=nr_ways;
+	int nr_remaining_apps=nr_apps;
+	int nr_fair_ways=0;
+
+	/**
+	 *  It is not possible to split the LLC.
+	 *  Use simplest approach.
+	 */
+	if (nr_apps>nr_ways) {
+		trivial_part(clusters,apps,nr_apps,nr_ways);
+		return;
+	}
+
+	init_cluster_set(clusters);
+
+	/* Set default */
+	clusters->default_cluster=0;
+
+	for (app=head_sized_list(apps); app!=NULL; app=next_sized_list(apps,app)) {
+		nr_fair_ways=(remaining_ways+(nr_remaining_apps-1))/nr_remaining_apps;
+
+		cur=allocate_new_cluster(clusters);
+		cur->nr_ways=nr_fair_ways;
+
+		add_app_to_cluster(cur,app);
+
+		remaining_ways-=nr_fair_ways;
+		nr_remaining_apps--;
+	}
+}
+
+void equal_part_intensive(cluster_set_t* clusters, sized_list_t* apps, int nr_apps,  int nr_ways)
+{
+	cluster_info_t *cur,*shared_cluster;
+	app_t* app;
+	int remaining_ways;
+	int nr_remaining_apps;
+	int nr_fair_ways=0;
+	sized_list_t light_sharing_apps, intensive_apps;
+	int i =0;
+	int nr_intensive, nr_light_sharing;
+
+	init_cluster_set(clusters);
+
+	init_sized_list (&light_sharing_apps,
+	                 offsetof(app_t,
+	                          link_class));
+
+	init_sized_list (&intensive_apps,
+	                 offsetof(app_t,
+	                          link_class));
+
+	nr_intensive=nr_light_sharing=0;
+
+	/**
+	 *  It is not possible to split the LLC.
+	 *  Use simplest approach.
+	 */
+	if (nr_intensive>nr_ways) {
+		trivial_part(clusters,apps,nr_apps,nr_ways);
+		return;
+	}
+
+	/* Build linked lists */
+	for (i=0, app=head_sized_list(apps); i<nr_apps; i++,app=next_sized_list(apps,app)) {
+		if (app->type==CACHE_CLASS_LIGHT) {
+			insert_sized_list_tail(&light_sharing_apps,app);
+			nr_light_sharing++;
+		} else {
+			insert_sized_list_tail(&intensive_apps,app);
+			nr_intensive++;
+		}
+	} /* End for */
+
+
+	/* Set default */
+	clusters->default_cluster=0;
+
+	/* Create shared partition sharing all cache ways for LS apps */
+	shared_cluster=allocate_new_cluster(clusters);
+	shared_cluster->nr_ways=nr_ways;
+
+	/* Assign all light sharing apps to this partition */
+	while (nr_light_sharing>0) {
+		app_t* app=head_sized_list(&light_sharing_apps);
+		remove_sized_list(&light_sharing_apps,app);
+		add_app_to_cluster(shared_cluster,app);
+		nr_light_sharing--;
+	}
+
+	nr_remaining_apps=nr_intensive;
+	remaining_ways=nr_ways;
+
+	/* Equal part among intensive applications */
+	for (app=head_sized_list(&intensive_apps); app!=NULL; app=next_sized_list(&intensive_apps,app)) {
+		nr_fair_ways=(remaining_ways+(nr_remaining_apps-1))/nr_remaining_apps;
+
+		cur=allocate_new_cluster(clusters);
+		cur->nr_ways=nr_fair_ways;
+
+		add_app_to_cluster(cur,app);
+
+		remaining_ways-=nr_fair_ways;
+		nr_remaining_apps--;
+	}
+
+}
+
 /* Map specific clustering approach to actual HW partitions */
-void enforce_cluster_partitioning(cache_part_set_t* part_set, cluster_set_t* clusters)
+void enforce_cluster_partitioning(cache_part_set_t* part_set, cluster_set_t* clusters, unsigned char externally_managed_cos_ids)
 {
 	unsigned int nr_clusters=clusters->nr_clusters;
 	sized_list_t* part_list=get_assigned_partitions(part_set);
@@ -1895,12 +2163,16 @@ void enforce_cluster_partitioning(cache_part_set_t* part_set, cluster_set_t* clu
 	for (i=0; i<clusters->nr_clusters; i++) {
 		cluster_info_t* cluster=cluster_by_idx(clusters,i);
 
+		/**######################################################################*/
+		/**###### THIS SHOULD BE REMOVED AS IT HAS NO EFFECT I BELIEVE ##########*/
+
 		/* Determine on which CAT partition to map this cluster */
 		app=head_sized_list(&cluster->apps);
 
 		/* Get the first one available */
 		while (app!=NULL && !part_available((partition=app->cat_partition),used_clusters,reserved_clusters))
 			app=next_sized_list(&cluster->apps,app);
+		/**######################################################*/
 
 		/* Search for empty partition */
 		j=0;
@@ -1920,9 +2192,18 @@ void enforce_cluster_partitioning(cache_part_set_t* part_set, cluster_set_t* clu
 		if (clusters->default_cluster==i)
 			update_default_partition(part_set,partition);
 
-		/* Reconfigure partition at the low level (CAT) */
-		reconfigure_partition(partition,cluster->nr_ways,nr_ways-low_way-cluster->nr_ways);
-		low_way+=cluster->nr_ways;
+		/* Reconfigure partition structure and update HW if cos are not externally managed */
+
+		if (cluster->nr_ways==nr_ways) {
+			/**
+			* Special case: partition that occupies the full LLC (for LS)
+			* Do not update low_way in this case
+			*/
+			reconfigure_partition_gen(partition,cluster->nr_ways,0,!externally_managed_cos_ids);
+		} else {
+			reconfigure_partition_gen(partition,cluster->nr_ways,nr_ways-low_way-cluster->nr_ways,!externally_managed_cos_ids);
+			low_way+=cluster->nr_ways;
+		}
 
 		/* Move applications to the right place */
 		for (app=head_sized_list(&cluster->apps); app!=NULL; app=next_sized_list(&cluster->apps,app)) {
@@ -1930,8 +2211,21 @@ void enforce_cluster_partitioning(cache_part_set_t* part_set, cluster_set_t* clu
 			/* MAIN FINE-GRAINED TRACING POINT */
 			trace_app_assignment(now, app, partition);
 
-			if (app->cat_partition!=partition)
+			if (app->cat_partition!=partition) {
 				move_app_to_partition(app,partition);
+			} else {
+				/**
+				 * The partition associated with the application
+				 * may have changed in reconfigure_partition_gen()
+				 * so when COS IDs are externally managed we must
+				 * update the underlying architectural registers.
+				 *
+				 * Note that if the application was moved, move_app_to_partition()
+				 * already takes care of making that happen.
+				 **/
+				if (externally_managed_cos_ids)
+					refresh_hw_partition_app(app);
+			}
 		}
 	}
 

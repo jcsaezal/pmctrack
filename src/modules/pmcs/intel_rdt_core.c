@@ -25,6 +25,8 @@ static intel_rdt_event_t* local_bandwidth_counts;
 
 static intel_cmt_support_t* private_cmt_support=NULL;
 static intel_cat_support_t* private_cat_support=NULL;
+static intel_mba_support_t* private_mba_support=NULL;
+static intel_l2cat_support_t* private_l2cat_support=NULL;
 
 #ifdef DEBUG
 static void print_assigned_rmids(void)
@@ -347,6 +349,37 @@ int amd_qos_probe(void)
 	return qos_extensions_probe();
 }
 
+int l2_cat_probe(void)
+{
+	cpuid_regs_t cpuid_regs;
+	pmu_props_t* props=get_pmu_props_cpu(0);
+
+	if (boot_cpu_data.x86_vendor!=X86_VENDOR_INTEL)
+		return -ENOTSUPP;
+
+	// Hack raptor lake
+	if (props->processor_model==183)
+		return 0;
+
+	/**
+	 * Instructions for Intel L2 CAT Detection
+	 * can be found in Section 18.19.4.2 of IntelSDM
+	 * Cache Allocation Technology: Resource Type and Capability Enumeration
+	 **/
+
+	/* Check capabilities*/
+	cpuid_regs.eax=0x10;
+	cpuid_regs.ecx=0x0;
+	cpuid_regs.ebx=cpuid_regs.edx=0x0;
+
+	run_cpuid(cpuid_regs);
+
+	if (!(cpuid_regs.ebx & (1<<2)))
+		return -ENOTSUPP;
+
+	return 0;
+
+}
 
 int intel_cmt_initialize(intel_cmt_support_t* cmt_support)
 {
@@ -443,6 +476,70 @@ int intel_cat_release(intel_cat_support_t* cat_support)
 	return 0;
 }
 
+int amd_mba_initialize(intel_mba_support_t* mba_support)
+{
+	cpuid_regs_t cpuid_regs;
+	unsigned int bw_len;
+
+
+
+	/* Check AMD MBA CAP */
+	cpuid_regs.eax=0x80000020;
+	cpuid_regs.ecx=0;
+	cpuid_regs.ebx=cpuid_regs.edx=0x0;
+	run_cpuid(cpuid_regs);
+
+	mba_support->mba_is_supported=cpuid_regs.ebx & (1<<1); // || props->processor_model==85; /* Skylake */
+
+
+	if (!mba_support->mba_is_supported) {
+		printk("AMD is NOT supported\n");
+	} else {
+		printk("AMD MBA is supported\n");
+	}
+
+
+	mba_support->start_msr=L3QOS_BW_CONTROL_0;
+
+	/*
+	 * Query CPUID_Fn80000020_EDX_x01 for MBA and
+	 * CPUID_Fn80000020_EDX_x02 for SMBA
+	 */
+	//subleaf = (r->rid == RDT_RESOURCE_SMBA) ? 2 :  1;
+
+
+
+	/* Check MBA capabilities (assume CAT is supported for now) */
+	cpuid_regs.eax=0x80000020;
+	cpuid_regs.ecx=1;
+	cpuid_regs.ebx=cpuid_regs.edx=0x0;
+	run_cpuid(cpuid_regs);
+
+	/** From official AMD documentation
+
+	The fields within a L3QOS_BW_CONTROL_n register are:
+		- U (Unlimited) – bit <BW_LEN>. When set, indicates that threads belonging to this COS are unlimited in bandwidth and the contents of the BW field are ignored. At reset, the U bit for all L3QOS_BW_CONTROL_n MSRs are set.
+		- BW (Bandwidth) – bits BW_LEN-1:0. Specifies a limit on the total L3 external bandwidth, expressed in 1/8 GB/s increments, for all threads running under COS <n>.
+	**/
+
+	mba_support->mba_nr_cos_available=(cpuid_regs.edx & 0xffffffff) +1;
+	mba_support->mba_is_linear=0; //AMD NO throtling
+	bw_len=(cpuid_regs.eax & 0xffffffff);
+	mba_support->mba_max_throtling=(1<<bw_len)-1;
+
+	printk(KERN_INFO "*** AMD MBA Info ***\n");
+	printk(KERN_INFO "Available # Class of Service IDs:: %u\n", mba_support->mba_nr_cos_available);
+	printk(KERN_INFO "Max bandwidth setting:: %d\n",mba_support->mba_max_throtling);
+
+	if (mba_support->mba_is_supported)
+		private_mba_support=mba_support;
+
+	return !mba_support->mba_is_supported;
+
+
+	return 1;
+}
+
 
 int intel_mba_initialize(intel_mba_support_t* mba_support)
 {
@@ -450,8 +547,13 @@ int intel_mba_initialize(intel_mba_support_t* mba_support)
 #ifdef MBA_PROCESSOR_ERRATA
 	pmu_props_t* props=get_pmu_props_cpu(smp_processor_id());
 #endif
+	if (boot_cpu_data.x86_vendor==X86_VENDOR_AMD)
+		return amd_mba_initialize(mba_support);
 
-	/* Check CAT capabilities (assume CAT is supported for now) */
+	/* Check MBA capabilities (assume CAT is supported for now) */
+
+	//{ X86_FEATURE_MBA,		CPUID_EBX,  3, 0x00000010, 0 },
+
 	cpuid_regs.eax=0x10;
 	cpuid_regs.ecx=0x0;
 	cpuid_regs.ebx=cpuid_regs.edx=0x0;
@@ -465,6 +567,7 @@ int intel_mba_initialize(intel_mba_support_t* mba_support)
 		printk("Intel MBA is NOT supported\n");
 	}
 
+	mba_support->start_msr=IA32_L2_QOS_EXT_BW_THRTL_0;
 
 	cpuid_regs.eax=0x10;
 	cpuid_regs.ecx=0x03;
@@ -482,12 +585,71 @@ int intel_mba_initialize(intel_mba_support_t* mba_support)
 	printk(KERN_INFO "Max Throtling:: %d\n",mba_support->mba_max_throtling);
 	printk(KERN_INFO "Is linear?:: %d\n",mba_support->mba_is_linear);
 
-	return mba_support->mba_is_supported;
+	if (mba_support->mba_is_supported)
+		private_mba_support=mba_support;
+
+	return !mba_support->mba_is_supported;
 
 }
 
 int intel_mba_release(intel_mba_support_t* mba_support)
 {
+	private_mba_support=NULL;
+	return 0;
+}
+
+
+static void l2_cat_populate_capabilities(void *data)
+{
+	intel_l2cat_support_t* l2_cat_support=data;
+	cpuid_regs_t cpuid_regs;
+
+	/**
+	 * Instructions for Intel L2 CAT Detection
+	 * can be found in Section 18.19.4.2 of IntelSDM
+	 * Cache Allocation Technology: Resource Type and Capability Enumeration
+	 **/
+
+	/* Check capabilities*/
+	cpuid_regs.eax=0x10;
+	cpuid_regs.ecx=0x2;
+	cpuid_regs.ebx=cpuid_regs.edx=0x0;
+
+	run_cpuid(cpuid_regs);
+
+	l2_cat_support->cat_cbm_length=(cpuid_regs.eax & 0x1f)+1;
+	l2_cat_support->cat_shareable_mask=cpuid_regs.ebx;
+	l2_cat_support->cat_cbm_mask=(1<<l2_cat_support->cat_cbm_length)-1;
+	l2_cat_support->cat_nr_cos_available=(cpuid_regs.edx & 0xffff)+1;
+}
+
+
+/* Make this asymmetry-aware */
+int l2_cat_initialize(intel_l2cat_support_t* l2_cat_support, int nr_core_types)
+{
+	int i;
+
+	if (get_nr_coretypes()!=nr_core_types)
+		return -ENOTSUPP;
+
+	/* Initialize pointer */
+	private_l2cat_support=l2_cat_support;
+
+	for (i=0; i<nr_core_types; i++) {
+		int cpu=get_any_cpu_coretype(i);
+
+		/* Issue query to any of the cores of the corresponding type */
+		smp_call_function_single(cpu, l2_cat_populate_capabilities, (void*)&private_l2cat_support[i], 1);
+
+		private_l2cat_support[i].core_type=i;
+	}
+
+	return 0;
+}
+
+int l2_cat_release(intel_l2cat_support_t* l2_cat_support)
+{
+	private_l2cat_support=NULL;
 	return 0;
 }
 
@@ -514,7 +676,7 @@ int get_mba_setting(unsigned long* val, intel_mba_support_t* mba_support, unsign
 	if (clos >= mba_support->mba_nr_cos_available)
 		return 1;
 
-	rdmsrl(IA32_L2_QOS_EXT_BW_THRTL_0+clos, value);
+	rdmsrl(mba_support->start_msr+clos, value);
 	(*val)=value;
 
 	return 0;
@@ -538,22 +700,61 @@ int intel_cat_print_capacity_bitmasks(char* str, intel_cat_support_t* cat_suppor
 
 #define MAX_CBMS 32
 
+/* This is to read register values remotely */
 struct cpu_qos_masks {
 	uint64_t cbm_value[MAX_CBMS];
 	uint64_t mbam_value[MAX_CBMS];
 	intel_cat_support_t* cat_support;
+	intel_mba_support_t* mba_support;
 };
 
+/* Structure used to set the value of a specific register remotely */
 struct cpu_mask_op {
 	intel_cat_support_t* cat_support;
+	intel_mba_support_t* mba_support;
 	unsigned int idx;
 	unsigned int mask;
 	unsigned char is_cat;
 };
 
-
 DEFINE_PER_CPU(struct cpu_qos_masks, cpu_qos_masks);
 
+
+int intel_l2_cat_set_capacity_bitmask_cpu(intel_l2cat_support_t* cat_support, unsigned int cosid, unsigned int mask, int cpu)
+{
+	/* TODO */
+	return 0;
+}
+
+unsigned int intel_l2_cat_get_capacity_bitmask_cpu(intel_l2cat_support_t* cat_support, unsigned int cosid, int cpu)
+{
+	/* TODO */
+	return 0;
+}
+
+int intel_l2_cat_set_capacity_bitmask(intel_l2cat_support_t* cat_support, unsigned int cosid, unsigned int mask)
+{
+
+	if (cosid<0 || cosid>=cat_support->cat_nr_cos_available)
+		return -EINVAL;
+
+	mask&=cat_support->cat_cbm_mask;
+	wrmsr(IA32_L2_MASK_0+cosid, mask, 0);
+	return 0;
+}
+
+unsigned int intel_l2_cat_get_capacity_bitmask(intel_l2cat_support_t* cat_support, unsigned int cosid)
+{
+	uint64_t val;
+
+	if (cosid<0 || cosid>=cat_support->cat_nr_cos_available)
+		return -EINVAL;
+
+	rdmsrl(IA32_L2_MASK_0+cosid, val);
+	val&=cat_support->cat_cbm_mask;
+
+	return (unsigned int) val;
+}
 
 static void refresh_masks_cpu(void *data)
 {
@@ -569,6 +770,19 @@ static void refresh_masks_cpu(void *data)
 	}
 }
 
+
+static void refresh_mba_delays_cpu(void *data)
+{
+	struct cpu_qos_masks* masks=this_cpu_ptr(&cpu_qos_masks);
+	int i=0;
+	uint64_t val;
+
+	for (i=0; i<masks->mba_support->mba_nr_cos_available; i++) {
+		rdmsrl(masks->mba_support->start_msr+i, val);
+		masks->mbam_value[i]=val;
+	}
+}
+
 static void update_mask_cpu(void *data)
 {
 	struct cpu_mask_op* op=(struct cpu_mask_op*) data;
@@ -578,6 +792,13 @@ static void update_mask_cpu(void *data)
 	//printk(KERN_INFO "Attempting to set  up CLOS %d MASK to 0x%x, actual value:: 0x%x\n",val,mask,(unsigned int)actual_val);
 }
 
+static void update_mba_delay_cpu(void *data)
+{
+	struct cpu_mask_op* op=(struct cpu_mask_op*) data;
+
+	wrmsr(op->mba_support->start_msr+op->idx, op->mask, 0);
+	//printk(KERN_INFO "Attempting to set  up CLOS %d MASK to 0x%x, actual value:: 0x%x\n",val,mask,(unsigned int)actual_val);
+}
 
 int intel_cat_set_capacity_bitmask(intel_cat_support_t* cat_support, unsigned int idx, unsigned int mask)
 {
@@ -613,7 +834,6 @@ int intel_cat_print_capacity_bitmasks_cpu(char* str, intel_cat_support_t* cat_su
 
 int intel_cat_set_capacity_bitmask_cpu(intel_cat_support_t* cat_support, unsigned int idx, unsigned int mask, int cpu)
 {
-
 	struct cpu_mask_op data = {
 		.cat_support=cat_support,
 		.idx=idx,
@@ -641,12 +861,28 @@ int intel_mba_print_delay_values(char* str, intel_mba_support_t* mba_support)
 		return 0;
 
 	for (i=0; i<mba_support->mba_nr_cos_available; i++) {
-		rdmsrl(IA32_L2_QOS_EXT_BW_THRTL_0+i, val);
+		rdmsrl(mba_support->start_msr+i, val);
 		dest+=sprintf(dest,"mba_delay%i=%llu\n",i,val);
 	}
 
 	return dest-str;
 
+}
+
+int intel_mba_print_delay_values_cpu(char* str, intel_mba_support_t* mba_support, int cpu)
+{
+	int i=0;
+	char* dest=str;
+	struct cpu_qos_masks* masks=per_cpu_ptr(&cpu_qos_masks,cpu);
+	/* Update cat support pointer */
+	masks->mba_support=mba_support;
+
+	smp_call_function_single(cpu, refresh_mba_delays_cpu, NULL, 1);
+
+	for (i=0; i<mba_support->mba_nr_cos_available; i++)
+		dest+=sprintf(dest,"mba_delay%i=%llu\n",i,masks->mbam_value[i]);
+
+	return dest-str;
 }
 
 int intel_mba_set_delay_values(intel_mba_support_t* mba_support, unsigned int idx, unsigned int val)
@@ -658,14 +894,31 @@ int intel_mba_set_delay_values(intel_mba_support_t* mba_support, unsigned int id
 		return -EINVAL;
 
 	mask=val;
-	wrmsr(IA32_L2_QOS_EXT_BW_THRTL_0+idx, mask, 0);
+	wrmsr(mba_support->start_msr+idx, mask, 0);
 	//printk(KERN_INFO "Attempting to set  up CLOS %d MASK to 0x%x, actual value:: 0x%x\n",val,mask,(unsigned int)actual_val);
 
 	return 0;
 }
 
+int intel_mba_set_delay_values_cpu(intel_mba_support_t* mba_support, unsigned int idx, unsigned int val, int cpu)
+{
+	struct cpu_mask_op data = {
+		.mba_support=mba_support,
+		.idx=idx,
+		.mask=val,
+		.is_cat=0
+	};
 
-void intel_cmt_update_supported_events(intel_cmt_support_t* cmt_support,intel_cmt_thread_struct_t* tdata, unsigned int llc_id)
+	// /* For security reasons not allowed to change llc_cbm0 */
+	if (idx<0 || idx>=mba_support->mba_nr_cos_available)
+		return -EINVAL;
+
+	smp_call_function_single(cpu, update_mba_delay_cpu, &data, 1);
+
+	return 0;
+}
+
+void intel_cmt_update_supported_events(intel_cmt_support_t* cmt_support,intel_cmt_thread_struct_t* tdata)
 {
 	u64 val=0;
 
@@ -677,9 +930,9 @@ void intel_cmt_update_supported_events(intel_cmt_support_t* cmt_support,intel_cm
 			trace_printk("Error when reading value");
 		else {
 			val&=((1ULL<<62ULL)-1); //Mask...
-			tdata->last_llc_utilization[llc_id][L3_OCCUPANCY_EVENT_ID-1]=val*cmt_support->upscaling_factor;
+			tdata->last_llc_utilization[L3_OCCUPANCY_EVENT_ID-1]=val*cmt_support->upscaling_factor;
 #ifdef DEBUG
-			trace_printk("LLC Usage=%llu bytes\n",tdata->last_llc_utilization[llc_id][L3_OCCUPANCY_EVENT_ID-1]);
+			trace_printk("LLC Usage=%llu bytes\n",tdata->last_llc_utilization[L3_OCCUPANCY_EVENT_ID-1]);
 #endif
 		}
 	}
@@ -692,15 +945,15 @@ void intel_cmt_update_supported_events(intel_cmt_support_t* cmt_support,intel_cm
 			trace_printk(KERN_INFO "Error when reading value");
 		else {
 			val&=cmt_support->mbm_max_count;
-			if(tdata->last_cmt_value[llc_id][L3_TOTAL_BW_EVENT_ID-1]>val) {
-				tdata->last_llc_utilization[llc_id][L3_TOTAL_BW_EVENT_ID-1]=(cmt_support->mbm_max_count - tdata->last_cmt_value[llc_id][L3_TOTAL_BW_EVENT_ID-1])+val+1;
+			if(tdata->last_cmt_value[L3_TOTAL_BW_EVENT_ID-1]>val) {
+				tdata->last_llc_utilization[L3_TOTAL_BW_EVENT_ID-1]=(cmt_support->mbm_max_count - tdata->last_cmt_value[L3_TOTAL_BW_EVENT_ID-1])+val+1;
 			} else {
-				tdata->last_llc_utilization[llc_id][L3_TOTAL_BW_EVENT_ID-1]=val-tdata->last_cmt_value[llc_id][L3_TOTAL_BW_EVENT_ID-1];
+				tdata->last_llc_utilization[L3_TOTAL_BW_EVENT_ID-1]=val-tdata->last_cmt_value[L3_TOTAL_BW_EVENT_ID-1];
 			}
-			tdata->last_llc_utilization[llc_id][L3_TOTAL_BW_EVENT_ID-1]*=cmt_support->upscaling_factor;
-			tdata->last_cmt_value[llc_id][L3_TOTAL_BW_EVENT_ID-1]=val;
+			tdata->last_llc_utilization[L3_TOTAL_BW_EVENT_ID-1]*=cmt_support->upscaling_factor;
+			tdata->last_cmt_value[L3_TOTAL_BW_EVENT_ID-1]=val;
 #ifdef DEBUG
-			trace_printk("LLC Total BW=%llu bytes/s\n",tdata->last_llc_utilization[llc_id][L3_TOTAL_BW_EVENT_ID-1]);
+			trace_printk("LLC Total BW=%llu bytes/s\n",tdata->last_llc_utilization[L3_TOTAL_BW_EVENT_ID-1]);
 #endif
 		}
 	}
@@ -713,15 +966,15 @@ void intel_cmt_update_supported_events(intel_cmt_support_t* cmt_support,intel_cm
 			trace_printk(KERN_INFO "Error when reading value");
 		else {
 			val&=cmt_support->mbm_max_count;
-			if(tdata->last_cmt_value[llc_id][L3_LOCAL_BW_EVENT_ID-1]>val) {
-				tdata->last_llc_utilization[llc_id][L3_LOCAL_BW_EVENT_ID-1]=(cmt_support->mbm_max_count - tdata->last_cmt_value[llc_id][L3_LOCAL_BW_EVENT_ID-1])+val+1;
+			if(tdata->last_cmt_value[L3_LOCAL_BW_EVENT_ID-1]>val) {
+				tdata->last_llc_utilization[L3_LOCAL_BW_EVENT_ID-1]=(cmt_support->mbm_max_count - tdata->last_cmt_value[L3_LOCAL_BW_EVENT_ID-1])+val+1;
 			} else {
-				tdata->last_llc_utilization[llc_id][L3_LOCAL_BW_EVENT_ID-1]=val-tdata->last_cmt_value[llc_id][L3_LOCAL_BW_EVENT_ID-1];
+				tdata->last_llc_utilization[L3_LOCAL_BW_EVENT_ID-1]=val-tdata->last_cmt_value[L3_LOCAL_BW_EVENT_ID-1];
 			}
-			tdata->last_llc_utilization[llc_id][L3_LOCAL_BW_EVENT_ID-1]*=cmt_support->upscaling_factor;
-			tdata->last_cmt_value[llc_id][L3_LOCAL_BW_EVENT_ID-1]=val;
+			tdata->last_llc_utilization[L3_LOCAL_BW_EVENT_ID-1]*=cmt_support->upscaling_factor;
+			tdata->last_cmt_value[L3_LOCAL_BW_EVENT_ID-1]=val;
 #ifdef DEBUG
-			trace_printk("LLC Local BW=%llu bytes/s\n",tdata->last_llc_utilization[llc_id][L3_LOCAL_BW_EVENT_ID-1]);
+			trace_printk("LLC Local BW=%llu bytes/s\n",tdata->last_llc_utilization[L3_LOCAL_BW_EVENT_ID-1]);
 #endif
 		}
 	}
@@ -763,7 +1016,9 @@ static ssize_t res_qos_read(struct file *filp, char __user *buf, size_t len, lof
 		return -ENOMEM;
 
 	dst=kbuf;
-	err=intel_cat_print_capacity_bitmasks_cpu(dst,private_cat_support,base_cpu+1);
+	dst+=intel_cat_print_capacity_bitmasks_cpu(dst,private_cat_support,base_cpu+1);
+	if (private_mba_support)
+		dst+=intel_mba_print_delay_values_cpu(dst, private_mba_support,base_cpu+1);
 
 	if (err<0)
 		return err;
@@ -795,6 +1050,7 @@ static ssize_t res_qos_write(struct file *filp, const char __user *buf, size_t l
 	char *kbuf;
 	int ret=len;
 	unsigned int mask=0;
+	unsigned int delay;
 	unsigned long base_cpu=(unsigned long)PMCT_PDE_DATA(filp->f_inode);
 
 	if (*off>0)
@@ -813,6 +1069,8 @@ static ssize_t res_qos_write(struct file *filp, const char __user *buf, size_t l
 	/* Parse and change */
 	if (sscanf(kbuf,"llc_cbm%i 0x%x",&val,&mask)==2) {
 		intel_cat_set_capacity_bitmask_cpu(private_cat_support,val,mask,base_cpu+1);
+	} else if (private_mba_support && sscanf(kbuf,"mba_delay%i %u",&val,&delay)==2) {
+		intel_mba_set_delay_values_cpu(private_mba_support,val,delay,base_cpu+1);
 	} else
 		ret=-EINVAL;
 

@@ -118,6 +118,9 @@ static inline void hreset(unsigned int eax)
 #else
 static inline void hreset(unsigned int eax) {}
 #endif
+/* Check hybrid processors supported */
+#define is_intel_hybrid_processor(model) ((model==151) || (model==152) || (model==183))
+
 /*** CPUID-related datatypes and macros ***/
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,14,0)
 #include <asm/processor.h>

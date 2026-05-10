@@ -12,6 +12,8 @@ typedef struct {
 	volatile unsigned char 	sc_spinning;
 	volatile unsigned int sc_nfc;
 	volatile unsigned int sc_sf;
+	volatile unsigned int sc_num_threads;
+	volatile unsigned char sc_malleable;
 } schedctl_t;
 
 

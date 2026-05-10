@@ -191,14 +191,53 @@ static inline int suitable_place_for_insertion(cache_part_set_t* pset, unsigned 
 
 
 /** ### Functions for manual adjustment of partitions ## **/
-void reconfigure_partition(cat_cache_part_t* part, unsigned int ways_assigned, unsigned int low_way)
+void reconfigure_partition_gen(cat_cache_part_t* part, unsigned int ways_assigned, unsigned int low_way, unsigned char update_hw)
 {
 	part->low_way=low_way;
 	part->high_way=low_way+ways_assigned-1;
 	part->nr_ways=ways_assigned;
 	part->part_mask=determine_part_mask(part);
 	part->part_old_mask=part->part_mask;
-	intel_cat_set_capacity_bitmask(part->pset->cat_support,part->clos_id,part->part_mask);
+	if (update_hw)
+		intel_cat_set_capacity_bitmask(part->pset->cat_support,part->clos_id,part->part_mask);
+}
+/**
+ * @brief Update HW registers when app's partition
+ * CBM changed. This makes sense when COS ID assignment
+ * is externally managed
+ *
+ */
+void refresh_hw_partition_app(app_t* app)
+{
+	cat_cache_part_t* part=app->cat_partition;
+
+	/**
+	 * Do nothing if no partition assigned or
+	 * hw configuration is already up to date
+	 */
+	if (!part || part->part_mask==app->last_llc_cbm)
+		return;
+
+	/***
+	 * Use application-specific COS ID rather than
+	 * the partition one.
+	*/
+	intel_cat_set_capacity_bitmask(part->pset->cat_support,app->app_cmt_data.cos_id,part->part_mask);
+
+	app->last_llc_cbm=part->part_mask;
+}
+
+/**
+ * @brief This function is used by LFOC-based partitioning
+ * algorithms. In this case updating hw registers is in order
+ *
+ * @param part
+ * @param ways_assigned
+ * @param low_way
+ */
+void reconfigure_partition(cat_cache_part_t* part, unsigned int ways_assigned, unsigned int low_way)
+{
+	reconfigure_partition_gen(part,ways_assigned,low_way,1);
 }
 
 
@@ -235,7 +274,7 @@ cat_cache_part_t* __get_partition_by_index(cache_part_set_t* part_set, int idx)
  * Generic function to minimize the cost when adding more partitions
  * def part_remove_generic()
  */
-void deallocate_partition(cache_part_set_t* pset, cat_cache_part_t* partition, unsigned int nr_ways)
+void deallocate_partition(cache_part_set_t* pset, cat_cache_part_t* partition, unsigned int nr_ways, unsigned char update_hw)
 {
 	unsigned int idx_part_to_remove=partition->part_id;
 	sized_list_t* list=&pset->assigned_partitions;
@@ -314,7 +353,9 @@ void deallocate_partition(cache_part_set_t* pset, cat_cache_part_t* partition, u
 			cur->bias=0; /* Reset bias counter */
 			cur->part_mask=determine_part_mask(cur);
 			cur->part_old_mask=cur->part_mask;
-			intel_cat_set_capacity_bitmask(pset->cat_support,cur->clos_id,cur->part_mask);
+
+			if (update_hw)
+				intel_cat_set_capacity_bitmask(pset->cat_support,cur->clos_id,cur->part_mask);
 
 			/* Proceed with next partition */
 			next_available_way=high+1;
@@ -347,7 +388,9 @@ void deallocate_partition(cache_part_set_t* pset, cat_cache_part_t* partition, u
 			cur->bias=0; /* Reset bias counter */
 			cur->part_mask=determine_part_mask(cur);
 			cur->part_old_mask=cur->part_mask;
-			intel_cat_set_capacity_bitmask(pset->cat_support,cur->clos_id,cur->part_mask);
+
+			if (update_hw)
+				intel_cat_set_capacity_bitmask(pset->cat_support,cur->clos_id,cur->part_mask);
 
 			/* Proceed with next partition */
 			next_available_way=low-1;
@@ -384,7 +427,8 @@ void remove_empty_partitions(cache_part_set_t* pset, int auto_resize)
 		if (get_load_partition(cur)==0) {
 
 			if (auto_resize) {
-				deallocate_partition(pset,cur,pset->cat_support->cat_cbm_length);
+				/* Autoresize means we update HW= */
+				deallocate_partition(pset,cur,pset->cat_support->cat_cbm_length, 1);
 				/* Insert partition at the front of the pool (stack-like) */
 				insert_sized_list_head(&pset->free_partitions, cur);
 			} else
@@ -396,7 +440,7 @@ void remove_empty_partitions(cache_part_set_t* pset, int auto_resize)
 }
 
 
-static void do_insert_partition(cache_part_set_t* pset, cat_cache_part_t* new_partition, unsigned int nr_old_partitions, unsigned int nr_ways, int gap_id)
+static void do_insert_partition(cache_part_set_t* pset, cat_cache_part_t* new_partition, unsigned int nr_old_partitions, unsigned int nr_ways, int gap_id, unsigned char update_hw)
 {
 	int nr_target_partitions=nr_old_partitions+1;
 	unsigned int max_gap_id=nr_old_partitions;
@@ -428,7 +472,10 @@ static void do_insert_partition(cache_part_set_t* pset, cat_cache_part_t* new_pa
 		new_partition->bias=0; /* Reset bias counter */
 		new_partition->part_mask=determine_part_mask(new_partition);
 		new_partition->part_old_mask=new_partition->part_mask;
-		intel_cat_set_capacity_bitmask(pset->cat_support,new_partition->clos_id,new_partition->part_mask);
+
+		if (update_hw)
+			intel_cat_set_capacity_bitmask(pset->cat_support,new_partition->clos_id,new_partition->part_mask);
+
 		insert_sized_list_tail(list,new_partition);
 		goto out_insert;
 	}
@@ -494,7 +541,9 @@ static void do_insert_partition(cache_part_set_t* pset, cat_cache_part_t* new_pa
 			cur->part_mask=determine_part_mask(cur);
 			cur->part_old_mask=cur->part_mask;
 
-			intel_cat_set_capacity_bitmask(pset->cat_support,cur->clos_id,cur->part_mask);
+			if (update_hw)
+				intel_cat_set_capacity_bitmask(pset->cat_support,cur->clos_id,cur->part_mask);
+
 			/* Proceed with next partition */
 			next_available_way=high+1;
 		}
@@ -527,7 +576,9 @@ static void do_insert_partition(cache_part_set_t* pset, cat_cache_part_t* new_pa
 			cur->bias=0; /* Reset bias counter */
 			cur->part_mask=determine_part_mask(cur);
 			cur->part_old_mask=cur->part_mask;
-			intel_cat_set_capacity_bitmask(pset->cat_support,cur->clos_id,cur->part_mask);
+
+			if (update_hw)
+				intel_cat_set_capacity_bitmask(pset->cat_support,cur->clos_id,cur->part_mask);
 
 			/* Proceed with next partition */
 			next_available_way=low-1;
@@ -544,7 +595,7 @@ out_insert:
 }
 
 /* Functions and global data to manage partitions */
-cat_cache_part_t* allocate_new_partition(cache_part_set_t* pset, unsigned int nr_ways, int hint_id)
+static cat_cache_part_t* allocate_new_partition_gen(cache_part_set_t* pset, unsigned int nr_ways, int hint_id, unsigned char update_hw)
 {
 	unsigned int nr_old_partitions=sized_list_length(&pset->assigned_partitions);
 	cat_cache_part_t* new_partition=head_sized_list(&pset->free_partitions);
@@ -557,9 +608,14 @@ cat_cache_part_t* allocate_new_partition(cache_part_set_t* pset, unsigned int nr
 	else if (hint_id==-1 || hint_id >nr_old_partitions)
 		hint_id=suitable_place_for_insertion(pset,nr_ways,nr_old_partitions);
 
-	do_insert_partition(pset,new_partition,nr_old_partitions,nr_ways,hint_id);
+	do_insert_partition(pset,new_partition,nr_old_partitions,nr_ways,hint_id,update_hw);
 
 	return new_partition;
+}
+
+cat_cache_part_t* allocate_new_partition(cache_part_set_t* pset, unsigned int nr_ways, int hint_id)
+{
+	return allocate_new_partition_gen(pset, nr_ways, hint_id,1);
 }
 
 /* Functions and global data to manage partitions */
@@ -598,9 +654,14 @@ static inline void  __add_app_to_partition(app_t* app, cat_cache_part_t* partiti
 	/* Importante cuando se va intentar pillar la misma particion */
 	app->last_partition=app->cat_partition->part_index;  /*app->cat_partition->part_id; */
 	partition->nr_apps++; /* Update nr_apps!! */
-	/* Update cos for consistency */
-	app->app_cmt_data.cos_id=partition->clos_id;
 	insert_sized_list_tail(&partition->assigned_applications,app);
+	/* Update cos for consistency, if not externally managed */
+	if (!app->externally_managed_cos_id)
+		app->app_cmt_data.cos_id=partition->clos_id;
+	else
+		/* Refresh value here  */
+		refresh_hw_partition_app(app);
+
 }
 
 static inline void  __remove_app_from_partition(app_t* app)
@@ -642,8 +703,11 @@ void move_app_to_partition(app_t* app, cat_cache_part_t* new_partition)
 {
 	__move_app_to_partition(app,new_partition,0);
 
-	/* SCHEDULE Update CLOS & RMID for each active thread .. THIS SHOULD BE DEFERRED WORK */
-	insert_sized_list_tail(&new_partition->pset->defered_cos_assignment,app);
+	/***
+	 *  SCHEDULE Update CLOS & RMID for each active thread ..
+	 * THIS SHOULD BE DEFERRED WORK */
+	if (!app->externally_managed_cos_id)
+		insert_sized_list_tail(&new_partition->pset->defered_cos_assignment,app);
 }
 
 
@@ -690,7 +754,8 @@ void assign_partition_to_application(cache_part_set_t* part_set, app_t* app, cat
 	else if (is_empty_sized_list(&part_set->free_partitions)) {
 		app->last_partition=-1;
 		app->cat_partition=NULL;
-		app->app_cmt_data.cos_id=0; /* Use default partition */
+		if (!app->externally_managed_cos_id)
+			app->app_cmt_data.cos_id=0; /* Use default partition */
 		return;
 	} else {
 
@@ -724,7 +789,6 @@ static noinline void trace_partition(cat_cache_part_t *part)
 {
 	asm(" ");
 
-#ifdef DEBUG
 #ifdef PMCSCHED_DEBUG
 	if (part)
 		printk("Part=(%u-%u),#ways=%u,ID=%u,CLOS=%u,MASK=0x%x,NR_APPS=%u\n",
@@ -733,7 +797,6 @@ static noinline void trace_partition(cat_cache_part_t *part)
 	if (part)
 		trace_printk("Part=(%u-%u),#ways=%u,ID=%u,CLOS=%u,MASK=0x%x,NR_APPS=%u\n",
 		             part->low_way,part->high_way,part->nr_ways,part->part_id,part->clos_id,((1<<part->nr_ways)-1)<<part->low_way,part->nr_apps);
-#endif
 #endif
 }
 
@@ -747,12 +810,10 @@ void print_partition_info(cache_part_set_t* part_set)
 	if (is_empty_sized_list(list))
 		return;
 
-#ifdef DEBUG
 #ifdef PMCSCHED_DEBUG
 	printk("************** PARTITION_INFO **************\n");
 #else
 	trace_printk("************** PARTITION_INFO **************\n");
-#endif
 #endif
 	trace_partition(NULL);
 
@@ -761,12 +822,10 @@ void print_partition_info(cache_part_set_t* part_set)
 	}
 
 	trace_partition(cur);
-#ifdef DEBUG
 #ifdef PMCSCHED_DEBUG
 	printk("************** PARTITION_INFO **************\n");
 #else
 	trace_printk("*****************************************\n");
-#endif
 #endif
 }
 

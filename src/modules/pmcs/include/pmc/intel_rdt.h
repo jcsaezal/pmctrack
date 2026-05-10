@@ -35,7 +35,10 @@ enum {
 
 #define IA32_LLC_MASK_0 0xc90	/* For COS 0 */
 #define IA32_LLC_MASK_1 0xc91  /* For COS 1  (and so on) */
-#define IA32_L2_QOS_EXT_BW_THRTL_0 0xd50 /* For COS 0 */
+#define IA32_L2_MASK_0 0xd10	/* For COS 0 */
+#define IA32_L2_MASK_1 0xd11  /* For COS 1  (and so on) */
+#define IA32_L2_QOS_EXT_BW_THRTL_0 0xd50 /* For COS 0 (INTEL) */
+#define L3QOS_BW_CONTROL_0 0xC0000200 /* For COS 0 (AMD) */
 
 typedef struct {
 	/* Fields to store CMT and MBM global parameters */
@@ -54,18 +57,27 @@ typedef struct {
 	unsigned int cat_cbm_mask;
 } intel_cat_support_t;
 
+/* CAT SPECIFIC stuff */
+typedef struct {
+	unsigned int cat_nr_cos_available;
+	unsigned int cat_cbm_length;
+	unsigned int cat_cbm_mask;
+	unsigned int cat_shareable_mask;
+	unsigned char core_type; /* For Hybrid Processors */
+} intel_l2cat_support_t;
 
 typedef struct {
 	unsigned int mba_is_supported;
 	unsigned int mba_nr_cos_available;
 	unsigned int mba_is_linear;
 	unsigned int mba_max_throtling;
+	unsigned int start_msr;
 } intel_mba_support_t;
 
 typedef struct {
 	unsigned int rmid;
-	uint64_t last_llc_utilization[RMID_MAX_LLCS][CMT_MAX_EVENTS];
-	uint64_t last_cmt_value[RMID_MAX_LLCS][CMT_MAX_EVENTS];
+	uint64_t last_llc_utilization[CMT_MAX_EVENTS];
+	uint64_t last_cmt_value[CMT_MAX_EVENTS];
 	unsigned int cos_id;
 } intel_cmt_thread_struct_t;
 
@@ -89,15 +101,13 @@ static __attribute__ ((unused)) const char* rmid_allocation_policy_str[NR_RMID_A
 
 static inline void initialize_cmt_thread_struct(intel_cmt_thread_struct_t* data)
 {
-	int i,j;
+	int i;
 	/* Default 0: just in case */
 	data->cos_id=0;
 
-	for (i=0; i<RMID_MAX_LLCS; i++) {
-		for(j=0; j<CMT_MAX_EVENTS; j++) {
-			data->last_llc_utilization[i][j]=0;
-			data->last_cmt_value[i][j]=0;
-		}
+	for (i=0; i<CMT_MAX_EVENTS; i++) {
+		data->last_llc_utilization[i]=0;
+		data->last_cmt_value[i]=0;
 	}
 
 }
@@ -106,14 +116,17 @@ static inline void initialize_cmt_thread_struct(intel_cmt_thread_struct_t* data)
 int intel_cmt_probe(void);
 int amd_qos_probe(void);
 int qos_extensions_probe(void);
+int l2_cat_probe(void);
 
 int intel_cmt_initialize(intel_cmt_support_t* cmt_support);
 int intel_cat_initialize(intel_cat_support_t* cat_support);
 int intel_mba_initialize(intel_mba_support_t* mba_support);
+int l2_cat_initialize(intel_l2cat_support_t* l2_cat_support, int nr_core_types);
 
 int intel_cmt_release(intel_cmt_support_t* cmt_support);
 int intel_cat_release(intel_cat_support_t* cat_support);
 int intel_mba_release(intel_mba_support_t* mba_support);
+int l2_cat_release(intel_l2cat_support_t* l2_cat_support);
 
 
 int intel_cat_print_capacity_bitmasks(char* str, intel_cat_support_t* cat_support);
@@ -124,6 +137,14 @@ int intel_cat_set_capacity_bitmask(intel_cat_support_t* cat_support, unsigned in
 int intel_cat_print_capacity_bitmasks_cpu(char* str, intel_cat_support_t* cat_support, int cpu);
 
 int intel_cat_set_capacity_bitmask_cpu(intel_cat_support_t* cat_support, unsigned int idx, unsigned int mask, int cpu);
+
+int intel_l2_cat_set_capacity_bitmask_cpu(intel_l2cat_support_t* cat_support, unsigned int cosid, unsigned int mask, int cpu);
+
+unsigned int intel_l2_cat_get_capacity_bitmask_cpu(intel_l2cat_support_t* cat_support, unsigned int cosid, int cpu);
+
+int intel_l2_cat_set_capacity_bitmask(intel_l2cat_support_t* cat_support, unsigned int cosid, unsigned int mask);
+
+unsigned int intel_l2_cat_get_capacity_bitmask(intel_l2cat_support_t* cat_support, unsigned int cosid);
 
 /**
  * Functions to enable user-space management of
@@ -137,7 +158,7 @@ int intel_mba_print_delay_values(char* str, intel_mba_support_t* mba_support);
 int intel_mba_set_delay_values(intel_mba_support_t* mba_support, unsigned int idx, unsigned int val);
 
 
-void intel_cmt_update_supported_events(intel_cmt_support_t* cmt_support,intel_cmt_thread_struct_t* data, unsigned int llc_id);
+void intel_cmt_update_supported_events(intel_cmt_support_t* cmt_support,intel_cmt_thread_struct_t* data);
 
 
 /*
@@ -185,6 +206,15 @@ static inline void __set_rmid_and_cos(unsigned int rmid, unsigned int cosid)
 	wrmsr(MSR_IA32_PQR_ASSOC,rmid,cosid);
 }
 
+static inline void __get_rmid_and_cos(unsigned int *rmid, unsigned int *cosid)
+{
+	int trmid;
+	int tcosid;
+	rdmsr(MSR_IA32_PQR_ASSOC,trmid,tcosid);
+	(*rmid)=trmid;
+	(*cosid)=tcosid;
+}
+
 static inline void __unset_rmid(void)
 {
 	wrmsr(MSR_IA32_PQR_ASSOC,DISABLE_RMID,0);
@@ -207,6 +237,10 @@ static inline int qos_extensions_probe(void)
 {
 	return -ENOTSUPP;
 }
+static inline int l2_cat_probe(void)
+{
+	return -ENOTSUPP;
+}
 static inline int intel_cmt_initialize(intel_cmt_support_t* cmt_support)
 {
 	return -ENOTSUPP;
@@ -219,6 +253,10 @@ static inline int intel_mba_initialize(intel_mba_support_t* mba_support)
 {
 	return -ENOTSUPP;
 }
+static inline int l2_cat_initialize(intel_l2cat_support_t* l2_cat_support, int nr_core_types)
+{
+	return -ENOTSUPP;
+}
 static inline int intel_cmt_release(intel_cmt_support_t* cmt_support)
 {
 	return -ENOTSUPP;
@@ -228,6 +266,10 @@ static inline int intel_cat_release(intel_cat_support_t* cat_support)
 	return -ENOTSUPP;
 }
 static inline int intel_mba_release(intel_mba_support_t* mba_support)
+{
+	return -ENOTSUPP;
+}
+static inline int l2_cat_release(intel_l2cat_support_t* l2_cat_support)
 {
 	return -ENOTSUPP;
 }
@@ -247,6 +289,22 @@ static inline int intel_cat_set_capacity_bitmask_cpu(intel_cat_support_t* cat_su
 {
 	return -ENOTSUPP;
 }
+static inline int intel_l2_cat_set_capacity_bitmask_cpu(intel_l2cat_support_t* cat_support, unsigned int cosid, unsigned int mask, int cpu)
+{
+	return 0;
+}
+static inline unsigned int intel_l2_cat_get_capacity_bitmask_cpu(intel_l2cat_support_t* cat_support, unsigned int cosid, int cpu)
+{
+	return 0;
+}
+static inline int intel_l2_cat_set_capacity_bitmask(intel_l2cat_support_t* cat_support, unsigned int cosid, unsigned int mask)
+{
+	return 0;
+}
+static inline unsigned int intel_l2_cat_get_capacity_bitmask(intel_l2cat_support_t* cat_support, unsigned int cosid)
+{
+	return 0;
+}
 static inline int intel_mba_print_delay_values(char* str, intel_mba_support_t* mba_support)
 {
 	return -ENOTSUPP;
@@ -255,7 +313,7 @@ static inline int intel_mba_set_delay_values(intel_mba_support_t* mba_support, u
 {
 	return -ENOTSUPP;
 }
-static inline void intel_cmt_update_supported_events(intel_cmt_support_t* cmt_support,intel_cmt_thread_struct_t* data, unsigned int llc_id) {}
+static inline void intel_cmt_update_supported_events(intel_cmt_support_t* cmt_support,intel_cmt_thread_struct_t* data) {}
 static inline intel_rdt_event_t* intel_rdt_syswide_read_localbw(intel_cmt_support_t* cmt_support, unsigned int llc_id, unsigned int* count, uint64_t* aggregate_count)
 {
 	return NULL;
@@ -276,6 +334,7 @@ static inline u64 __rmid_read(unsigned long rmid, unsigned int event)
 	return 0;
 }
 static inline void __set_rmid_and_cos(unsigned int rmid, unsigned int cosid) {  }
+static inline void __get_rmid_and_cos(unsigned int *rmid, unsigned int *cosid) {}
 static inline void __unset_rmid(void) {}
 static inline int get_cat_cbm(unsigned long* mask, intel_cat_support_t* cat_support, unsigned int clos, int cpu)
 {

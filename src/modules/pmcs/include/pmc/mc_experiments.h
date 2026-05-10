@@ -285,6 +285,18 @@ typedef struct {
 	void* 	monitoring_mod_priv_data;		/* Per-thread private data for current monitoring module */
 } pmon_prof_t;
 
+/* Global PMCTrack configuration parameters */
+typedef struct {
+	uint_t pmon_nticks;             /* Default sampling interval for the
+								     * scheduler-driven monitoring mode
+								     */
+	uint_t pmon_kernel_buffer_size;	 /* Default capacity for the kernel
+									  * buffer that stores PMC samples
+									  */
+} pmon_config_t;
+extern pmon_config_t pmcs_pmon_config;
+
+
 /** Various flag values for the "flags" field in pmon_prof_t ***/
 #define PMC_EXITING	0x1
 #define PMC_SELF_MONITORING	0x2
@@ -635,7 +647,7 @@ pmct_cpu_function_call(struct task_struct *p, int cpu, int (*func) (void *info),
 /**** Operations on a task_struct ****/
 
 
-#ifndef CONFIG_PMCTRACK
+#if !defined(CONFIG_PMCTRACK) && !defined(CONFIG_MINIMAL_PMCTRACK)
 
 void init_prof_exited_tasks(void);
 void add_prof_exited_task(pmon_prof_t *prof);

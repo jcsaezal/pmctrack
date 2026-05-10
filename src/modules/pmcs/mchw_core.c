@@ -61,6 +61,7 @@
 
 #define BUF_LEN_PMC_SAMPLES_EBS_KERNEL (((PAGE_SIZE)/sizeof(pmc_sample_t))*sizeof(pmc_sample_t))
 
+static volatile unsigned char module_unloading = 0;
 char* forced_small_cores="";
 module_param(forced_small_cores, charp, 0000);
 MODULE_PARM_DESC(forced_small_cores, "A set of CPUs that will be considered as small cores (range with comma-separated format)");
@@ -99,15 +100,6 @@ static void cancel_pmctrack_timer(pmon_prof_t* prof);
 /* Default per-CPU set of PMC events */
 static DEFINE_PER_CPU(core_experiment_t, cpu_exp);
 
-/* Global PMCTrack configuration parameters */
-typedef struct {
-	uint_t pmon_nticks;             /* Default sampling interval for the
-								     * scheduler-driven monitoring mode
-								     */
-	uint_t pmon_kernel_buffer_size;	 /* Default capacity for the kernel
-									  * buffer that stores PMC samples
-									  */
-} pmon_config_t;
 pmon_config_t pmcs_pmon_config;
 
 /* Initialize global configuration parameters */
@@ -361,7 +353,12 @@ static void deferred_read_function(struct work_struct *work)
 
 #endif
 
-#ifndef CONFIG_PMCTRACK
+#if !defined(CONFIG_PMCTRACK) && !defined(CONFIG_MINIMAL_PMCTRACK)
+
+void noinline trace_on_create_perf_event(struct task_struct* p, struct perf_event *event)
+{
+	asm(" ");
+}
 /*
  * This function creates a dummy software PMU perf_event so that when PMCTrack is
  * used without a patched kernel it carries the profiling data within a given task.
@@ -398,9 +395,15 @@ struct perf_event *create_pmctrack_task_event(struct task_struct* task, pmon_pro
 	list_add_tail(&event->owner_entry, &task->perf_event_list);
 	mutex_unlock(&task->perf_event_mutex);
 
+	trace_on_create_perf_event(task,event);
 	return event;
 }
 #endif
+
+void noinline trace_on_fork(struct task_struct* p)
+{
+	asm(" ");
+}
 
 /* Invoked when forking a process/thread */
 static int mod_alloc_per_thread_data(unsigned long clone_flags, struct task_struct* p)
@@ -421,7 +424,7 @@ static int mod_alloc_per_thread_data(unsigned long clone_flags, struct task_stru
 		return -ENOMEM;
 	}
 
-#ifndef CONFIG_PMCTRACK
+#if !defined(CONFIG_PMCTRACK) && !defined(CONFIG_MINIMAL_PMCTRACK)
 	/*
 	 * Attach task-specific data as private data of a fake perf event
 	 * It already takes care of initializing the new fields added by
@@ -433,6 +436,7 @@ static int mod_alloc_per_thread_data(unsigned long clone_flags, struct task_stru
 		kfree(prof);
 		return -ENOMEM;
 	}
+
 #endif
 
 	/* Basic prof_struct initialization */
@@ -563,9 +567,11 @@ static int mod_alloc_per_thread_data(unsigned long clone_flags, struct task_stru
 		return ret;
 	}
 
-#ifdef CONFIG_PMCTRACK
+#if defined(CONFIG_PMCTRACK) || defined(CONFIG_MINIMAL_PMCTRACK)
 	p->pmc=prof;
 #endif
+
+	trace_on_fork(p);
 
 	return 0;
 }
@@ -1336,6 +1342,14 @@ static void  mod_exec_thread(struct task_struct* tsk)
 	mm_on_exec(prof);
 }
 
+
+#if !defined(CONFIG_PMCTRACK) && !defined(CONFIG_MINIMAL_PMCTRACK)
+void noinline trace_on_free_perf_event(struct task_struct* p, struct perf_event *event)
+{
+	asm(" ");
+}
+#endif
+
 /* Invoked when a process calls exec() */
 static void mod_exit_thread(struct task_struct* tsk)
 {
@@ -1347,10 +1361,30 @@ static void mod_exit_thread(struct task_struct* tsk)
 	int cpu=raw_smp_processor_id();
 	int cur_coretype=get_coretype_cpu(cpu);
 	ktime_t now;
+#define DEBUG_LEAK
+#ifdef DEBUG_LEAK
+	unsigned int list_is_empty=0;
+	char comm[TASK_COMM_LEN];
+#endif
+	if (!prof) {
+#ifdef DEBUG_LEAK
+		if (tsk->mm) {
+			get_task_comm(comm, current);
 
-	if (!prof || tsk != prof->this_tsk)
+			if (list_empty(&(current->perf_event_list)))
+				list_is_empty=1;
+
+			trace_printk("--NULL prof pointer on exit (%s)--\ntsk: %p\ncurrent: %p\nlist_empty: %d\n",comm,tsk,current,list_is_empty);
+		}
+#endif
 		return;
+	}
 
+	if (tsk != prof->this_tsk) {
+		get_task_comm(comm, current);
+		trace_printk("--Wrong task pointer (%s)--\ntsk: %p\nproftsk: %p\ncurrent: %p\n",comm,tsk,prof->this_tsk,current);
+		return;
+	}
 
 	if (unlikely(is_syswide_monitor(tsk)))
 		syswide_monitoring_stop();
@@ -1445,12 +1479,26 @@ static void mod_exit_thread(struct task_struct* tsk)
 		perf_disable_counters(prof->pmcs_config);
 #endif
 
-#ifndef CONFIG_PMCTRACK
+#if !defined(CONFIG_PMCTRACK) && !defined(CONFIG_MINIMAL_PMCTRACK)
 	if (prof->event) {
-		/* Free up fake perf event */
-		perf_event_release_kernel(prof->event);
+		struct perf_event *pe=prof->event;
 		prof->event=NULL;
 		add_prof_exited_task(prof);
+		trace_on_free_perf_event(tsk, pe);
+
+		/* Deal with special case: module is being removed */
+		if (module_unloading) {
+			perf_event_release_kernel(pe);
+			return;
+		}
+		/* Free up fake perf event */
+#if defined(__aarch64__) || defined (__arm__)
+		perf_event_release_kernel(pe);
+#else
+		preempt_enable_notrace();
+		perf_event_release_kernel(pe);
+		preempt_disable_notrace();
+#endif
 	}
 #endif
 }
@@ -1474,8 +1522,27 @@ static void mod_free_per_thread_data(struct task_struct* tsk)
 {
 	pmon_prof_t *prof = get_prof(tsk);
 	int i=0;
+#ifdef DEBUG_LEAK
+	unsigned int list_is_empty=0;
+	char comm[TASK_COMM_LEN];
+#endif
+	if (!prof) {
+#ifdef DEBUG_LEAK
+		if (tsk->mm) {
+			get_task_comm(comm, current);
+			if (list_empty(&(current->perf_event_list)))
+				list_is_empty=1;
 
-	if(prof == NULL) return;
+			trace_printk("--NULL prof pointer on free (%s)--\ntsk: %p\ncurrent: %p\nlist_empty: %d\n",comm,tsk,current,list_is_empty);
+		}
+#endif
+		return;
+	}
+
+#if !defined(CONFIG_PMCTRACK) && !defined(CONFIG_MINIMAL_PMCTRACK)
+	if (prof->event)
+		trace_printk("Exited task that did not free up its associated perf_event\n");
+#endif
 
 	/* Notify the monitoring module */
 	mm_on_free_task(prof);
@@ -1502,7 +1569,7 @@ static void mod_free_per_thread_data(struct task_struct* tsk)
 	}
 
 
-#ifndef CONFIG_PMCTRACK
+#if !defined(CONFIG_PMCTRACK) && !defined(CONFIG_MINIMAL_PMCTRACK)
 	del_prof_exited_task(prof);
 #else
 	tsk->pmc = NULL;
@@ -2178,7 +2245,7 @@ static ssize_t proc_monitor_pmcs_write(struct file *filp, const char __user *buf
 		monitor = get_prof(current);
 		monitored = get_prof(tsM);
 
-		if (!monitored || !monitored->pmc_samples_buffer) {
+		if (!monitor || !monitored || !monitored->pmc_samples_buffer) {
 			put_task_struct(tsM);
 			return -ESRCH;
 		} else {
@@ -2477,7 +2544,9 @@ static ssize_t proc_pmc_enable_write(struct file *filp, const char __user *buff,
 
 	kbuf[len]='\0';
 
-	if (strcmp(kbuf,"ON")==0 && prof!=NULL) {
+	if (strcmp(kbuf,"ON")==0) {
+		if (!prof)
+			return -EINVAL;
 #ifdef DEBUG_PMC_CONFIG_INTEGRITY
 		print_experiment_set_info(prof->pmcs_multiplex_cfg,2,log);
 		trace_printk("%s\n",log);
@@ -2520,7 +2589,7 @@ static ssize_t proc_pmc_enable_write(struct file *filp, const char __user *buff,
 		mod_restore_callback_gen(prof,smp_processor_id(),0);
 
 		spin_unlock_irqrestore(&prof->lock,flags);
-	} else if (strcmp(kbuf,"OFF")==0 && prof!=NULL) {
+	} else if (strcmp(kbuf,"OFF")==0) {
 		if (!prof)
 			return -EINVAL;
 #ifdef TBS_TIMER
@@ -3494,7 +3563,7 @@ void do_count_on_overflow(struct pt_regs *regs, unsigned int overflow_mask)
 		                                       sample.pmc_counts);
 
 		/* Insert into the thread's buffer (if its not null) */
-		if (read_ok && prof->pmc_samples_buffer) {
+		if (read_ok) {
 			ebs_idx=core_exp->ebs_idx;
 
 			if (ebs_idx!=-1) {
@@ -3506,9 +3575,11 @@ void do_count_on_overflow(struct pt_regs *regs, unsigned int overflow_mask)
 			if (prof)
 				mm_on_new_sample(prof,this_cpu,&sample,MM_TICK,regs);
 
-			spin_lock(&prof->pmc_samples_buffer->lock);
-			__push_sample_cbuffer(prof->pmc_samples_buffer,&sample);
-			spin_unlock(&prof->pmc_samples_buffer->lock);
+			if (prof->pmc_samples_buffer) {
+				spin_lock(&prof->pmc_samples_buffer->lock);
+				__push_sample_cbuffer(prof->pmc_samples_buffer,&sample);
+				spin_unlock(&prof->pmc_samples_buffer->lock);
+			}
 
 			if (prof->profiling_mode==EBS_MODE) {
 				/* Engage multiplexation */
@@ -3645,6 +3716,7 @@ out_error:
 /* Module cleanup function */
 static void __exit pmctrack_module_exit(void)
 {
+	module_unloading=1;
 #ifndef CONFIG_PMCTRACK
 	pmctrack_exit();
 #endif

@@ -47,6 +47,7 @@ pmu_props_t pmu_props_cpu[NR_CPUS];
  */
 #if defined(CONFIG_PMC_CORE_2_DUO) || defined(CONFIG_PMC_CORE_I7)
 
+
 /* https://en.wikichip.org/wiki/intel/cpuid */
 /* Supported Intel Processors */
 static struct pmctrack_cpu_model cpu_models[]= {
@@ -59,6 +60,7 @@ static struct pmctrack_cpu_model cpu_models[]= {
 	{85,"skylake"},
 	{151,"alderlake"},
 	{152,"alderlake"},
+	{183,"raptorlake"},
 	{106,"icelake"},
 	{108,"icelake"},
 	{0,NULL} /* Marker */
@@ -156,6 +158,8 @@ static void init_pmu_props_cpu(void* dummy)
 #else
 	switch(model) {
 	case 151:
+	case 152:
+	case 183:
 		/* Check hybrid CPU */
 		hw_coretype=get_this_hybrid_cpu_type();
 		if (hw_coretype==PMCT_X86_HYBRID_BIG_CORE) {
@@ -169,7 +173,6 @@ static void init_pmu_props_cpu(void* dummy)
 		if (forced_amp_topology) {
 			coretype_cpu_static[this_cpu]=this_cpu_read(cpu_is_small)==1?0:1;
 		}
-
 		props->coretype=coretype_cpu_static[this_cpu];
 		break;
 	}
@@ -233,11 +236,11 @@ void init_pmu_props(void)
 	on_each_cpu(init_pmu_props_cpu, NULL, 1);
 	/***
 	 * Add special treatment for two cases
-	 * 1) Intel Alder Lake CPUs, where as all cores
+	 * 1) Intel Alder/Raptor Lake CPUs, where as all cores
 	 *  are exposed with exactly the same model
 	 * 2) AMP topology forced by the user (testing purposes)
 	 **/
-	hybrid_cpu=(pmu_props_cpu[0].processor_model==151) || forced_amp_topology;
+	hybrid_cpu=is_intel_hybrid_processor(pmu_props_cpu[0].processor_model) || forced_amp_topology;
 
 	if (hybrid_cpu) {
 		/* For now do nothing fancy here */
@@ -484,8 +487,7 @@ int do_setup_pmcs(pmc_config_set_t* cconfig, int used_pmcs_msk,core_experiment_t
 	}
 #ifndef CONFIG_PMC_AMD
 	/* Hack: For alderlake enable 4th fixed PMC. Interrupt is disabled */
-	if ((props_cpu->processor_model==151 ||
-	     props_cpu->processor_model==152) &&
+	if (is_intel_hybrid_processor(props_cpu->processor_model) &&
 	    cconfig->coretype==1 /* Big-core only */)
 		fixed_ctrl.m_value|=0x2ULL<<12;
 	/* Make sure that all fixed-count events have the same value for the ctrl_msr */

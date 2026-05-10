@@ -45,7 +45,8 @@ enum {
 	CACHE_CLASS_UNKOWN=-1,
 	CACHE_CLASS_LIGHT=0,
 	CACHE_CLASS_STREAMING=1,
-	CACHE_CLASS_SENSITIVE=2
+	CACHE_CLASS_SENSITIVE=2,
+	NR_CACHE_CLASSES=3
 };
 
 /* Static properties for input file */
@@ -60,6 +61,40 @@ struct benchmark_properties {
 extern struct benchmark_properties foo_properties;
 
 #define MAX_CACHE_WAYS 20 /* Debussy setting */
+
+/** For flags field ***/
+#define ISOLATED_STREAMING 0x1
+
+/* Cacheman */
+enum {
+	CMCLASS_EXCESS=0,
+	CMCLASS_POOR,
+	CMCLASS_ADEQUATE,
+	CMCLASS_OTHER,
+	CMCLASS_NR_CLASSES
+};
+
+enum {
+	CMCHANGE_NONE=0,
+	CMCHANGE_UP,
+	CMCHANGE_DOWN,
+};
+
+#define TMON_MAX_THREADS 64
+
+typedef struct {
+	/* Time spent with thread count */
+	ktime_t stats[TMON_MAX_THREADS+1];
+	ktime_t last_threadcount_update;
+	unsigned long nr_changes;
+	unsigned long count_mask;
+	/* Max thread count reached during exploration */
+	unsigned int nr_max_threads;
+	ktime_t aggregate_cpu_usage;
+	unsigned char track_cpu_usage;
+	ktime_t last_cpu_usage_reset;
+} thread_count_stats_t;
+
 
 /* Structure that represents a single- or multi- threaded application */
 typedef struct app {
@@ -80,6 +115,7 @@ typedef struct app {
 	int app_id; /* For debugging */
 	char app_comm[TASK_COMM_LEN];
 	int type; /* Application class ... */
+	int prev_type; /* Last App class (history) */
 	int curve[MAX_CACHE_WAYS+1]; /* First item indicates the number of items in queue */
 	int space_curve[MAX_CACHE_WAYS+1];
 	struct benchmark_properties* sprops;
@@ -93,7 +129,25 @@ typedef struct app {
 	unsigned long next_periodic_profile;
 	unsigned long last_profiling;
 	int critical_point;
-	atomic_t ref_counter;
+	atomic_t ref_counter; /* Apparently it remains unused in PMCSched */
+	atomic_t thread_class_counters[NR_CACHE_CLASSES];
+	unsigned char externally_managed_cos_id; /* To avoid dynamic cos assignments */
+	unsigned long last_llc_cbm;				/* For efficiency in updating CAT registers */
+	atomic_t sensitivity_acum;
+	unsigned long sensitivity;
+	unsigned long last_inactivity;
+	unsigned long flags; /* Extended field for special extensions */
+	/* Cacheman fields */
+	unsigned int cm_class;
+	unsigned int cm_level; /* Max= way count */
+	int cm_llco_base;
+	int cm_llco_last;
+	int cm_excess; /* To sort for distribution */
+	unsigned char cm_level_change;
+	/* Reuse link_profiling for lists */
+	int active_count;
+	int inactive_count;
+	thread_count_stats_t tcstats;
 } app_t;
 
 
@@ -123,7 +177,10 @@ static inline int get_load_partition(cat_cache_part_t* partition)
 {
 	return partition->nr_apps;
 }
+
+
 void reconfigure_partition(cat_cache_part_t* part, unsigned int ways_assigned, unsigned int low_way);
+void reconfigure_partition_gen(cat_cache_part_t* part, unsigned int ways_assigned, unsigned int low_way, unsigned char update_hw);
 
 static inline unsigned int part_available(cat_cache_part_t* part, unsigned int available, unsigned int reserved)
 {
@@ -174,6 +231,8 @@ static inline intel_cat_support_t* get_cat_support(cache_part_set_t* pset)
 	return pset->cat_support;
 }
 
+/* Explicitly update registers if necessary (change ocurred) */
+void refresh_hw_partition_app(app_t* app);
 
 #ifdef CONFIG_X86
 /* To simplify implementation of IPI-based COS update operations */
@@ -192,5 +251,212 @@ static inline void update_clos_app_unlocked(sized_list_t* clos_cpu_list) { }
 static inline void release_clos_cpu_list(sized_list_t* clos_cpu_list) { }
 #endif
 
-#endif
 
+
+
+static inline void init_thread_count_stats(thread_count_stats_t* tstats)
+{
+	int i=0;
+	ktime_t now=ktime_get();
+
+	for (i=0; i<TMON_MAX_THREADS+1; i++) {
+		tstats->stats[i]=0;
+	}
+
+	tstats->nr_changes=0;
+	tstats->count_mask=0;
+	tstats->last_threadcount_update=now;
+	tstats->nr_max_threads=0;
+	tstats->nr_max_threads=0;
+	tstats->aggregate_cpu_usage=0;
+	tstats->track_cpu_usage=0;
+	tstats->last_cpu_usage_reset=now;
+}
+
+
+static inline void  update_thread_count_stats_time(thread_count_stats_t* tstats, int old_count, int new_count, ktime_t now)
+{
+	ktime_t delta;
+
+	/* Ignore */
+	if (old_count<0) {
+		return;
+	}
+
+	/* Accumulate for old thread count */
+	delta=ktime_sub(now,tstats->last_threadcount_update);
+	tstats->last_threadcount_update=now;
+
+	/* Accumulate for old thread count (raw value) */
+	if (tstats->track_cpu_usage)
+		tstats->aggregate_cpu_usage=ktime_add(tstats->aggregate_cpu_usage,
+		                                      old_count * delta);
+
+	/* Saturate counter */
+	if (old_count>TMON_MAX_THREADS)
+		old_count=TMON_MAX_THREADS;
+
+	/* Be carfeful with this too as we might run into buffer overflow */
+	if (new_count>TMON_MAX_THREADS)
+		new_count=TMON_MAX_THREADS;
+
+	/* Do not accumulate if a reset hapenned */
+	if (old_count==0 || !(tstats->count_mask & (1ULL<<(old_count-1))))
+		tstats->stats[old_count]=delta;
+	else
+		tstats->stats[old_count]+=delta;
+
+	/* Enable the bit */
+	if (old_count>0)
+		tstats->count_mask|=(1ULL<<(old_count-1));
+
+	/* Update changes counter if necessary */
+	if (old_count!=new_count)
+		tstats->nr_changes++;
+
+	/* Update maximum */
+	if (new_count>tstats->nr_max_threads)
+		tstats->nr_max_threads=new_count;
+}
+
+
+static inline void  update_thread_count_stats(thread_count_stats_t* tstats, int old_count, int new_count)
+{
+	update_thread_count_stats_time(tstats, old_count, new_count, ktime_get());
+}
+
+
+static inline void reset_thread_count_stats_time(thread_count_stats_t* tstats, int current_thread_count, ktime_t now)
+{
+	tstats->stats[0]=0;	/* Reset counter for 0 threads */
+	tstats->nr_changes=0; /* No changes! */
+
+	if (current_thread_count>TMON_MAX_THREADS)
+		current_thread_count=TMON_MAX_THREADS;
+
+	tstats->nr_max_threads=current_thread_count;
+	tstats->last_threadcount_update=now;
+	tstats->last_cpu_usage_reset=now;
+	tstats->aggregate_cpu_usage=ktime_set(0,0);
+	/* Reset mask */
+	tstats->count_mask=0;
+}
+
+static inline void reset_thread_count_stats(thread_count_stats_t* tstats, int current_thread_count)
+{
+	reset_thread_count_stats_time(tstats,current_thread_count,ktime_get());
+}
+
+
+static inline unsigned int get_typical_thread_count(thread_count_stats_t* tstats, ktime_t threshold)
+{
+	ktime_t acum=ktime_set(0,0);
+	int i=tstats->nr_max_threads;
+
+	/**
+	 * Traverse all thread counts from the maximum until
+	 * a substantially significant thread count is observed
+	*/
+	while (i>0) {
+		if ((tstats->count_mask & (1ULL<<(i-1)))) {
+			acum=ktime_add(tstats->stats[i],acum);
+			if (ktime_compare(tstats->stats[i],threshold)>0 || ktime_compare(acum,threshold)>0)
+				return i;
+		}
+
+		i--;
+
+	}
+
+	if (i<0)
+		i=0;
+
+	return i;
+}
+
+
+
+
+static inline unsigned int get_cpu_usage_thread_count_stats(thread_count_stats_t* tstats, ktime_t now)
+{
+	ktime_t delta=ktime_sub(now,tstats->last_cpu_usage_reset);
+
+	if (delta==0)
+		return 1;
+
+	/* Roundup the result */
+	else return (tstats->aggregate_cpu_usage+delta-1)/delta;
+}
+
+
+
+static inline unsigned int get_typical_thread_count_percentile(thread_count_stats_t* tstats, ktime_t now, ktime_t *threshold_vector, unsigned int* thread_count, unsigned int thres_count)
+{
+	ktime_t acum=ktime_set(0,0);
+	int idx_thresh=0;
+	int i;
+
+	/* default initialization */
+	for (i=0; i<thres_count; i++)
+		thread_count[i]=0;
+
+	/* Reset i for histogram analysis */
+	i=tstats->nr_max_threads;
+	/**
+	 * Retrieve required percentiles: 95 and 90 by default
+	*/
+	while (i>0) {
+		if ((tstats->count_mask & (1ULL<<(i-1)))) {
+			acum=ktime_add(tstats->stats[i],acum);
+			if (ktime_compare(tstats->stats[i],threshold_vector[idx_thresh])>0 || ktime_compare(acum,threshold_vector[idx_thresh])>0) {
+
+				thread_count[idx_thresh]=i;
+
+				idx_thresh++;
+
+				if (idx_thresh==thres_count)
+					break;
+
+			}
+		}
+		i--;
+	}
+
+	return get_cpu_usage_thread_count_stats(tstats, now);
+}
+
+static inline unsigned int get_cpu_usage_thread_count_stats_debug(thread_count_stats_t* tstats, ktime_t now)
+{
+	ktime_t delta=ktime_sub(now,tstats->last_cpu_usage_reset);
+	ktime_t acum=ktime_set(0,0);
+	unsigned int estimate1;
+	unsigned int estimate2;
+	int i=tstats->nr_max_threads;
+
+
+	if (delta==0)
+		return 1;
+
+	/* Roundup the result */
+	estimate1=(tstats->aggregate_cpu_usage+delta-1)/delta;
+
+	/**
+	 * Traverse all thread counts from the maximum until
+	 * a substantially significant thread count is observed
+	*/
+	while (i>0) {
+		if ((tstats->count_mask & (1ULL<<(i-1)))) {
+			acum=ktime_add(tstats->stats[i]*i,acum);
+		}
+
+		i--;
+
+	}
+	estimate2=(acum+delta-1)/delta;
+
+	trace_printk("e1: %d || e2: %d\n",estimate1,estimate2);
+
+	return estimate1;
+}
+
+#endif

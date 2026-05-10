@@ -19,7 +19,7 @@ static inline int is_big_core(int cpu)
 {
 	pmu_props_t* props=get_pmu_props_cpu(cpu);
 
-	if (props->processor_model==151 || props->processor_model==152) /* Alder Lake */
+	if (is_intel_hybrid_processor(props->processor_model)) /* Alder Lake */
 		return props->coretype==1;
 	else
 		return 1;
@@ -33,6 +33,7 @@ int probe_intel_perf_metrics(void)
 
 	if (props->processor_model==151 /* Alder Lake */ ||
 	    props->processor_model==152 /* Alder Lake */ ||
+	    props->processor_model==183 /* Raptor Lake */ ||
 	    props->processor_model==106 /* Ice Lake */ ||
 	    props->processor_model==108  /* Ice Lake */
 	   )

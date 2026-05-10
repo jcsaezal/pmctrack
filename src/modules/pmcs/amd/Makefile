@@ -8,8 +8,8 @@ $(MODULE_NAME)-objs +=  mchw_core.o mc_experiments.o pmu_config_x86.o cbuffer.o 
 SYMLINKS=$(patsubst %.o,%.c,$($(MODULE_NAME)-objs))
 SOURCES=$(patsubst %.o,../%.c,$($(MODULE_NAME)-objs))
 
-USER_CFLAGS ?=
-#USER_CFLAGS ?= -ggdb -O0
+#USER_CFLAGS ?=
+USER_CFLAGS ?= -ggdb -O1
 EXTRA_CFLAGS += $(USER_CFLAGS) -DCONFIG_PMC_AMD -I$(src)/../include -I$(src)/..
 
 .PHONY: debug

@@ -55,6 +55,8 @@
 
 #define DEBUG
 #define PMCSCHED_DEBUG
+//#define COS_MONITORING_BASE 1
+//#define COS_MONITORING_TICK 1
 
 /*##### Non-plugin-specific GLOBAL VARIABLES #### */
 
@@ -71,6 +73,7 @@ pmcsched_config_t pmcsched_config;
 
 intel_cmt_support_t pmcs_cmt_support;
 intel_cat_support_t pmcs_cat_support;
+intel_mba_support_t pmcs_mba_support;
 
 static spinlock_t schedulers_lock;
 
@@ -81,6 +84,7 @@ sched_ops_t * active_scheduler = NULL;
 
 unsigned char pmcsched_rdt_capable=0;
 unsigned char pmcsched_ehfi_capable=0;
+unsigned char pmcsched_mba_capable=0;
 
 static void sched_timer_periodic(struct timer_list* timer);
 static int sched_kthread_periodic(void *arg);
@@ -89,6 +93,7 @@ static int sched_kthread_periodic(void *arg);
 extern struct proc_dir_entry *pmc_dir;
 struct proc_dir_entry *pmcsched_proc=NULL;
 struct proc_dir_entry *schedctl_proc=NULL;
+struct proc_dir_entry *schedqos_proc=NULL;
 
 static ssize_t pmcsched_proc_write(struct file *filp, const char __user *buf, size_t len, loff_t *off);
 static ssize_t pmcsched_proc_read(struct file *filp, char __user *buf, size_t len, loff_t *off);
@@ -104,11 +109,13 @@ static pmctrack_proc_ops_t fops = {
 static int  schedctl_proc_open(struct inode *inode, struct file *filp);
 static int  schedctl_proc_release(struct inode *inode, struct file *filp);
 static ssize_t schedctl_proc_read(struct file *filp, char __user *buf, size_t len, loff_t *off);
+static ssize_t schedctl_proc_write(struct file *filp, const char __user *buf, size_t len, loff_t *off);
 static int  schedctl_proc_mmap(struct file *filp, struct vm_area_struct *vma);
 
 static pmctrack_proc_ops_t ctl_fops = {
 	.PMCT_PROC_OPEN = schedctl_proc_open,
 	.PMCT_PROC_READ =  schedctl_proc_read,
+	.PMCT_PROC_WRITE =  schedctl_proc_write,
 	.PMCT_PROC_RELEASE = schedctl_proc_release,
 	.PMCT_PROC_MMAP=  schedctl_proc_mmap,
 	.PMCT_PROC_LSEEK = default_llseek
@@ -134,6 +141,53 @@ typedef struct {
 	schedctl_t *schedctl;	/* Pointer to the page shared between user and kernel space */
 	int nr_references;
 } schedctl_handler_t;
+
+
+/* Sched-qos specific definitions */
+
+static int  schedqos_proc_open(struct inode *inode, struct file *filp);
+static int schedqos_proc_release(struct inode *inode, struct file *filp);
+static ssize_t schedqos_proc_read(struct file *filp, char __user *buf, size_t len, loff_t *off);
+static ssize_t schedqos_proc_write(struct file *filp, const char __user *buf, size_t len, loff_t *off);
+
+static pmctrack_proc_ops_t qos_fops = {
+	.PMCT_PROC_OPEN = schedqos_proc_open,
+	.PMCT_PROC_READ =  schedqos_proc_read,
+	.PMCT_PROC_WRITE =  schedqos_proc_write,
+	.PMCT_PROC_RELEASE = schedqos_proc_release,
+	.PMCT_PROC_LSEEK = default_llseek
+};
+
+
+/*****
+ * Support for container activation
+ **/
+static void init_container_registry(void);
+static void purge_container_registry(void);
+static sched_app_t* pmcsched_register_container(pid_t pid,
+        container_properties_t* user_props );
+static sched_app_t* pmcsched_find_container(struct css_set* cgroups);
+static sched_app_t* pmcsched_find_container_rmid(unsigned int rmid);
+static sched_app_t* pmcsched_find_container_pid(pid_t pid);
+/* Find and increase reference counter if found */
+static sched_app_t* pmcsched_retrieve_container(struct css_set* cgroups);
+static int pmcsched_unregister_container(pid_t pid);
+static void pmcsched_unregister_all_containers(void);
+static void trace_registered_containers(void);
+
+static container_properties_t default_cprops = {
+	.clos_id = 0,
+	.container_group = -1,
+	.container_type = BEST_EFFORT_CONTAINER,
+	.qos_control_enabled = 0,
+	/**
+	 * In this field we used to set the CACHE_CLASS_UNKNOWN (-1) value
+	 * but know with -<value> meaning force to |value| class
+	 * now it does not make any sense.
+	 * We use a reasonably negative number to fix this issue
+	 */
+	.container_cache_class = -77,
+};
 
 /*
  * PMCSched general locking routines
@@ -386,11 +440,15 @@ static int init_sched_thread_groups(int mode)
 		init_sized_list (&cur_group->migration_list,
 		                 offsetof(pmcsched_thread_data_t,global_migration_link));
 
+		init_sized_list (&cur_group->app_migration_list,
+		                 offsetof(app_t_pmcsched,link_migrating_apps));
+
 		init_sized_list (&cur_group->clos_to_update,
 		                 offsetof(struct clos_cpu,link));
 
 		/* It will be manually activated if timer callback not implemented */
 		cur_group->activate_kthread=0;
+		cur_group->force_activate_timer=0;
 		cur_group->timer_period=PMCSCHED_PERIOD_DEFAULT;
 		cur_group->last_migration_thread_activation=jiffies;
 
@@ -442,14 +500,87 @@ static int init_sched_thread_groups(int mode)
 	return 0;
 }
 
+static inline void initialize_schedctl_notifier(schedctl_notifier_t* notifier)
+{
+	notifier->is_active = 0;
+	spin_lock_init(&notifier->lock);
+	sema_init(&notifier->queue, 0);
+	notifier->last_update=notifier->last_check=jiffies;
+	notifier->tasks_waiting=0;
+}
+
+static inline void activate_schedctl_notifier(schedctl_notifier_t* notifier)
+{
+	spin_lock(&notifier->lock);
+	notifier->is_active = 1;
+	notifier->last_update=notifier->last_check=jiffies;
+	notifier->tasks_waiting=0;
+	spin_unlock(&notifier->lock);
+}
+
+static inline void deactivate_schedctl_notifier(schedctl_notifier_t* notifier)
+{
+	spin_lock(&notifier->lock);
+	notifier->is_active = 0;
+
+	/* Emulate a last update to unblock all threads (just in case) */
+	notifier->last_update=jiffies;
+	while (notifier->tasks_waiting>0) {
+		up(&notifier->queue);
+		notifier->tasks_waiting--;
+	}
+	spin_unlock(&notifier->lock);
+}
+
+static inline void notify_change_thread_count(schedctl_notifier_t* notifier)
+{
+	spin_lock(&notifier->lock);
+	notifier->last_update=jiffies;
+
+	while (notifier->tasks_waiting>0) {
+		up(&notifier->queue);
+		notifier->tasks_waiting--;
+	}
+
+	spin_unlock(&notifier->lock);
+}
+
+
+static inline int await_change_schedctl_notifier(schedctl_notifier_t* notifier)
+{
+	spin_lock(&notifier->lock);
+
+	/* Wait until recent updates */
+	while (!time_after(notifier->last_update, notifier->last_check)) {
+		// Register waiter, release lock, and sleep
+		notifier->tasks_waiting++;
+		spin_unlock(&notifier->lock);
+		if (down_interruptible(&notifier->queue)) {
+			spin_lock(&notifier->lock);
+			notifier->tasks_waiting--;
+			spin_unlock(&notifier->lock);
+			return -EINTR;
+		}
+		// Grab lock again
+		spin_lock(&notifier->lock);
+	}
+
+	// Register update
+	notifier->last_check=jiffies;
+
+	spin_unlock(&notifier->lock);
+	return 0;
+}
+
+
 /* =============  API for sched_app_t ... =============  */
 __attribute__((hot))
-static inline sched_app_t* create_sched_app(struct task_struct* p)
+static inline sched_app_t* create_sched_app(struct task_struct* p,
+        container_properties_t *cprops)
 {
 	sched_app_t* sched_app=NULL;
 	app_t_pmcsched* app=NULL;
-	int i = 0;
-	int j=0;
+	int i,j,k;
 	int nr_cpu_groups=0;
 	app_t* app_cache;
 
@@ -464,6 +595,24 @@ static inline sched_app_t* create_sched_app(struct task_struct* p)
 	rwlock_init(&sched_app->app_lock);
 
 	sched_app->is_multithreaded=0;
+	sched_app->master_shared=NULL;
+	initialize_schedctl_notifier(&sched_app->master_notifier);
+	sched_app->schedctl_signal_recipient=NULL;
+	sched_app->pid=-1; /* Keep track of PID */
+	sched_app->leader=p;
+	sched_app->cgroups=NULL; /* This must be set up afterwards */
+	/**
+	 * Initialize per-socket statistics
+	 */
+	for (i=0; i<MAX_SOCKETS_PLATFORM; i++) {
+		app_socket_stats_t* stats=&sched_app->socket_stats[i];
+		for (j=0; j<RMID_MAX_LLCS; j++)  {
+			stats->valid_stats[j]=0;
+			for (k=0; k<CMT_MAX_EVENTS; k++)
+				stats->rdt_event_values[j][k]=0;
+
+		}
+	}
 
 	for (i=0; i<nr_cpu_groups; i++) {
 		app=&sched_app->pmc_sched_apps[i];
@@ -482,15 +631,20 @@ static inline sched_app_t* create_sched_app(struct task_struct* p)
 		app->state = NO_QUEUE;
 
 		app->sa=sched_app;
+		app->app_runnable_threads = 0; /* Initialized here but maintained by each plugin */
 
 		/* For LFOC (extracted from dyn_cache_part_mm.c:create_app_t()) */
 		app_cache->cat_partition=NULL;
 		app_cache->last_partition=-1; /* No "old" partition */
 		app_cache->app_id=-1;
-		app_cache->type=CACHE_CLASS_UNKOWN;
+		app_cache->type=app_cache->prev_type=CACHE_CLASS_UNKOWN;
 		app_cache->critical_point=1; /* one way */
 
 		app_cache->curve[0]=0;
+
+		init_thread_count_stats(&app_cache->tcstats);
+		/* Enable aggregate CPU usage */
+		app_cache->tcstats.track_cpu_usage = 1;
 
 		for (j=1; j<MAX_CACHE_WAYS+1; j++) {
 			/*To avoid divide by zero */
@@ -502,17 +656,49 @@ static inline sched_app_t* create_sched_app(struct task_struct* p)
 #else
 		app_cache->sprops=NULL;
 #endif
-		app_cache->static_type=CACHE_CLASS_UNKOWN;
-		app_cache->force_class=0;
+
+		if (cprops->container_cache_class>0) {
+			app_cache->static_type=cprops->container_cache_class;
+			app_cache->force_class=0;
+		} else if (cprops->container_cache_class<=-(NR_CACHE_CLASSES+1)) {
+			app_cache->static_type=CACHE_CLASS_UNKOWN;
+			app_cache->force_class=0;
+		} else {
+			if (cprops->container_cache_class==-3)
+				cprops->container_cache_class=0; /* Force as light-sharing */
+			/* Force class if reasonably negative */
+			app_cache->static_type=-cprops->container_cache_class;
+			app_cache->force_class=1;
+		}
+
 		app_cache->process=p;
 		app_cache->profiling_scheduled = 0;
 		app_cache->next_periodic_profile=0; /* Disabled by default */
 		/* Initialization of master thread */
 		app_cache->master_thread=NULL; /* To be activated on active */
 
-		app_cache->app_cmt_data.rmid=0;
-		app_cache->app_cmt_data.cos_id=0;
+		app_cache->app_cmt_data.rmid=0; /* This is assigned later on */
+		app_cache->app_cmt_data.cos_id=cprops->clos_id;
 		strcpy(app_cache->app_comm,"unknown");
+
+		/* Initialize per-thread class counters (all zero as unknown) */
+		for (j=0; j<NR_CACHE_CLASSES; j++)
+			atomic_set(&app_cache->thread_class_counters[j],0);
+
+		app_cache->externally_managed_cos_id=0;
+		app_cache->last_llc_cbm=0x0;
+
+		atomic_set(&app_cache->sensitivity_acum,0);
+		app_cache->sensitivity=10000; /* Default value to have a non-zero weight */
+		app_cache->last_inactivity=jiffies;
+		app_cache->flags = 0;
+
+		/* Cacheman fields */
+		app_cache->cm_class=CMCLASS_OTHER;
+		app_cache->cm_level=0;
+		app_cache->cm_llco_base=app_cache->cm_llco_last=1000;
+		app_cache->cm_excess=0;
+		app_cache->cm_level_change=0;
 	}
 
 	return sched_app;
@@ -886,6 +1072,11 @@ static void sched_timer_periodic(struct timer_list* timer)
 	/* Direct call */
 	if (active_scheduler->sched_timer_periodic) {
 		lock=pmcsched_acquire_lock(&flags);
+
+		/* Clear flag */
+		if (cur_group->force_activate_timer)
+			cur_group->force_activate_timer=0;
+
 		active_scheduler->sched_timer_periodic();
 		pmcsched_release_lock(lock,flags);
 		/**
@@ -1001,6 +1192,7 @@ static int pmcsched_enable_module(void)
 	int retval;
 	unsigned char cmt_cfg=0;
 	unsigned char cat_cfg=0;
+	unsigned char mba_cfg=0;
 	unsigned char sched_structures_ready=0;
 
 	pmcsched_rdt_capable=!qos_extensions_probe();
@@ -1019,6 +1211,9 @@ static int pmcsched_enable_module(void)
 	/* For IPI-based update operations of cache-partition migrations */
 	initialize_clos_cpu_pool();
 
+	/* Init pool of active containers */
+	init_container_registry();
+
 	pmcsched_proc= proc_create("sched", 0666, pmc_dir, &fops);
 
 	if (!pmcsched_proc) {
@@ -1029,6 +1224,13 @@ static int pmcsched_enable_module(void)
 	schedctl_proc= proc_create("schedctl", 0666, pmc_dir, &ctl_fops);
 
 	if (!schedctl_proc) {
+		retval=-ENOMEM;
+		goto init_error_path;
+	}
+
+	schedqos_proc= proc_create("sched_qos", 0666, pmc_dir, &qos_fops);
+
+	if (!schedqos_proc) {
 		retval=-ENOMEM;
 		goto init_error_path;
 	}
@@ -1047,6 +1249,14 @@ static int pmcsched_enable_module(void)
 		}
 
 		cat_cfg=1;
+
+		if (intel_mba_initialize(&pmcs_mba_support)) {
+			trace_printk("Warning: This processor does not support HW-assisted MBA\n");
+			pmcsched_mba_capable=0;
+		} else {
+			mba_cfg=1;
+			pmcsched_mba_capable=1;
+		}
 	}
 
 	/*
@@ -1065,12 +1275,16 @@ static int pmcsched_enable_module(void)
 	trace_printk("%s loaded successfully\n",SCHED_PROTOTYPE_STRING);
 	return 0;
 init_error_path:
+	if (mba_cfg)
+		intel_mba_release(&pmcs_mba_support);
 	if (cat_cfg)
 		intel_cat_release(&pmcs_cat_support);
 	if (cmt_cfg)
 		intel_cmt_release(&pmcs_cmt_support);
 	if (sched_structures_ready)
 		init_sched_thread_groups(ON_DISABLE_MODULE);
+	if (schedqos_proc)
+		remove_proc_entry("sched_qos", pmc_dir);
 	if (schedctl_proc)
 		remove_proc_entry("schedctl", pmc_dir);
 	if (pmcsched_proc)
@@ -1080,6 +1294,9 @@ init_error_path:
 
 static void pmcsched_disable_module(void)
 {
+	/* Free up container structures, before destroying plugin  */
+	purge_container_registry();
+
 	/* Previous plugin might want to free up memory ...*/
 	if (active_scheduler->destroy_plugin) {
 		active_scheduler->destroy_plugin();
@@ -1095,9 +1312,16 @@ static void pmcsched_disable_module(void)
 		schedctl_proc = NULL;
 	}
 
+	if (schedqos_proc) {
+		remove_proc_entry("sched_qos", pmc_dir);
+		schedqos_proc = NULL;
+	}
+
 	if (pmcsched_rdt_capable) {
 		intel_cmt_release(&pmcs_cmt_support);
 		intel_cat_release(&pmcs_cat_support);
+		if (pmcsched_mba_capable)
+			intel_mba_release(&pmcs_mba_support);
 	}
 
 	if (pmcsched_ehfi_capable)
@@ -1244,7 +1468,6 @@ void __printk_cpu_info(int cpu)
 
 void printk_cpu_info(int cpu)
 {
-
 	int nr_cpus=num_online_cpus();
 	int nr_cores;
 	int i=0;
@@ -1272,7 +1495,13 @@ static ssize_t pmcsched_proc_write(struct file *filp, const char __user *buf, si
 	int val,i=0, found = 0, pending_threads, retval, ret;
 	struct sched_ops *aux, *next, *old;
 	unsigned long flags;
+	pid_t pid;
+	int items;
+	sched_app_t* capp;
+
 	int nr_schedulers=sized_list_length(&schedulers);
+	/* Initialize with defaults */
+	container_properties_t uprops=default_cprops;
 
 	if (len>=bufsiz)
 		return -ENOSPC;
@@ -1358,9 +1587,10 @@ static ssize_t pmcsched_proc_write(struct file *filp, const char __user *buf, si
 	} else if (sscanf(kbuf,"verbose %d",&val) && (val == 1 || val == 0)) {
 		active_scheduler_verbose = val;
 	} else if (sscanf(kbuf,"sched_period_normal %d",&val)==1) {
-		if (val<=0)
-			return -EINVAL;
-
+		if (val<=0) {
+			len=-EINVAL;
+			goto end_w;
+		}
 		pmcsched_config.sched_period_normal=msecs_to_jiffies(val);
 
 	} else if (sscanf(kbuf,"sched_period_profiling %d",&val)==1) {
@@ -1384,6 +1614,39 @@ static ssize_t pmcsched_proc_write(struct file *filp, const char __user *buf, si
 		}
 	} else if (sscanf(kbuf,"topo %d",&val)==1) {
 		printk_cpu_info(val);
+	} else if ((items=sscanf(kbuf,"register_cgroup %d %d %d %d %d %lu %d",
+	                         &pid, &uprops.clos_id, &uprops.container_cache_class,
+	                         &uprops.container_group, &uprops.container_type, &uprops.qos_target,&uprops.cmp_mode))>=1) {
+
+		if (items>=6) {
+			if (uprops.qos_target==0 || uprops.cmp_mode>=NR_COMPARE_MODES) {
+				len=-EINVAL;
+				goto end_w;
+			}
+			/* Force type to QOS_CONSTRAINED_CONTAINER */
+			uprops.container_type=QOS_CONSTRAINED_CONTAINER;
+		}
+
+		trace_printk("Registered container COS_ID=%d and CLASS=%d\n",
+		             uprops.clos_id, uprops.container_cache_class);
+
+		capp=pmcsched_register_container(pid,&uprops);
+
+		if (IS_ERR(capp)) {
+			len = PTR_ERR(capp);
+			goto end_w;
+		}
+	} else if (sscanf(kbuf,"unregister_cgroup %d",&pid)==1) {
+		val=pmcsched_unregister_container(pid);
+
+		if (val<0) {
+			len = val;
+			goto end_w;
+		}
+	} else if (strcmp(kbuf,"unregister_all_cgroups\n")==0) {
+		pmcsched_unregister_all_containers();
+	} else if (strcmp(kbuf,"trace_cgroups\n")==0) {
+		trace_registered_containers();
 	} else {
 		/* Otherwise assume is a plugin parameter */
 		if  (active_scheduler->on_write_plugin) {
@@ -1461,6 +1724,15 @@ static ssize_t pmcsched_proc_read(struct file *filp, char __user *buf, size_t le
 		              pmcs_cat_support.cat_nr_cos_available);
 		dest+=sprintf(dest,"cat_cbm_length=%d\n",
 		              pmcs_cat_support.cat_cbm_length);
+
+		if (pmcsched_mba_capable) {
+			dest+=sprintf(dest,"mba_max_delay=%d\n",
+			              pmcs_mba_support.mba_max_throtling);
+			dest+=sprintf(dest,"mba_cos_available=%d\n",
+			              pmcs_mba_support.mba_nr_cos_available);
+			dest+=sprintf(dest,"mba_linear_throttling=%d\n",
+			              pmcs_mba_support.mba_is_linear);
+		}
 	}
 	dest+=sprintf(dest,"verbose=%d\n",active_scheduler_verbose);
 
@@ -1499,11 +1771,15 @@ static int schedctl_proc_mmap(struct file *filp, struct vm_area_struct *vma)
 	return 0;
 }
 
+
 static int schedctl_proc_open(struct inode *inode, struct file *filp)
 {
 	schedctl_handler_t *handler =NULL;
-	pmon_prof_t* prof=get_prof(current);
+	struct task_struct *p=current;
+	pmon_prof_t* prof=get_prof(p);
 	pmcsched_thread_data_t* pdata;
+	unsigned char do_not_init=0;
+	char schedctl_buf[TASK_COMM_LEN];
 
 	if (!prof || ! prof->monitoring_mod_priv_data)
 		return -ENOTSUPP;
@@ -1522,6 +1798,7 @@ static int schedctl_proc_open(struct inode *inode, struct file *filp)
 #ifdef SCHEDCTL_DEBUG
 		trace_printk("Reusing schedctl structure=0x%p\n", pdata->schedctl);
 #endif
+		do_not_init=1;
 		goto skip_allocation;
 	}
 
@@ -1534,6 +1811,19 @@ static int schedctl_proc_open(struct inode *inode, struct file *filp)
 
 	pdata->schedctl=handler->schedctl;
 
+	/**
+	 *  Update global pointer for master thread
+	 * (if not registered by another thread already)
+	 *
+	 * Prof must be enabled! Especially critical for containers.
+	 * */
+	if (get_prof_enabled(prof) && p->tgid==p->pid && !pdata->sched_app->master_shared) {
+		pdata->sched_app->master_shared=pdata->schedctl;
+		pdata->sched_app->schedctl_signal_recipient=p;
+		get_task_comm(schedctl_buf, p);
+		trace_printk("Process %s (%d) installed schedctl\n",schedctl_buf, p->pid);
+	}
+
 #ifdef SCHEDCTL_DEBUG
 	trace_printk("Schedctl kernel pointer=0x%p\n",pdata->schedctl);
 #endif
@@ -1545,7 +1835,10 @@ skip_allocation:
 	pdata->schedctl->sc_prio=0;
 	pdata->schedctl->sc_nfc=0;
 	pdata->schedctl->sc_sf=200;
-
+	if (!do_not_init) {
+		pdata->schedctl->sc_num_threads=0;
+		pdata->schedctl->sc_malleable=0;
+	}
 	filp->private_data = handler;
 	return 0;
 }
@@ -1556,16 +1849,28 @@ int schedctl_proc_release(struct inode *inode, struct file *filp)
 	schedctl_handler_t *handler = filp->private_data;
 	pmon_prof_t* prof=get_prof(current);
 	pmcsched_thread_data_t* pdata;
+	sched_app_t* sapp;
+
 
 	if (!prof || ! prof->monitoring_mod_priv_data)
 		return 0; /* Not really a problem */
 
 	pdata = prof->monitoring_mod_priv_data;
+	sapp=pdata->sched_app;
 
 	/**
-	 *  we do not free up the per-thread schedctl structure
-	 * until global free up due to efficiency reasons.
-	 * Essentially the runtime system would reuse this stuff.
+	 * If any thread of the process or container
+	 * closes the schedctl file and the notifier was enabled,
+	 * we should disable it, to make the thread terminate...
+	*/
+	if (get_prof_enabled(prof) && sapp->master_notifier.is_active)
+		deactivate_schedctl_notifier(&sapp->master_notifier);
+
+	/**
+	 * We do not free up the per-thread schedctl structure
+	 * until global free up (pmcsched_on_free_task()) due to
+	 * efficiency reasons. Essentially the runtime system would
+	 * reuse this stuff.
 	 *
 	 **/
 	if (handler) {
@@ -1585,15 +1890,34 @@ static ssize_t schedctl_proc_read(struct file *filp, char __user *buf, size_t le
 	char kbuf[100]="";
 	char* dest=kbuf;
 	int nr_bytes=0;
+	sched_app_t* sapp;
+	int retval;
 
 	if (!prof || ! prof->monitoring_mod_priv_data)
 		return -EINVAL;
 
 	pdata=prof->monitoring_mod_priv_data;
 	schedctl=pdata->schedctl;
+	sapp=pdata->sched_app;
 
-	if (! schedctl)
+	if (!schedctl || !sapp )
 		return -ENOENT;
+
+	/* Handle notifier code*/
+	if (sapp->master_notifier.is_active) {
+		if ((retval=await_change_schedctl_notifier(&sapp->master_notifier))) {
+			return 0; //Nothing else to read
+		}
+
+		dest+=sprintf(dest,"%d\n",schedctl->sc_num_threads);
+
+		nr_bytes=dest-kbuf;
+
+		if (copy_to_user(buf,kbuf,nr_bytes))
+			return -EFAULT;
+
+		return nr_bytes;
+	}
 
 #if defined(CONFIG_PMC_PERF_X86) || defined(CONFIG_PMC_CORE_I7)
 	if (len==sizeof(unsigned int)) {
@@ -1619,6 +1943,8 @@ static ssize_t schedctl_proc_read(struct file *filp, char __user *buf, size_t le
 	dest+=sprintf(dest,"nfc=%d\n",schedctl->sc_nfc);
 	dest+=sprintf(dest,"prio=%d\n",schedctl->sc_prio);
 	dest+=sprintf(dest,"sf=%d\n",schedctl->sc_sf);
+	dest+=sprintf(dest,"num_threads=%d\n",schedctl->sc_num_threads);
+	dest+=sprintf(dest,"malleable=%u\n",schedctl->sc_malleable);
 
 	nr_bytes=dest-kbuf;
 
@@ -1627,6 +1953,102 @@ static ssize_t schedctl_proc_read(struct file *filp, char __user *buf, size_t le
 
 	(*off)+=nr_bytes;
 	return nr_bytes;
+}
+
+
+static ssize_t schedctl_proc_write(struct file *filp, const char __user *buf, size_t len, loff_t *off)
+{
+	const int bufsiz=100;
+	char kbuf[100];
+	int val;
+	pmcsched_thread_data_t* pdata;
+	pmon_prof_t* prof=get_prof(current);
+	schedctl_t* schedctl;
+	sched_app_t* sapp;
+	int retval=len;
+
+	if (len>=bufsiz)
+		return -ENOSPC;
+
+	if (copy_from_user(kbuf,buf,len))
+		return -EFAULT;
+
+	kbuf[len]='\0';
+
+
+	pdata=prof->monitoring_mod_priv_data;
+	schedctl=pdata->schedctl;
+	sapp=pdata->sched_app;
+
+	if (!schedctl || !sapp )
+		return -ENOENT;
+
+	if (sscanf(kbuf,"sc_malleable %d",&val)==1) {
+		if (val>2  || val < 0) {
+			retval=-EINVAL;
+			goto do_ret;
+		}
+		schedctl->sc_malleable=val;
+	} else if (sscanf(kbuf,"sc_num_threads %d",&val)==1) {
+		if (val < 0) {
+			retval=-EINVAL;
+			goto do_ret;
+		}
+		schedctl->sc_num_threads=val;
+
+	} else if (sscanf(kbuf,"notify %d",&val)==1) {
+		/* Not allowed if not in PMCTrack */
+		if (!get_prof_enabled(prof)) {
+			retval=-ENOTSUPP;
+			goto do_ret;
+		}
+		if (val == 0) {
+			deactivate_schedctl_notifier(&sapp->master_notifier);
+			/* TODO: check if master should be disabled... */
+		} else if (val == 1) {
+			activate_schedctl_notifier(&sapp->master_notifier);
+			/* Set as master */
+			sapp->master_shared=pdata->schedctl;
+		}
+	} else if (sscanf(kbuf,"test %d",&val)==1) {
+		/* Not allowed if not in PMCTrack */
+		if (!get_prof_enabled(prof)) {
+			retval=-ENOTSUPP;
+			goto do_ret;
+		}
+		if (sapp->master_notifier.is_active && sapp->master_shared) {
+			//Change and notify
+			sapp->master_shared->sc_num_threads=val;
+			notify_change_thread_count(&sapp->master_notifier);
+		} else {
+			retval=-EINVAL;
+			goto do_ret;
+		}
+	} else if (strcmp(kbuf,"set master\n")==0) {
+		/* Not allowed if not in PMCTrack */
+		if (!get_prof_enabled(prof)) {
+			retval=-ENOTSUPP;
+			goto do_ret;
+		}
+		/* Make this process the master thread (container) */
+		sapp->master_shared=pdata->schedctl;
+		sapp->schedctl_signal_recipient=current;
+		trace_printk("Registering master thread (PID=%d)\n",current->pid);
+	} else if (strcmp(kbuf,"unset master\n")==0) {
+		/* Not allowed if not in PMCTrack */
+		if (!get_prof_enabled(prof)) {
+			retval=-ENOTSUPP;
+			goto do_ret;
+		}
+		sapp->master_shared=NULL;
+		sapp->schedctl_signal_recipient=NULL;
+		trace_printk("Unregistering master thread (PID=%d)\n",current->pid);
+	} else {
+		//Error
+		retval = -EINVAL;
+	}
+do_ret:
+	return retval;
 }
 
 /* Open shared memory region */
@@ -1672,9 +2094,210 @@ static int schedctl_nopage( struct vm_fault *vmf) {
 	return 0;
 }
 
+
+static int schedqos_proc_open(struct inode *inode, struct file *filp) {
+	/* Nothing to do here */
+	return 0;
+}
+
+static int schedqos_proc_release(struct inode *inode, struct file *filp) {
+	sched_app_t* sa=(sched_app_t*) filp->private_data;
+
+	/* Don't forget to decrement reference counter */
+	if (sa)
+		put_sched_app(sa);
+
+	return 0;
+}
+
+static ssize_t schedqos_proc_read(struct file *filp, char __user *buf, size_t len, loff_t *off) {
+	struct task_struct *p;
+	pmon_prof_t* prof;
+	pmcsched_thread_data_t* t;
+	sched_app_t* sa=(sched_app_t*) filp->private_data;
+	app_t_pmcsched* app=NULL;
+	app_t* app_cache;
+	char* kbuf;
+	char* dst;
+	int nr_bytes=0;
+	int ret=0;
+
+	/* EOF handling */
+	if (*off>0)
+		return 0;
+
+	if ((kbuf=kmalloc(PAGE_SIZE,GFP_KERNEL))==NULL)
+		return -ENOMEM;
+
+	dst=kbuf;
+
+	if (!sa) {
+		p=current;
+		prof=get_prof(p);
+
+		if (!prof || ! prof->monitoring_mod_priv_data) {
+			ret= -ENOTSUPP;
+			goto exit_path;
+		}
+
+		t = prof->monitoring_mod_priv_data;
+
+		sa = t->sched_app;
+
+		/* Increment reference counter */
+		get_sched_app(sa);
+
+		filp->private_data = sa;
+	}
+
+	/* proceed to dump message */
+	app=&sa->pmc_sched_apps[0]; // Grab pointer to group 0
+	app_cache=&app->app_cache;
+
+	dst+=sprintf(dst,"rmid=%d\n", app_cache->app_cmt_data.rmid);
+	dst+=sprintf(dst,"cosid=%d\n", app_cache->app_cmt_data.cos_id);
+
+	/* Show QoS Spec if QoS was enabled */
+	if (sa->cprops.qos_control_enabled) {
+		switch(sa->cprops.cmp_mode) {
+		case LEQ_THAN:
+			dst+=sprintf(dst,"qos_settings=val<=%lu (last value: %lu)\n", sa->cprops.qos_target, sa->cprops.current_qos_value);
+			break;
+		case GEQ_THAN:
+			dst+=sprintf(dst,"qos_settings=val>=%lu (last value: %lu)\n", sa->cprops.qos_target,sa->cprops.current_qos_value);
+			break;
+		default:
+			dst+=sprintf(dst,"qos_settings=(Undefined)\n");
+			break;
+		}
+	}
+
+	nr_bytes=dst-kbuf;
+
+	if (copy_to_user(buf,kbuf,nr_bytes)) {
+		ret= -EFAULT;
+		goto exit_path;
+	}
+
+	(*off)+=nr_bytes;
+	ret=nr_bytes;
+
+exit_path:
+	kfree(kbuf);
+
+	return ret;
+}
+
+static ssize_t schedqos_proc_write(struct file *filp, const char __user *buf, size_t len, loff_t *off) {
+	char kbuf[100];
+	int val;
+	sched_app_t* sa=(sched_app_t*) filp->private_data;
+	container_properties_t uprops;
+
+	if (len>100)
+		return -ENOSPC;
+
+	if (copy_from_user(kbuf, buf, len))
+		return -EFAULT;
+
+	kbuf[len]='\0';
+
+	if (sscanf(kbuf, "track_rmid %d", &val)==1) {
+		/* Already tracking a container */
+		if (sa)
+			return -EBUSY;
+
+		sa=pmcsched_find_container_rmid(val);
+
+		if (!sa)
+			return -ENOENT;
+
+		/**
+		 *  Increment reference counter
+		 *  and store pointer for next time
+		 ***/
+		get_sched_app(sa);
+		filp->private_data = sa;
+	} else if (sscanf(kbuf, "untrack_rmid %d", &val)==1) {
+		if (!sa)
+			return -ENOENT;
+
+		put_sched_app(sa);
+		filp->private_data = NULL;
+
+	} else if (sscanf(kbuf, "track_pid %d", &val)==1) {
+		/* Already tracking a container */
+		if (sa)
+			return -EBUSY;
+
+		sa=pmcsched_find_container_pid(val);
+
+		if (IS_ERR(sa))
+			return PTR_ERR(sa);
+
+		/**
+		 *  Increment reference counter
+		 *  and store pointer for next time
+		 ***/
+		get_sched_app(sa);
+		filp->private_data = sa;
+	} else if (sscanf(kbuf, "qos_params %lu %u", &uprops.qos_target,&uprops.cmp_mode)==2) {
+		if (!sa)
+			return -ENOENT;
+
+		if  (uprops.qos_target==0 || uprops.cmp_mode>=NR_COMPARE_MODES)
+			return -EINVAL;
+
+		/* Copy values in container structure */
+		sa->cprops.qos_target=uprops.qos_target;
+		sa->cprops.cmp_mode=uprops.cmp_mode;
+		sa->cprops.container_type=QOS_CONSTRAINED_CONTAINER;
+
+	} else if (sscanf(kbuf, "current_qos %lu", &uprops.current_qos_value)==1) {
+		if (!sa)
+			return -ENOENT;
+
+		sa->cprops.current_qos_value=uprops.current_qos_value;
+		sa->cprops.time_last_qos_sample=ktime_get();
+
+		trace_printk("Set Current Qos Value: %ld\n", sa->cprops.current_qos_value);
+
+	} else if (strncmp(kbuf, "enable",6)==0) {
+		if (!sa)
+			return -ENOENT;
+
+		sa->cprops.qos_control_enabled=1;
+	} else if (strncmp(kbuf, "disable",7)==0) {
+		if (!sa)
+			return -ENOENT;
+
+		sa->cprops.qos_control_enabled=0;
+	} else {
+		return -EINVAL;
+	}
+
+	(*off)+=len;
+	return len;
+}
+
+
 noinline void trace_mt_path(pmon_prof_t* par_prof,pmcsched_thread_data_t* par_data) {
 	asm(" ");
 	//trace_printk("%p %p\n",par_prof,par_data);
+}
+
+noinline void trace_fork_container(struct task_struct* p, struct css_set* cgroups) {
+	asm(" ");
+	//trace_printk("%p %p\n",par_prof,par_data);
+}
+
+static inline void initialize_running_average_values(running_avg_metrics_t* ravg) {
+	int i=0;
+
+	for (i=0; i<MAX_MULTIPLEX_EXP_PER_CORETYPE; i++)
+		ravg->value[i]=0;
+
+	ravg->count=0;
 }
 
 static int pmcsched_on_fork(unsigned long clone_flags, pmon_prof_t* prof) {
@@ -1683,6 +2306,8 @@ static int pmcsched_on_fork(unsigned long clone_flags, pmon_prof_t* prof) {
 	unsigned int nr_coretypes=active_scheduler->flags&PMCSCHED_AMP_SCHED?get_nr_coretypes():1;
 	int error=0;
 	pmon_prof_t *pprof = get_prof(current);
+	sched_app_t* cont_app = NULL;
+	unsigned char is_new_app = 0;
 
 	if (prof->monitoring_mod_priv_data!=NULL)
 		return 0;
@@ -1711,9 +2336,11 @@ static int pmcsched_on_fork(unsigned long clone_flags, pmon_prof_t* prof) {
 				if (error)
 					goto out_err;
 
-				if (cc->metric_descr[k])
+				if (cc->metric_descr[k]) {
 					/* Clone Metrics from the corresponding metric vectors */
 					clone_metric_experiment_set_t(&data->metric_set[k],cc->metric_descr[k]);
+					initialize_running_average_values(&data->running_avg[k]);
+				}
 			}
 
 			/* Enable counters thread. On AMPs start with small core events */
@@ -1741,8 +2368,11 @@ static int pmcsched_on_fork(unsigned long clone_flags, pmon_prof_t* prof) {
 	data->migration_data.state=MIGRATION_COMPLETED;
 
 	data->force_per_thread = 0;
+	data->last_time_active = 0 ;
+	data->last_time_inactive = ktime_get();
+	data->time_per_state[0] = data->time_per_state[1]= 0;
 
-	for (i=0;i<MAX_SOCKETS_PLATFORM;i++)
+	for (i=0; i<MAX_SOCKETS_PLATFORM; i++)
 		data->ticks_per_socket[i]=0;
 
 #ifdef TASKLET_SIGNALS_PMCSCHED
@@ -1766,7 +2396,7 @@ static int pmcsched_on_fork(unsigned long clone_flags, pmon_prof_t* prof) {
 		/* Check if this application should be treated by the scheduler as
 		 * a bunch of unrelated threads
 		 */
-		if (par_data->force_per_thread) {
+		if ( par_data->force_per_thread ) {
 			data->force_per_thread = 1;
 			goto single_threaded_processing;
 		}
@@ -1796,14 +2426,47 @@ static int pmcsched_on_fork(unsigned long clone_flags, pmon_prof_t* prof) {
 			trace_printk("Thread %d assigned RMID %d.\n",
 			             prof->this_tsk->pid, par_data->cmt_data->rmid);
 		}
+	} else if ((cont_app=pmcsched_retrieve_container(current->cgroups))) {
+
+		data->sched_app = cont_app;
+
+		trace_fork_container(current,current->cgroups);
+
+		/* Update legacy app pointer
+		    Legacy old pointer is also used to keep track
+		    of the application's unique RMID
+		*/
+		data->app=&cont_app->pmc_sched_apps[0];
+
+		/* For Intel CMT/CAT */
+		data->t_flags|=PMCSCHED_NEW_TS_IN_CONTAINER;
+		/* Point to per-application data */
+		data->cmt_data=&data->app->app_cache.app_cmt_data;
+		/* Make a copy structure for monitoring bandwidth and cache usage */
+		data->cmt_monitoring_data=*data->cmt_data;
+
+		if (pmcsched_rdt_capable)
+			use_rmid(data->cmt_data->rmid); /* Increase ref counter */
+
+		if (active_scheduler_verbose)
+			trace_printk("Container process %d assigned RMID %d.\n",
+			             prof->this_tsk->pid, data->cmt_data->rmid);
+
+		/**
+		 * Force activate prof and performance counters (if configured)
+		*/
+		set_prof_enabled(prof, 1);
+		prof->pmc_jiffies_interval=pmcs_pmon_config.pmon_nticks;
+		prof->pmc_jiffies_timeout=jiffies+prof->pmc_jiffies_interval;
 	} else {
 single_threaded_processing:
 		/* Create application structure for the thread */
-		data->sched_app = create_sched_app(prof->this_tsk);
+		data->sched_app = create_sched_app(prof->this_tsk, &default_cprops);
 
 		if (!data->sched_app)
 			panic("Sched module was not able to allocate memory for app structure");
 
+		is_new_app = 1;
 		/* Update legacy app pointer */
 		data->app=&data->sched_app->pmc_sched_apps[0];
 
@@ -1819,19 +2482,22 @@ single_threaded_processing:
 		data->cmt_data->rmid=0; /* It will be assigned in the first context switch */
 	}
 
-	//data->last_bw_update = ktime_get(); /* Time since last BW update */
 	data->security_id = current_monitoring_module_security_id();
 	/* Initialize data field in proc structure */
 	prof->monitoring_mod_priv_data = data;
 
 	/* Invoke only fork for the active scheduler */
 	if (active_scheduler->on_fork_thread &&
-	    (error=active_scheduler->on_fork_thread(data, !is_new_thread(clone_flags))) )
+	    (error=active_scheduler->on_fork_thread(data, is_new_app)))
 		goto out_err;
 
 	return 0;
 
 out_err:
+	if (is_new_app) {
+		put_sched_app(data->sched_app);
+		data->sched_app = NULL;
+	}
 	for (j=0; j<k; j++)
 		free_experiment_set(&prof->pmcs_multiplex_cfg[j]);
 	return error;
@@ -1955,13 +2621,40 @@ static void pmcsched_on_exit(pmon_prof_t* prof) {
 	} else if (!was_first_time && !dead_task(t)) {
 
 		lock=pmcsched_acquire_lock(&flags);
+		t->t_flags|=PMCSCHEDT_THREAD_EXITING;
 		if (active_scheduler->on_exit_thread)
 			active_scheduler->on_exit_thread(t);
 		pmcsched_set_state(t, TASK_KILLED);
 		pmcsched_release_lock(lock,flags);
 	}
 
+	/*
+	 * Manipulate schedctl-related fields
+	 */
+	pmcsched_acquire_lock(&flags);
+
+	/* Remove signal recipient on exit */
+	if (t->sched_app->schedctl_signal_recipient==prof->this_tsk)
+		t->sched_app->schedctl_signal_recipient=0;
+
+	/**
+	 * Master thread is gone (set per-app field to null)
+	 */
+	if (t->sched_app->master_shared && t->sched_app->master_shared==t->schedctl) {
+		t->sched_app->master_shared=NULL;
+		trace_printk("Unregistering master schedctl\n");
+	}
+
+	pmcsched_release_lock(lock,flags);
+
+
 #ifndef CONFIG_PMC_CORE_2_DUO
+	/**
+	 * For simplicity a thread from an active container
+	 * would invoke put_rmid() right here too.
+	 *
+	 * Therefore we do not need to invoke put_rmid in put_sched_app()
+	*/
 	if (pmcsched_rdt_capable && get_prof_enabled(prof)) {
 		put_rmid(t->cmt_data->rmid);
 	}
@@ -2184,10 +2877,13 @@ end_func_in:
 		__set_rmid_and_cos(t->cmt_data->rmid,t->cmt_data->cos_id);
 
 		if (was_first_time) {
-			uint_t llc_id = topology_physical_package_id(smp_processor_id());
-			intel_cmt_update_supported_events(&pmcs_cmt_support,t->cmt_data,llc_id);
+			intel_cmt_update_supported_events(&pmcs_cmt_support,t->cmt_data);
+			t->sched_app->pid=p->tgid; /* Keep track of PID */
 		}
 	}
+#ifdef COS_MONITORING_BASE
+	do_trace_cos(1, smp_processor_id());
+#endif
 }
 
 void pmcsched_on_switch_out(pmon_prof_t* prof) {
@@ -2237,18 +2933,47 @@ void pmcsched_on_switch_out(pmon_prof_t* prof) {
 	}
 
 end_func_out:
+#ifdef COS_MONITORING_BASE
+	do_trace_cos(2, smp_processor_id());
+#endif
 	if (pmcsched_rdt_capable)
 		__unset_rmid();
 }
 
+
+
+
+void noinline trace_cos(int where, struct task_struct* p, int cpu, int cosid, int rmid) {
+	asm(" ");
+}
+
+
+
 static void  pmcsched_on_tick(pmon_prof_t* p, int cpu) {
 	pmcsched_thread_data_t* t=
 	    (pmcsched_thread_data_t*)p->monitoring_mod_priv_data;
+	sched_thread_group_t* cur_group=get_cur_group_sched();
 
 	if (active_scheduler->on_tick_thread
 	    && t
 	    &&  t->security_id==current_monitoring_module_security_id())
 		active_scheduler->on_tick_thread(t,cpu);
+
+
+#ifdef COS_MONITORING_TICK
+	if (t && t->security_id==current_monitoring_module_security_id())
+		do_trace_cos(0,cpu);
+#endif
+
+	/* Check periodically for timer activation */
+	if (cur_group->force_activate_timer) {
+		spin_lock(&cur_group->lock);
+		if (cur_group->force_activate_timer) {
+			cur_group->force_activate_timer=0;
+			set_group_timer_expiration(cur_group,jiffies);
+		}
+		spin_unlock(&cur_group->lock);
+	}
 }
 
 monitoring_module_t pmcsched_mm= {
@@ -2442,6 +3167,11 @@ void __activate_stopped_by_profiling(sized_list_t* stopped_list,
 int __give_rmid(pmcsched_thread_data_t* t) {
 	int ret = 0;
 
+	/* Clear flag and indicate it is first time */
+	if (t->t_flags & PMCSCHED_NEW_TS_IN_CONTAINER) {
+		t->t_flags&=~PMCSCHED_NEW_TS_IN_CONTAINER;
+		return 1;
+	}
 
 	if (t->first_time &&
 	    t->security_id == current_monitoring_module_security_id()) {
@@ -2802,28 +3532,449 @@ void populate_clos_to_update_list(sched_thread_group_t* group, cache_part_set_t*
 	}
 }
 
+void update_time_state_info(pmcsched_thread_data_t *t, unsigned char is_active, ktime_t now) {
+	if (is_active) {
+		/* Refresh and update activity counter */
+		if (is_active==2) {
+			/* Update just inactivity counter */
+			t->time_per_state[1]+=ktime_sub(now,t->last_time_active);
+			t->last_time_active=now;
+		} else {
+			t->last_time_active=now;
+			/* Update just inactivity counter */
+			t->time_per_state[0]+=ktime_sub(now,t->last_time_inactive);
+		}
+
+	} else {
+		t->last_time_inactive=now;
+
+		/* Do only if its not the first activation */
+		if (t->last_time_active>0)
+			t->time_per_state[1]+=ktime_sub(now,t->last_time_active);
+	}
+};
+
+void pmct_update_running_avg_metrics(
+    metric_experiment_t* metric_exp,
+    running_avg_metrics_t* running_avgs,
+    int new_factor
+) {
+	int i=0;
+	pmc_metric_t* metric;
+
+	/* First time is copied */
+	if (running_avgs->count==0) {
+		for (i=0; i<metric_exp->size; i++) {
+			metric=&metric_exp->metrics[i];
+			running_avgs->value[i]=metric->count;
+		}
+	} else {
+		for (i=0; i<metric_exp->size; i++) {
+			metric=&metric_exp->metrics[i];
+			pmct_calculate_running_average(metric->count,
+			                               running_avgs->value[i],
+			                               new_factor,
+			                               0);
+		}
+	}
+	running_avgs->count++;
+}
+
+/**
+ * Implementation of container specific functions
+*/
+static sized_list_t container_list;
+static spinlock_t container_lock;
+
+static inline sched_app_t* pmcsched_create_container(struct css_set* cgroups,
+        container_properties_t* user_props, struct task_struct* container_parent) {
+	sched_app_t* capp;
+	capp=create_sched_app(NULL,user_props);
+
+	if (!capp)
+		return NULL;
+
+	/**
+	 * Critical. Set the associated pointer!
+	*/
+	capp->cgroups=cgroups;
+
+	/* Invoke plugin specific callback */
+	if (active_scheduler->on_new_container) {
+		/* Handle error appropriately */
+		if (active_scheduler->on_new_container(capp, container_parent)<0) {
+			put_sched_app(capp);
+			capp = NULL;
+		}
+	}
+
+	return capp;
+}
+
+
+static void pmcsched_free_container(sched_app_t* capp, unsigned char reclaim_resources) {
+
+	/* Give back RMID */
+	if (reclaim_resources && pmcsched_rdt_capable)
+		put_rmid(capp->pmc_sched_apps[0].app_cache.app_cmt_data.rmid);
+
+	if (atomic_read(&capp->ref_counter)==1) {
+		/* Invoke plugin specific callback */
+		if (active_scheduler->on_free_container)
+			active_scheduler->on_free_container(capp);
+
+	}
+
+	/* Decrement reference counter (it will be 0) and free up app */
+	put_sched_app(capp);
+}
+
+
+static void init_container_registry(void) {
+
+	spin_lock_init(&container_lock);
+	init_sized_list(&container_list,offsetof(sched_app_t,cgroup_node));
+}
+
+static void purge_container_registry(void) {
+	pmcsched_unregister_all_containers();
+}
+
+static void assign_rmid_to_container(sched_app_t* capp) {
+	int nr_cpu_groups=0;
+	unsigned int rmid;
+	int i;
+
+	get_platform_cpu_groups(&nr_cpu_groups);
+
+	/* Assign RMID */
+	rmid=get_rmid();
+
+	/* Propagate Assigned RMID, through per-group structures */
+	for (i=0; i<nr_cpu_groups; i++) {
+		app_t* app_cache=&capp->pmc_sched_apps[i].app_cache;
+		app_cache->app_cmt_data.rmid=rmid;
+	}
+
+	if (active_scheduler_verbose) {
+		trace_printk("Cgroup 0x%p was assigned RMID %d.\n",
+		             capp->cgroups, rmid);
+	}
+}
+
+
+static sched_app_t* pmcsched_register_container(pid_t pid,
+        container_properties_t* user_props ) {
+	struct task_struct* target=NULL;
+	int retval=0;
+	sched_app_t *capp,*cur;
+
+	/* Check container properties (one by one)*/
+	if ( pmcsched_rdt_capable) {
+		if  (user_props->clos_id<0 ||
+		     user_props->clos_id>=pmcs_cat_support.cat_nr_cos_available)
+			return ERR_PTR(-EINVAL);
+
+		trace_printk("Establishing CLOS_ID %d for container (PID: %d)\n",
+		             user_props->clos_id,
+		             pid);
+	}
+
+	/** TODO
+	 * The remaining properties are not used yet
+	 * We will add the necessary checks here
+	 * when they are in use
+	*/
+
+	rcu_read_lock();
+
+	target = pmctrack_find_process_by_pid(pid);
+	if (!target) {
+		rcu_read_unlock();
+		return ERR_PTR(-ESRCH);
+	}
+
+	/* Prevent target from going away */
+	get_task_struct(target);
+	rcu_read_unlock();
+
+	/* Check if active container exists already for that PID */
+	if (pmcsched_find_container(target->cgroups)) {
+		retval=-EEXIST;
+		goto out_err;
+	}
+
+	capp=pmcsched_create_container(target->cgroups, user_props, target);
+
+	if (!capp) {
+		retval=-ENOMEM;
+		goto out_err;
+	}
+
+	/* Access to linked list */
+	spin_lock(&container_lock);
+
+	/* Check it again with lock held */
+	for (cur=head_sized_list(&container_list);
+	     cur!=NULL && cur->cgroups!=target->cgroups;
+	     cur=next_sized_list(&container_list,cur)) {}
+
+	/* found is error */
+	if (cur) {
+		spin_unlock(&container_lock);
+		retval=-EEXIST;
+		goto out_err;
+	}
+
+	/* add container to list */
+	insert_sized_list_tail(&container_list,capp);
+
+	/**
+	 * This step is critical.
+	 * When using containers the RMID must be assigned
+	 * when the container is registered.
+	 *
+	 * Then processes or threads added to this container
+	 * will automatically inherit this RMID. So in a way,
+	 * the fork() callback would be very similar to the
+	 * case where a new thread is added to the process
+	*/
+	if (pmcsched_rdt_capable)
+		assign_rmid_to_container(capp);
+
+	spin_unlock(&container_lock);
+
+	put_task_struct(target);
+
+	return capp;
+out_err:
+	if (capp)
+		pmcsched_free_container(capp, 0);
+
+	if (target)
+		put_task_struct(target);
+
+	return ERR_PTR(retval);
+}
+
+/**
+ * This function increases the container's reference counter if found
+ * right before releasing the lock.
+ *
+ * This avoids a potential race condition with the on_fork() callback
+*/
+static sched_app_t* pmcsched_retrieve_container(struct css_set* cgroups) {
+	sched_app_t *cur;
+
+	/* Access to linked list */
+	spin_lock(&container_lock);
+
+	/* Check it again with lock held */
+	for (cur=head_sized_list(&container_list);
+	     cur!=NULL && cur->cgroups!=cgroups;
+	     cur=next_sized_list(&container_list,cur)) {}
+
+	if (cur)
+		get_sched_app(cur);
+
+	spin_unlock(&container_lock);
+
+	return cur;
+}
+
+static sched_app_t* pmcsched_find_container(struct css_set* cgroups) {
+	sched_app_t *cur;
+
+	/* Access to linked list */
+	spin_lock(&container_lock);
+
+	/* Check it again with lock held */
+	for (cur=head_sized_list(&container_list);
+	     cur!=NULL && cur->cgroups!=cgroups;
+	     cur=next_sized_list(&container_list,cur)) {}
+
+	spin_unlock(&container_lock);
+
+	return cur;
+}
+
+static sched_app_t* pmcsched_find_container_pid(pid_t pid) {
+	sched_app_t *retval=NULL;
+	struct task_struct *p;
+
+	rcu_read_lock();
+
+	p = pmctrack_find_process_by_pid(pid);
+	if (!p) {
+		rcu_read_unlock();
+		return ERR_PTR(-ESRCH);
+	}
+
+	/* Prevent target from going away */
+	get_task_struct(p);
+	rcu_read_unlock();
+
+	retval=pmcsched_find_container(p->cgroups);
+
+	/* Check if active container exists already for that PID */
+	if (!retval) {
+		retval=ERR_PTR(-ENOTSUPP);
+		goto exit_path;
+	}
+
+exit_path:
+
+	put_task_struct(p);
+
+	return retval;
+}
+
+
+static sched_app_t* pmcsched_find_container_rmid(unsigned int rmid) {
+	sched_app_t *cur;
+	app_t_pmcsched* app=NULL;
+	app_t* app_cache;
+	/* Access to linked list */
+	spin_lock(&container_lock);
+
+	/* Check it again with lock held */
+	for (cur=head_sized_list(&container_list);
+	     cur!=NULL;
+	     cur=next_sized_list(&container_list,cur)) {
+
+		app=&cur->pmc_sched_apps[0]; // Grab pointer to group 0
+		app_cache=&app->app_cache;
+
+		if (app_cache->app_cmt_data.rmid == rmid)
+			break;
+
+	}
+
+	spin_unlock(&container_lock);
+
+	return cur;
+}
+static int pmcsched_unregister_container(pid_t pid) {
+	struct task_struct* target=NULL;
+	int retval=0;
+	sched_app_t *cur;
+	rcu_read_lock();
+
+	target = pmctrack_find_process_by_pid(pid);
+	if (!target) {
+		rcu_read_unlock();
+		return -ESRCH;
+	}
+
+	/* Prevent target from going away */
+	get_task_struct(target);
+	rcu_read_unlock();
+
+	/* Access to linked list */
+	spin_lock(&container_lock);
+
+	/* Check it again with lock held */
+	for (cur=head_sized_list(&container_list);
+	     cur!=NULL && cur->cgroups!=target->cgroups;
+	     cur=next_sized_list(&container_list,cur)) {}
+
+	/* Not found is error */
+	if (!cur) {
+		spin_unlock(&container_lock);
+		retval=-ENOENT;
+		goto out_err;
+	}
+
+	remove_sized_list(&container_list,cur);
+
+	spin_unlock(&container_lock);
+
+	pmcsched_free_container(cur, 1);
+
+	put_task_struct(target);
+
+	return 0;
+out_err:
+
+	if (target)
+		put_task_struct(target);
+
+	return retval;
+}
+
+static void pmcsched_unregister_all_containers(void) {
+
+	sched_app_t *cur,*next;
+	/* Access to linked list */
+	spin_lock(&container_lock);
+
+	cur=head_sized_list(&container_list);
+	/* Check it again with lock held */
+	while (cur!=NULL) {
+		next=next_sized_list(&container_list,cur);
+		remove_sized_list(&container_list,cur);
+		pmcsched_free_container(cur, 1);
+		cur=next;
+	}
+
+	spin_unlock(&container_lock);
+}
+
+static void trace_registered_containers(void) {
+	sched_app_t *cur;
+	app_t_pmcsched* app=NULL;
+	app_t* app_cache;
+	int i = 0;
+	int n = 0;
+	/* Access to linked list */
+	spin_lock(&container_lock);
+
+	n=sized_list_length(&container_list);
+
+	if (n>0)
+		trace_printk("-- %d containers are registered --\n",n);
+	else
+		trace_printk("-- No containers are registered --- \n");
+
+	for (cur=head_sized_list(&container_list);
+	     cur!=NULL;
+	     cur=next_sized_list(&container_list,cur), i++) {
+		app=&cur->pmc_sched_apps[0]; // Grab pointer to group 0
+		app_cache=&app->app_cache;
+
+		trace_printk("[CG%d] - Refcount: %d // RMID: %d // CLOS: %d // cgroup=0x%p\n",
+		             i,atomic_read(&cur->ref_counter),
+		             app_cache->app_cmt_data.rmid,
+		             app_cache->app_cmt_data.cos_id,
+		             cur->cgroups);
+	}
+
+	if (n>0)
+		trace_printk("----------------------------------------\n");
+
+	spin_unlock(&container_lock);
+}
+
+/**
+ * Function to change an application's cos ID system-wide
+ * (it does not write to architectural registers though)
+*/
+void set_sched_app_cos_id(sched_app_t* sched_app, unsigned int cos_id) {
+	int nr_cpu_groups=0;
+	int i;
+	app_t* app_cache;
+
+	get_platform_cpu_groups(&nr_cpu_groups);
+
+	for (i=0; i<nr_cpu_groups; i++) {
+		app_cache=&sched_app->pmc_sched_apps[i].app_cache;
+		app_cache->app_cmt_data.cos_id=cos_id;
+	}
+}
 
 
 /* Static trace point */
-noinline void trace_amp_exit(struct task_struct* p, unsigned int tid, unsigned long ticks_big, unsigned long ticks_small) {
+noinline void trace_generic_pmcsched(int tag, char* message) {
 	asm(" ");
 }
 
-/* */
-noinline void trace_td_thread_exit(struct task_struct* p,
-                                   unsigned long noclass,
-                                   unsigned long class0,
-                                   unsigned long class1,
-                                   unsigned long class2,
-                                   unsigned long class3) {
-	asm(" ");
-}
-
-noinline void trace_sockets_stats(struct task_struct* p,
-                          unsigned int tid,
-						  unsigned long ticks_socket_0,
-						  unsigned long ticks_socket_1,
-						  unsigned long ticks_socket_2,
-		   				  unsigned long ticks_socket_3){
-	asm(" ");
-}
