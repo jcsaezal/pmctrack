@@ -554,6 +554,8 @@ int fh_install_hook(struct ftrace_hook *hook)
 				hook->ops.flags = FTRACE_OPS_FL_SAVE_REGS
 				                  | FTRACE_OPS_FL_IPMODIFY;
 			}
+#else
+			;
 #endif
 #if defined CONFIG_X86
 	if(strcmp(hook->name, "intel_thermal_interrupt") == 0) {
